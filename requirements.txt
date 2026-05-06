@@ -3,7 +3,7 @@ uvicorn[standard]
 python-multipart
 pydantic-settings
 twilio
-google-generativeai
+google-genai
 supabase
 python-dotenv
 groq

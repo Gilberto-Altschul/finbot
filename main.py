@@ -25,21 +25,24 @@ _twilio = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 
 def _send_whatsapp(to: str, body: str) -> None:
-    """Send a WhatsApp message via Twilio (runs in background)."""
+    """
+    Send a WhatsApp message via Twilio.
+    This call is synchronous but will be executed via asyncio.to_thread.
+    """
     try:
         msg = _twilio.messages.create(
             from_=settings.twilio_whatsapp_number,
             to=to,
             body=body,
         )
-        logger.info("Message sent", extra={"to": to, "sid": msg.sid})
+        logger.info(f"Message sent to {to} | SID: {msg.sid}")
     except Exception as exc:
-        logger.error("Failed to send message", extra={"to": to, "error": str(exc)})
+        logger.error(f"Failed to send message to {to}: {exc}")
 
 
 async def _process(user_phone: str, user_message: str) -> None:
     reply = await agent.run(user_phone, user_message)
-    _send_whatsapp(user_phone, reply)
+    await asyncio.to_thread(_send_whatsapp, user_phone, reply)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -49,7 +52,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/webhook")
+@app.post("/webhook/whatsapp")
 async def webhook(
     background_tasks: BackgroundTasks,
     From: str = Form(...),
@@ -62,7 +65,7 @@ async def webhook(
     user_phone = From.strip()
     user_message = Body.strip()
 
-    logger.info("Incoming", extra={"from": user_phone, "text": user_message[:60]})
+    logger.info(f"Incoming message from {user_phone}: {user_message[:60]}")
 
     background_tasks.add_task(_process, user_phone, user_message)
 

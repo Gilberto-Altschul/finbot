@@ -38,6 +38,50 @@ def get_db() -> Client:
     return create_client(s.supabase_url, s.supabase_key)
 
 
+# ── User settings ─────────────────────────────────────────────────────────────
+
+def get_user_settings(user_phone: str) -> dict | None:
+    """Returns the user's saved settings or None if first time."""
+    result = (
+        get_db()
+        .table("finbot_user_settings")
+        .select("*")
+        .eq("user_phone", user_phone)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def save_user_settings(user_phone: str, dia_vencimento: int, dia_corte: int) -> dict:
+    """Upsert user card settings."""
+    row = {
+        "user_phone": user_phone,
+        "cartao_dia_vencimento": dia_vencimento,
+        "cartao_dia_corte": dia_corte,
+    }
+    result = (
+        get_db()
+        .table("finbot_user_settings")
+        .upsert(row, on_conflict="user_phone")
+        .execute()
+    )
+    return result.data[0]
+
+
+def is_new_user(user_phone: str) -> bool:
+    return get_user_settings(user_phone) is None
+
+
+def get_card_settings(user_phone: str) -> tuple[int, int]:
+    """Returns (dia_corte, dia_vencimento) — from DB or global fallback."""
+    settings = get_user_settings(user_phone)
+    if settings:
+        return settings["cartao_dia_corte"], settings["cartao_dia_vencimento"]
+    s = get_settings()
+    return s.cartao_dia_corte, s.cartao_dia_vencimento
+
+
 # ── Expenses ──────────────────────────────────────────────────────────────────
 
 def save_expense(user_phone: str, amount: float, category: str, description: str) -> dict:
@@ -48,6 +92,7 @@ def save_expense(user_phone: str, amount: float, category: str, description: str
         "description": description,
     }
     result = get_db().table("finbot_expenses").insert(row).execute()
+    logger.info(f"Supabase insert result for finbot_expenses: {result.data}")
     return result.data[0]
 
 
@@ -97,6 +142,46 @@ def daily_trend(user_phone: str, days: int = 7) -> list[dict]:
         {"p_phone": user_phone, "p_days": days},
     ).execute()
     return result.data or []
+
+
+def save_expense_credit(
+    user_phone: str,
+    amount: float,
+    category: str,
+    description: str,
+    installment_of: int | None = None,
+    installment_total: int | None = None,
+) -> dict:
+    """Save a credit card expense with optional installment info."""
+    row = {
+        "user_phone": user_phone,
+        "amount": amount,
+        "category": category,
+        "description": description,
+        "payment_method": "credito",
+        "installment_of": installment_of,
+        "installment_total": installment_total,
+    }
+    result = get_db().table("finbot_expenses").insert(row).execute()
+    return result.data[0]
+
+
+def expenses_by_fatura(user_phone: str, due_date: str, dia_corte: int) -> list[dict]:
+    """All credit expenses for a given invoice due date."""
+    result = get_db().rpc(
+        "expenses_by_fatura",
+        {
+            "p_phone": user_phone,
+            "p_due_date": due_date,
+            "p_corte_day": dia_corte,
+        },
+    ).execute()
+    return result.data or []
+
+
+def fatura_total(user_phone: str, due_date: str, dia_corte: int) -> float:
+    rows = expenses_by_fatura(user_phone, due_date, dia_corte)
+    return round(sum(float(r["amount"]) for r in rows), 2)
 
 
 # ── Conversation ──────────────────────────────────────────────────────────────
