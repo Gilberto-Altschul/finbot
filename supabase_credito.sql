@@ -32,11 +32,13 @@ CREATE TRIGGER trg_user_settings_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ── 3. RPC: gastos por fatura ─────────────────────────────────────────────────
+-- NOTA: usa created_at::DATE para evitar problemas de fuso horário.
+-- Datas manuais são salvas como T12:00:00Z e comparadas apenas pela data.
 
 CREATE OR REPLACE FUNCTION expenses_by_fatura(
     p_phone      TEXT,
     p_due_date   DATE,
-    p_corte_day  INT
+    p_corte_day  INT  -- mantido por compatibilidade, nao usado
 )
 RETURNS TABLE(
     id BIGINT, amount NUMERIC, category TEXT,
@@ -44,18 +46,15 @@ RETURNS TABLE(
     payment_method TEXT, installment_of INT, installment_total INT
 )
 LANGUAGE SQL STABLE AS $$
+    -- Filtra pelo mes do vencimento da fatura.
+    -- Cada lancamento de credito e salvo no 1o dia do mes do vencimento,
+    -- entao basta comparar o mes do created_at com o mes do p_due_date.
     SELECT
         id, amount, category, description, created_at,
         payment_method, installment_of, installment_total
     FROM finbot_expenses
     WHERE user_phone = p_phone
       AND payment_method = 'credito'
-      AND (
-        CASE
-          WHEN EXTRACT(DAY FROM created_at AT TIME ZONE 'America/Sao_Paulo') <= p_corte_day
-            THEN (DATE_TRUNC('month', created_at AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 month')::DATE
-          ELSE (DATE_TRUNC('month', created_at AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '2 months')::DATE
-        END + (EXTRACT(DAY FROM p_due_date)::INT - 1)
-      ) = p_due_date
+      AND DATE_TRUNC('month', created_at::DATE) = DATE_TRUNC('month', p_due_date)
     ORDER BY created_at DESC;
 $$;

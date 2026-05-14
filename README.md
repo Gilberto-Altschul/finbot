@@ -3,7 +3,7 @@
 Agente de finanças pessoais via WhatsApp. O LLM é o cérebro: decide o que fazer, quando chamar ferramentas e como responder.
 
 **Stack:** Python · FastAPI · Google Gemini Flash · Groq Llama 3.3 (fallback) · Supabase · Twilio
-
+**Nota:** O Groq foi removido como fallback, usando apenas OpenRouter.
 ---
 
 ## Como funciona
@@ -94,9 +94,8 @@ uvicorn main:app            # produção
 ---
 
 ## GitHub Actions
-
 CI roda automaticamente em todo push. Secrets necessários no GitHub:
-`GEMINI_API_KEY` · `GROQ_API_KEY` · `TWILIO_ACCOUNT_SID` · `TWILIO_AUTH_TOKEN` · `SUPABASE_URL` · `SUPABASE_KEY`
+`GEMINI_API_KEY` · `OPENROUTER_API_KEY` · `TWILIO_ACCOUNT_SID` · `TWILIO_AUTH_TOKEN` · `SUPABASE_URL` · `SUPABASE_KEY`
 
 ---
 

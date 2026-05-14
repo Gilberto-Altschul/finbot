@@ -71,15 +71,7 @@ def parcelas(
     acumulado = 0.0
 
     for i in range(n):
-        data_parcela = (
-            date(
-                _add_months(purchase_date, i).year,
-                _add_months(purchase_date, i).month,
-                purchase_date.day,
-            )
-            if i > 0
-            else purchase_date
-        )
+        data_parcela = _add_months(purchase_date, i)
         due = fatura_vencimento(data_parcela, dia_corte, dia_vencimento)
         valor = valor_parcela if i < n - 1 else round(total - acumulado, 2)
         acumulado += valor
@@ -90,6 +82,7 @@ def parcelas(
             "valor": valor,
             "fatura_vencimento": due.isoformat(),
             "fatura_label": fatura_label(due),
+            "data_parcela": data_parcela.isoformat(),
         })
 
     return resultado

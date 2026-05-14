@@ -9,7 +9,13 @@
 #     user_phone  text not null
 #     amount      numeric(10,2) not null check (amount > 0)
 #     category    text not null
+#     transaction_type text default 'expense'
+#     subcategory text
 #     description text not null
+#     beneficiario text
+#     payment_method text not null default 'debito'
+#     installment_of integer
+#     installment_total integer
 #     created_at  timestamptz default now()
 #
 #   finbot_conversation
@@ -84,22 +90,73 @@ def get_card_settings(user_phone: str) -> tuple[int, int]:
 
 # ── Expenses ──────────────────────────────────────────────────────────────────
 
-def save_expense(user_phone: str, amount: float, category: str, description: str) -> dict:
-    row = {
+def save_expense(
+    user_phone,
+    amount,
+    category,
+    description,
+    beneficiario=None,
+    subcategoria=None,
+    expense_date=None,
+    transaction_type="expense",
+):
+    from datetime import date as _date
+    row_data = {
         "user_phone": user_phone,
         "amount": amount,
         "category": category,
+        "subcategory": subcategoria,
         "description": description,
+        "beneficiario": beneficiario,
+        "payment_method": "debito",
+        "transaction_type": transaction_type,
     }
-    result = get_db().table("finbot_expenses").insert(row).execute()
-    logger.info(f"Supabase insert result for finbot_expenses: {result.data}")
-    return result.data[0]
+    if expense_date and expense_date != _date.today():
+        # Salva ao meio-dia UTC para evitar que o fuso horário mude o dia.
+        # As funções SQL comparam apenas a DATE (created_at::DATE), ignorando a hora.
+        row_data["created_at"] = f"{expense_date.isoformat()}T12:00:00Z"
+    row = get_db().table("finbot_expenses").insert(row_data).execute()
+    if row.data:
+        return row.data[0]
+    return {}
+
+
+def save_expense_credit(
+    user_phone,
+    amount,
+    category,
+    description,
+    beneficiario=None,
+    subcategoria=None,
+    installment_of=None,
+    installment_total=None,
+    expense_date=None,
+):
+    from datetime import date as _date
+    row_data = {
+        "user_phone": user_phone,
+        "amount": amount,
+        "category": category,
+        "subcategory": subcategoria,
+        "description": description,
+        "beneficiario": beneficiario,
+        "payment_method": "credito",
+        "installment_of": installment_of,
+        "installment_total": installment_total,
+        "transaction_type": "expense",
+    }
+    if expense_date and expense_date != _date.today():
+        # Salva ao meio-dia UTC para evitar que o fuso horário mude o dia.
+        # As funções SQL comparam apenas a DATE (created_at::DATE), ignorando a hora.
+        row_data["created_at"] = f"{expense_date.isoformat()}T12:00:00Z"
+    row = get_db().table("finbot_expenses").insert(row_data).execute()
+    if row.data:
+        return row.data[0]
+    return {}
 
 
 def monthly_by_category(user_phone: str) -> list[dict]:
     """Total per category for the current calendar month."""
-    # Supabase doesn't support GROUP BY natively via the client,
-    # so we use a raw RPC call to a Postgres function.
     result = get_db().rpc(
         "expenses_by_category",
         {"p_phone": user_phone},
@@ -110,6 +167,14 @@ def monthly_by_category(user_phone: str) -> list[dict]:
 def monthly_total(user_phone: str) -> float:
     result = get_db().rpc(
         "expenses_monthly_total",
+        {"p_phone": user_phone},
+    ).execute()
+    return float(result.data or 0)
+
+
+def monthly_income_total(user_phone: str) -> float:
+    result = get_db().rpc(
+        "income_monthly_total",
         {"p_phone": user_phone},
     ).execute()
     return float(result.data or 0)
@@ -127,7 +192,7 @@ def recent_expenses(user_phone: str, limit: int = 5) -> list[dict]:
     result = (
         get_db()
         .table("finbot_expenses")
-        .select("amount, category, description, created_at")
+        .select("amount, category, description, beneficiario, created_at")
         .eq("user_phone", user_phone)
         .order("created_at", desc=True)
         .limit(limit)
@@ -142,28 +207,6 @@ def daily_trend(user_phone: str, days: int = 7) -> list[dict]:
         {"p_phone": user_phone, "p_days": days},
     ).execute()
     return result.data or []
-
-
-def save_expense_credit(
-    user_phone: str,
-    amount: float,
-    category: str,
-    description: str,
-    installment_of: int | None = None,
-    installment_total: int | None = None,
-) -> dict:
-    """Save a credit card expense with optional installment info."""
-    row = {
-        "user_phone": user_phone,
-        "amount": amount,
-        "category": category,
-        "description": description,
-        "payment_method": "credito",
-        "installment_of": installment_of,
-        "installment_total": installment_total,
-    }
-    result = get_db().table("finbot_expenses").insert(row).execute()
-    return result.data[0]
 
 
 def expenses_by_fatura(user_phone: str, due_date: str, dia_corte: int) -> list[dict]:
@@ -183,6 +226,56 @@ def fatura_total(user_phone: str, due_date: str, dia_corte: int) -> float:
     rows = expenses_by_fatura(user_phone, due_date, dia_corte)
     return round(sum(float(r["amount"]) for r in rows), 2)
 
+
+
+def category_expenses_detail(user_phone: str, category: str, limit: int = 50) -> list[dict]:
+    """Lista todos os gastos de uma categoria no mes atual com detalhes."""
+    result = get_db().rpc(
+        "expenses_by_category_detail",
+        {"p_phone": user_phone, "p_category": category, "p_limit": limit},
+    ).execute()
+    return result.data or []
+
+
+# ── Budgets ───────────────────────────────────────────────────────────────────
+
+def save_budget(user_phone: str, category: str, amount: float, mes_referencia: str) -> dict:
+    """Save a budget limit for a category and month (YYYY-MM)."""
+    row = {
+        "user_phone": user_phone,
+        "category": category,
+        "amount": amount,
+        "mes_referencia": mes_referencia,
+    }
+    result = get_db().table("finbot_budgets").insert(row).execute()
+    return result.data[0] if result.data else {}
+
+
+def get_budget(user_phone: str, category: str, mes_referencia: str) -> float | None:
+    """Get the most recent budget for a category up to the given month."""
+    result = get_db().rpc(
+        "budget_get",
+        {"p_phone": user_phone, "p_category": category, "p_mes": mes_referencia},
+    ).execute()
+    return float(result.data) if result.data else None
+
+
+def get_all_budgets(user_phone: str, mes_referencia: str) -> list[dict]:
+    """Get all category budgets effective for the given month."""
+    result = get_db().rpc(
+        "budget_all",
+        {"p_phone": user_phone, "p_mes": mes_referencia},
+    ).execute()
+    return result.data or []
+
+
+def get_budget_history(user_phone: str, category: str) -> list[dict]:
+    """Get budget history for a category (last 12 months)."""
+    result = get_db().rpc(
+        "budget_history",
+        {"p_phone": user_phone, "p_category": category},
+    ).execute()
+    return result.data or []
 
 # ── Conversation ──────────────────────────────────────────────────────────────
 

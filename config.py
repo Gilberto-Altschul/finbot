@@ -6,8 +6,8 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # LLM
     gemini_api_key: str
-    groq_api_key: str = ""
-    openrouter_api_key: str = ""  # https://openrouter.ai/keys
+    groq_api_key: str = ""          # https://console.groq.com/keys
+    openrouter_api_key: str = ""    # https://openrouter.ai/keys
 
     # Twilio
     twilio_account_sid: str

@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="FinBot", version="1.0.0")
 settings = get_settings()
 
+# Cache simples para evitar processar a mesma mensagem vinda de retentativas do Twilio
+processed_messages = set()
+
 _twilio = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 
@@ -57,15 +60,23 @@ async def webhook(
     background_tasks: BackgroundTasks,
     From: str = Form(...),
     Body: str = Form(...),
+    MessageSid: str = Form(...),
 ):
     """
     Twilio sends form-encoded POST with From and Body fields.
     We respond immediately with 200 and process async to avoid timeout.
     """
+    # Proteção contra loop de retentativas do Twilio
+    if MessageSid in processed_messages:
+        logger.warning(f"Mensagem duplicada ignorada: {MessageSid}")
+        return Response(content="<?xml version='1.0'?><Response/>", media_type="text/xml")
+
+    processed_messages.add(MessageSid)
+    
     user_phone = From.strip()
     user_message = Body.strip()
 
-    logger.info(f"Incoming message from {user_phone}: {user_message[:60]}")
+    logger.info(f"Incoming message from {user_phone} [SID: {MessageSid}]: {user_message[:60]}")
 
     background_tasks.add_task(_process, user_phone, user_message)
 

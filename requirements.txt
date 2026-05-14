@@ -3,10 +3,9 @@ uvicorn[standard]
 python-multipart
 pydantic-settings
 twilio
-google-genai
 supabase
 python-dotenv
-groq
 pytest
 pytest-asyncio
 httpx
+google-genai
