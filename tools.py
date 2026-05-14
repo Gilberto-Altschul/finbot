@@ -11,6 +11,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+import re
 import logging
 from calendar import monthrange
 from datetime import date, datetime  # ← datetime importado corretamente aqui
@@ -24,6 +25,28 @@ logger = logging.getLogger(__name__)
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
 SCHEMAS: list[dict] = [
+
+    {
+        "name": "sincronizar_banco",
+        "description": (
+            "Busca transações automáticas via Open Finance (Pluggy). "
+            "Use quando o usuário perguntar 'o que tem de novo', 'sincronizar banco', "
+            "ou quando quiser verificar se houve gastos não registrados manualmente."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "arquivo": {
+                    "type": "string",
+                    "description": "Caminho do arquivo JSON para importar (opcional, apenas para testes)."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "ID de uma conta específica (opcional). Se omitido, sincroniza o banco inteiro."
+                }
+            }
+        }
+    },
     {
         "name": "registrar_gasto",
         "description": (
@@ -149,8 +172,8 @@ SCHEMAS: list[dict] = [
                 "categoria": {
                     "type": "string",
                     "enum": [
-                        "Alimentacao", "Transporte", "Moradia",
-                        "Saude", "Lazer", "Pessoal", "Educacao", "Financeiro", "Pets",
+                        "Alimentação", "Transporte", "Moradia",
+                        "Saúde", "Lazer", "Pessoal", "Educação", "Financeiro", "Pets",
                     ],
                     "description": "Categoria a listar.",
                 },
@@ -224,6 +247,11 @@ SCHEMAS: list[dict] = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "listar_categorias_disponiveis",
+        "description": "Lista todas as categorias e subcategorias de gastos e receitas que o FinBot reconhece.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
     },
 ]
 
@@ -512,6 +540,47 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     "status": "🔴" if percentual > 100 else "⚠️" if percentual >= 80 else "✅",
                 })
             return {"limites": resultado, "mes": mes}
+
+        case "sincronizar_banco":
+            try:
+                from pluggy_service import PluggyService
+                pluggy = PluggyService()
+
+                arquivo = args.get("arquivo")
+                account_id = args.get("account_id")
+
+                if arquivo:
+                    resultado = pluggy.sync_from_file(user_phone, arquivo)
+                else:
+                    resultado = pluggy.sync_user_transactions(user_phone, account_id=account_id)
+
+                return {"status": "concluido", "mensagem": resultado}
+                
+            except Exception as e:
+                logger.error(f"Erro na tool sincronizar_banco: {e}")
+                return {"error": "Não foi possível sincronizar com o banco agora."}
+
+        case "listar_categorias_disponiveis":
+            expense_categories = []
+            income_categories = []
+            subcategories = set()
+
+            for schema in SCHEMAS:
+                if schema["name"] == "registrar_gasto":
+                    expense_categories = schema["parameters"]["properties"]["categoria"]["enum"]
+                    subcat_desc = schema["parameters"]["properties"]["subcategoria"]["description"]
+                    if "Exemplos: " in subcat_desc:
+                        subcat_list_str = subcat_desc.split("Exemplos: ", 1)[1]
+                        for item in re.split(r",\s*", subcat_list_str):
+                            if item.strip(): subcategories.add(item.strip())
+                elif schema["name"] == "registrar_receita":
+                    income_categories = schema["parameters"]["properties"]["categoria"]["enum"]
+
+            return {
+                "expense_categories": sorted(list(set(expense_categories))),
+                "income_categories": sorted(list(set(income_categories))),
+                "example_subcategories": sorted(list(subcategories)),
+            }
 
         case _:
             raise ValueError(f"Ferramenta desconhecida: {name}")

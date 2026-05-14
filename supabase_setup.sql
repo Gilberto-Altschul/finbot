@@ -13,11 +13,20 @@ CREATE TABLE IF NOT EXISTS finbot_expenses (
     transaction_type TEXT DEFAULT 'expense' CHECK (transaction_type IN ('expense', 'income')),
     beneficiario TEXT,
     description TEXT        NOT NULL,
+    pluggy_transaction_id TEXT UNIQUE,
     payment_method   TEXT DEFAULT 'debito' CHECK (payment_method IN ('debito', 'credito', 'dinheiro')),
     installment_of   INTEGER,
     installment_total INTEGER,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS finbot_user_connections (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_phone  TEXT NOT NULL UNIQUE,
+    pluggy_item_id TEXT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
 
 CREATE TABLE IF NOT EXISTS finbot_conversation (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -18,8 +18,14 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
 
+    # Pluggy
+    pluggy_client_id: str = ""
+    pluggy_client_secret: str = ""
+    default_item_id: str = ""
+
     # App
     environment: str = "development"
+    sync_interval_hours: int = 6
 
     # Cartão de crédito (fallback global — substituído por settings do usuário)
     cartao_dia_vencimento: int = 1

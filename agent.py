@@ -192,6 +192,14 @@ _KEYWORD_TOOLS: dict[str, str] = {
     "limites":         "consultar_limite",
     "orcamento":       "consultar_limite",
     "orçamento":       "consultar_limite",
+    "categorias":      "listar_categorias_disponiveis",
+    "quais categorias": "listar_categorias_disponiveis",
+    "lista categorias": "listar_categorias_disponiveis",
+    "subcategorias":   "listar_categorias_disponiveis",
+    "sincronizar":     "sincronizar_banco",
+    "banco":           "sincronizar_banco",
+    "atualizar":       "sincronizar_banco",
+    "novidades":       "sincronizar_banco",
     "ajuda":           "ajuda",
     "help":            "ajuda",
     "como":            "ajuda",
@@ -488,13 +496,13 @@ def _classify(message: str) -> dict | None:
                 # Tenta extrair categoria da mensagem
                 # Ex: "lista alimentacao", "detalhes saude", "o que comprei em lazer"
                 _CAT_MAP = {
-                    "alimenta": "Alimentacao", "comida": "Alimentacao", "mercado": "Alimentacao",
+                    "alimenta": "Alimentação", "comida": "Alimentação", "mercado": "Alimentação",
                     "transport": "Transporte", "uber": "Transporte", "carro": "Transporte",
                     "moradia": "Moradia", "aluguel": "Moradia", "casa": "Moradia",
-                    "saude": "Saude", "farmacia": "Saude", "medico": "Saude",
+                    "saude": "Saúde", "farmacia": "Saúde", "medico": "Saúde",
                     "lazer": "Lazer", "restaurante": "Lazer", "cinema": "Lazer",
                     "pessoal": "Pessoal", "roupa": "Pessoal", "cabelo": "Pessoal",
-                    "educacao": "Educacao", "curso": "Educacao", "livro": "Educacao",
+                    "educacao": "Educação", "curso": "Educação", "livro": "Educação",
                     "financeiro": "Financeiro", "seguro": "Financeiro",
                     "pets": "Pets", "pet": "Pets", "veterinario": "Pets",
                 }
@@ -503,6 +511,9 @@ def _classify(message: str) -> dict | None:
                     if key in msg_norm:
                         categoria = cat
                         break
+                # If no specific category is found for "listar_categoria",
+                # we let the LLM handle it to infer the category.
+                # If we return None here, it will fall through to the LLM.
                 if categoria:
                     return {"tool": tool_name, "args": {"categoria": categoria}}
                 # Sem categoria identificada → cai no LLM
@@ -510,6 +521,9 @@ def _classify(message: str) -> dict | None:
             return {"tool": tool_name, "args": {}}
 
     # ── Budget pattern ────────────────────────────────────────────────────────
+    # The order of these checks matters. More specific patterns should come before
+    # more general ones to avoid misclassification. For example, a budget command
+    # should not be interpreted as a general expense.
     # Must come BEFORE expense pattern to avoid "limite alimentação 2000"
     # being parsed as a R$ 2000 expense called "limite alimentação"
     m_budget = _BUDGET_RE.match(msg)
@@ -743,9 +757,9 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
             total = result["total"]
 
             EMOJI = {
-                "Alimentacao": "🍽️", "Transporte": "🚗", "Moradia": "🏠",
-                "Saude": "💊", "Lazer": "🎉", "Pessoal": "👤",
-                "Educacao": "📚", "Financeiro": "💳", "Pets": "🐾",
+                "Alimentação": "🍽️", "Transporte": "🚗", "Moradia": "🏠",
+                "Saúde": "💊", "Lazer": "🎉", "Pessoal": "👤",
+                "Educação": "📚", "Financeiro": "💳", "Pets": "🐾",
             }
             emoji = EMOJI.get(categoria, "📋")
 
@@ -830,6 +844,29 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
                 f"{status} R$ {_fmt(gasto)} / R$ {_fmt(limite)} ({pct}%)"
             )
 
+        case "sincronizar_banco":
+            return result.get("mensagem", "✅ Sincronização bancária concluída.")
+
+        case "listar_categorias_disponiveis":
+            expense_cats = result["expense_categories"]
+            income_cats = result["income_categories"]
+            sub_cats = result["example_subcategories"]
+
+            response_parts = ["✨ *Categorias e Subcategorias que eu conheço:*\n"]
+
+            if expense_cats:
+                response_parts.append("\n*Categorias de Gastos:*")
+                response_parts.append(", ".join(expense_cats))
+            
+            if income_cats:
+                response_parts.append("\n*Categorias de Receitas:*")
+                response_parts.append(", ".join(income_cats))
+
+            if sub_cats:
+                response_parts.append("\n*Exemplos de Subcategorias:*")
+                response_parts.append(", ".join(sub_cats))
+            
+            return "\n".join(response_parts)
         case _:
             return json.dumps(result, ensure_ascii=False, default=str)
 # ── Agentic loop ──────────────────────────────────────────────────────────────

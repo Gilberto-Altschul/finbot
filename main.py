@@ -6,6 +6,8 @@ from fastapi import FastAPI, Form, BackgroundTasks, Response
 from twilio.rest import Client
 
 import agent
+import database as db
+from pluggy_service import PluggyService
 from config import get_settings
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -43,6 +45,34 @@ def _send_whatsapp(to: str, body: str) -> None:
         logger.error(f"Failed to send message to {to}: {exc}")
 
 
+async def _scheduled_sync_task() -> None:
+    """Tarefa de segundo plano para sincronização periódica."""
+    # Aguarda o servidor estabilizar antes da primeira execução
+    await asyncio.sleep(30)
+    
+    while True:
+        logger.info("Iniciando rotina de sincronização automática...")
+        connections = db.get_all_user_connections()
+        service = PluggyService()
+
+        for conn in connections:
+            phone = conn["user_phone"]
+            try:
+                # Executa a sincronização silenciosa
+                res = service.sync_user_transactions(phone)
+                
+                # Só notifica o usuário se houver "Novas transações" ou alertas (🚨/⚠️)
+                if "📌" in res or "🚨" in res or "⚠️" in res:
+                    logger.info(f"Novidades para {phone}, enviando notificação.")
+                    await asyncio.to_thread(_send_whatsapp, phone, res)
+            except Exception as e:
+                logger.error(f"Erro na sincronização automática para {phone}: {e}")
+
+        wait_time = settings.sync_interval_hours * 3600
+        logger.info(f"Sincronização concluída. Próxima rodada em {settings.sync_interval_hours} horas.")
+        await asyncio.sleep(wait_time)
+
+
 async def _process(user_phone: str, user_message: str) -> None:
     reply = await agent.run(user_phone, user_message)
     await asyncio.to_thread(_send_whatsapp, user_phone, reply)
@@ -53,6 +83,11 @@ async def _process(user_phone: str, user_message: str) -> None:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_scheduled_sync_task())
 
 
 @app.post("/webhook/whatsapp")

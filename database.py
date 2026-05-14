@@ -27,6 +27,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
@@ -304,3 +305,71 @@ def get_history(user_phone: str, limit: int = 12) -> list[dict]:
 
 def clear_history(user_phone: str) -> None:
     get_db().table("finbot_conversation").delete().eq("user_phone", user_phone).execute()
+
+
+
+# database.py
+
+# ── Funções para Pluggy & Comportamento ───────────────────────────────────────
+
+def get_user_item_id(p_phone: str) -> str | None:
+    """Busca o pluggy_item_id vinculado ao telefone do utilizador."""
+    res = get_db().table("finbot_user_connections").select("pluggy_item_id").eq("user_phone", p_phone).execute()
+    if res.data:
+        return res.data[0]["pluggy_item_id"]
+    return None
+
+def get_all_user_connections() -> list[dict]:
+    """Busca todas as conexões de usuários para sincronização automática."""
+    res = (
+        get_db().table("finbot_user_connections").select("user_phone").execute()
+    )
+    return res.data or []
+
+def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descricao: str, pluggy_id: str, tipo: str = "expense", data_tx: str | None = None) -> bool:
+    """
+    Tenta registar uma transação vindo da Pluggy.
+    Retorna True se for um gasto novo, False se já existir (evita duplicados).
+    """
+    try:
+        data = {
+            "user_phone": user_phone,
+            "amount": valor,
+            "category": categoria,
+            "description": descricao,
+            "pluggy_transaction_id": pluggy_id, # Coluna que adicionámos via SQL
+            "transaction_type": tipo,
+            "payment_method": "debito"
+        }
+        if data_tx:
+            # Usa a data real da transação (Pluggy envia ISO format)
+            data["created_at"] = data_tx
+
+        # Usamos insert simples. Se o pluggy_transaction_id já existir, 
+        # a restrição UNIQUE no banco lançará um erro, retornando False.
+        get_db().table("finbot_expenses").insert(data).execute()
+        return True
+    except Exception as e:
+        error_msg = str(e).lower()
+        # Se for erro de duplicidade (UNIQUE constraint), apenas ignoramos
+        if "duplicate" in error_msg or "already exists" in error_msg:
+            return False
+        # Se for outro erro (coluna inexistente, etc), logamos para debug
+        logger.error(f"Erro inesperado ao registrar gasto Pluggy: {e}")
+        raise e
+
+def get_budget_limit(p_phone: str, p_category: str) -> float | None:
+    """Busca o limite (coluna amount) na sua tabela finbot_budgets."""
+    from datetime import date
+    mes_atual = date.today().strftime("%Y-%m")
+    
+    res = get_db().table("finbot_budgets") \
+        .select("amount") \
+        .eq("user_phone", p_phone) \
+        .ilike("category", p_category) \
+        .eq("mes_referencia", mes_atual) \
+        .execute()
+    
+    if res.data:
+        return float(res.data[0]["amount"])
+    return None
