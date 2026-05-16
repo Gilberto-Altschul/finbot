@@ -109,3 +109,24 @@ LANGUAGE SQL STABLE AS $$
     GROUP BY created_at::DATE
     ORDER BY created_at::DATE;
 $$;
+
+-- Gastos de uma fatura específica (Crédito)
+-- Busca todos os gastos onde payment_method é 'credito', sejam parcelados ou não.
+CREATE OR REPLACE FUNCTION expenses_by_fatura(p_phone TEXT, p_due_date DATE, p_corte_day INT)
+RETURNS TABLE(id BIGINT, amount NUMERIC, category TEXT, description TEXT, created_at TIMESTAMPTZ, installment_of INT, installment_total INT)
+LANGUAGE SQL STABLE AS $$
+    SELECT
+        id,
+        amount,
+        category,
+        description,
+        created_at,
+        installment_of,
+        installment_total
+    FROM finbot_expenses
+    WHERE user_phone = p_phone
+      AND payment_method = 'credito'
+      AND transaction_type = 'expense'
+      AND DATE_TRUNC('month', created_at::DATE) = DATE_TRUNC('month', p_due_date::DATE)
+    ORDER BY created_at ASC;
+$$;

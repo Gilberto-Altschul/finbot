@@ -52,6 +52,8 @@ INTERPRETAÇÃO DE MENSAGENS:
 - "mercado 180 no cartão" → crédito, R$ 180,00 em Alimentação
 - "almoço para João 35" → gasto de R$ 35,00 em Alimentação, beneficiário "João"
 - "farmácia 45" → gasto de R$ 45,00 em Saúde
+- "sincronizar transacoes.json" → chamar sincronizar_banco(arquivo="transacoes.json")
+- "manicure 50" → gasto de R$ 50,00 em Pessoal
 - "almoço 35 03/05" → gasto de R$ 35,00 em Alimentação na data 03/05
 - "uber 12,50 03/05 credito" → crédito, R$ 12,50 em Transporte na data 03/05
 - "farmacia 2x 50,00 03/05 credito" → crédito parcelado 2x na data 03/05
@@ -133,6 +135,11 @@ _INCOME_ALT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SYNC_FILE_RE = re.compile(
+    r"^(?:sincronizar|atualizar|banco|importar|ler|processar)\s+(?P<arquivo>[a-zA-Z0-9_\-\.]+\.json)$",
+    re.IGNORECASE,
+)
+
 # Budget pattern: "limite alimentação 2000", "meta transporte 500", "teto moradia 3000"
 _BUDGET_RE = re.compile(
     r"^(?:limite|meta|teto|or[çc]amento|budget)\s+"
@@ -146,6 +153,7 @@ _BUDGET_CAT_MAP = {
     "alimenta": "Alimentação", "comida": "Alimentação", "mercado": "Alimentação",
     "transport": "Transporte", "uber": "Transporte",
     "moradia": "Moradia", "aluguel": "Moradia", "casa": "Moradia",
+    "celular": "Moradia", "telefone": "Moradia",
     "saude": "Saúde", "saúde": "Saúde", "farmacia": "Saúde",
     "lazer": "Lazer", "entretenimento": "Lazer",
     "pessoal": "Pessoal", "beleza": "Pessoal",
@@ -266,6 +274,7 @@ _CATEGORIES = {
     "agua": "Moradia",
     "internet": "Moradia",
     "telefone": "Moradia",
+    "celular": "Moradia",
     "gás": "Moradia",
     "gas": "Moradia",
     "faxina": "Moradia",
@@ -363,6 +372,7 @@ _CATEGORIES = {
     "salão": "Pessoal",
     "estetica": "Pessoal",
     "estética": "Pessoal",
+    "manicure": "Pessoal",
 
     # Financeiro
     "seguro": "Financeiro",
@@ -489,9 +499,20 @@ def _classify(message: str) -> dict | None:
     msg = message.strip()
     msg_norm = _normalize(msg)
 
+    # ── Sincronização com arquivo (Fast Path) ────────────────────────────────
+    # Captura "sincronizar transacoes.json" antes do loop de keywords genéricas
+    m_sync_file = _SYNC_FILE_RE.match(msg)
+    if m_sync_file:
+        return {"tool": "sincronizar_banco", "args": {"arquivo": m_sync_file.group("arquivo")}}
+
     # Keyword-based tool dispatch
     for keyword, tool_name in _KEYWORD_TOOLS.items():
         if _normalize(keyword) in msg_norm:
+            # Se a mensagem for "sincronizar" mas tiver mais texto (como um nome de arquivo),
+            # deixamos o LLM processar para extrair os argumentos.
+            if tool_name == "sincronizar_banco" and len(msg.split()) > 1:
+                continue
+
             if tool_name == "listar_categoria":
                 # Tenta extrair categoria da mensagem
                 # Ex: "lista alimentacao", "detalhes saude", "o que comprei em lazer"
@@ -720,13 +741,16 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
         case "consultar_fatura":
             if not result["gastos"]:
                 return f"📭 Nenhum lançamento na {result['fatura']}."
-            linhas = "\n".join(
-                f" • {g['description']}: R$ {_fmt(float(g['amount']))}"
-                for g in result["gastos"][:5]
-            )
+            
+            linhas = []
+            for g in result["gastos"]:
+                inst = f" ({g['installment_of']}/{g['installment_total']})" if g.get("installment_of") else ""
+                linhas.append(f" • {g['description']}{inst}: R$ {_fmt(float(g['amount']))}")
+
+            corpo = "\n".join(linhas)
             return (
                 f"💳 *{result['fatura'].title()}*\n"
-                f"{linhas}\n\n"
+                f"{corpo}\n\n"
                 f"💰 Total: *R$ {_fmt(result['total'])}*"
             )
 
@@ -845,6 +869,8 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
             )
 
         case "sincronizar_banco":
+            if result.get("error"):
+                return f"⚠️ {result['error']}"
             return result.get("mensagem", "✅ Sincronização bancária concluída.")
 
         case "listar_categorias_disponiveis":

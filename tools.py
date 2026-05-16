@@ -71,10 +71,10 @@ SCHEMAS: list[dict] = [
                         "Categoria mais adequada. Guia: "
                         "Alimentação=mercado/delivery/padaria/almoço-diário; "
                         "Transporte=uber/combustível/metrô/manutenção; "
-                        "Moradia=aluguel/luz/internet/condomínio/faxina; "
+                        "Moradia=aluguel/luz/internet/condomínio/faxina/celular; "
                         "Saúde=farmácia/médico/academia/plano; "
                         "Lazer=restaurante/bar/streaming/cinema/viagem/balada; "
-                        "Pessoal=roupa/cabelo/beleza/presente; "
+                        "Pessoal=roupa/cabelo/beleza/presente/manicure; "
                         "Pets=pet/ração/veterinário/banho; "
                         "Educação=curso/livro/escola/faculdade/linkedin; "
                         "Financeiro=parcela/seguro/empréstimo/investimento"
@@ -85,7 +85,7 @@ SCHEMAS: list[dict] = [
                     "description": (
                         "Subcategoria inferida pelo contexto. Exemplos: "
                         "Delivery, Mercado, Refeição, Restaurante, Combustível, Aplicativo, "
-                        "Streaming, Academia, Farmácia, Financiamento, Presente, Pet"
+                        "Streaming, Academia, Farmácia, Financiamento, Presente, Pet, Manicure"
                     ),
                 },
                 "descricao": {

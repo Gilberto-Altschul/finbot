@@ -1,5 +1,5 @@
 # config.py
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
@@ -26,14 +26,17 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     sync_interval_hours: int = 6
+    finbot_persona: str = "default"
 
     # Cartão de crédito (fallback global — substituído por settings do usuário)
     cartao_dia_vencimento: int = 1
     cartao_dia_corte: int = 24
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
 
 @lru_cache
