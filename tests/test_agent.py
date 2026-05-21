@@ -19,7 +19,7 @@ async def test_direct_text_response():
     with patch("agent.call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = {"type": "text", "content": "Olá! Como posso ajudar?", "provider": "gemini"}
 
-        from agent import run
+        from app.agent import run
         reply = await run(PHONE, "oi")
 
         assert reply == "Olá! Como posso ajudar?"
@@ -45,7 +45,7 @@ async def test_tool_call_flow():
         ]
         mock_tool.return_value = {"registrado": True, "total_mes": 35.0}
 
-        from agent import run
+        from app.agent import run
         reply = await run(PHONE, "almoço 35")
 
         assert "35" in reply
@@ -59,7 +59,7 @@ async def test_error_handling():
     with patch("agent.call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = RuntimeError("API timeout")
 
-        from agent import run
+        from app.agent import run
         reply = await run(PHONE, "resumo")
 
         assert "⚠️" in reply

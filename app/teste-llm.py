@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import tools as tool_registry
-from agent import SYSTEM
+from app.agent import SYSTEM
 from llm import call_llm
 
 

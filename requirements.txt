@@ -6,6 +6,7 @@ twilio
 supabase
 python-dotenv
 pytest
+requests
 pytest-asyncio
 httpx
 google-genai

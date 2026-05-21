@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS finbot_expenses (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_phone  TEXT        NOT NULL,
-    amount      NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+    amount      NUMERIC(10,2) NOT NULL CHECK (amount >= 0),
     category    TEXT        NOT NULL,
     subcategory TEXT,
     transaction_type TEXT DEFAULT 'expense' CHECK (transaction_type IN ('expense', 'income')),
@@ -23,9 +23,15 @@ CREATE TABLE IF NOT EXISTS finbot_expenses (
 CREATE TABLE IF NOT EXISTS finbot_user_connections (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_phone  TEXT NOT NULL UNIQUE,
-    pluggy_item_id TEXT NOT NULL,
+    pluggy_item_id TEXT NULL, -- Explicitly nullable, como pretendido pelo uso no código Python
+    pending_pdf_url TEXT,
+    status      TEXT DEFAULT 'ativo',
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Garante que pluggy_item_id seja anulável, caso a tabela já exista e a coluna não seja
+ALTER TABLE finbot_user_connections
+ALTER COLUMN pluggy_item_id DROP NOT NULL;
 
 
 CREATE TABLE IF NOT EXISTS finbot_conversation (
@@ -39,6 +45,16 @@ CREATE TABLE IF NOT EXISTS finbot_conversation (
 CREATE INDEX IF NOT EXISTS idx_exp_phone ON finbot_expenses(user_phone);
 CREATE INDEX IF NOT EXISTS idx_exp_date  ON finbot_expenses(created_at);
 CREATE INDEX IF NOT EXISTS idx_conv_phone ON finbot_conversation(user_phone, created_at);
+
+CREATE TABLE IF NOT EXISTS finbot_budgets (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_phone  TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    amount      NUMERIC(10,2) NOT NULL CHECK (amount >= 0),
+    mes_referencia TEXT NOT NULL, -- Formato YYYY-MM
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_phone, category, mes_referencia)
+);
 
 -- ── RPC functions (required by database.py) ───────────────────────────────────
 -- NOTA: Todas as funções usam created_at::DATE para evitar problemas de fuso
@@ -129,4 +145,23 @@ LANGUAGE SQL STABLE AS $$
       AND transaction_type = 'expense'
       AND DATE_TRUNC('month', created_at::DATE) = DATE_TRUNC('month', p_due_date::DATE)
     ORDER BY created_at ASC;
+$$;
+
+-- Busca todos os orçamentos de um mês
+CREATE OR REPLACE FUNCTION budget_all(p_phone TEXT, p_mes TEXT)
+RETURNS TABLE(category TEXT, amount NUMERIC)
+LANGUAGE SQL STABLE AS $$
+    SELECT category, amount
+    FROM finbot_budgets
+    WHERE user_phone = p_phone AND mes_referencia = p_mes;
+$$;
+
+-- Histórico de limites de uma categoria
+CREATE OR REPLACE FUNCTION budget_history(p_phone TEXT, p_category TEXT)
+RETURNS TABLE(mes_referencia TEXT, amount NUMERIC)
+LANGUAGE SQL STABLE AS $$
+    SELECT mes_referencia, amount
+    FROM finbot_budgets
+    WHERE user_phone = p_phone AND LOWER(category) = LOWER(p_category)
+    ORDER BY mes_referencia DESC;
 $$;

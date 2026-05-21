@@ -1,10 +1,10 @@
 import requests
 import json
 import logging
-import database as db
+import app.database as db
 from datetime import datetime
-from config import get_settings
-import agent  # Para usar a inferência de categoria
+from app.config import get_settings
+import app.agent as agent  # Para usar a inferência de categoria
 
 logger = logging.getLogger(__name__)
 
