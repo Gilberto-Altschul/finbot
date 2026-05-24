@@ -102,8 +102,7 @@ class PluggyService:
             return f"❌ Erro ao ler o arquivo JSON: {str(e)}"
 
     def _process_transactions(self, user_phone: str, transactions: list):
-        """Salva no banco e gera insights comportamentais"""
-        insights = []
+        """Salva no banco de dados as novas transações encontradas."""
         novos_gastos = 0
         novas_receitas = 0
         ignorados_duplicados = 0
@@ -141,9 +140,6 @@ class PluggyService:
             if is_new:
                 if tipo == "expense":
                     novos_gastos += 1
-                    alerta = self._check_behavior_alert(user_phone, categoria_finbot, amount)
-                    if alerta:
-                        insights.append(alerta)
                 else:
                     novas_receitas += 1
             else:
@@ -163,26 +159,7 @@ class PluggyService:
         if novas_receitas > 0:
             resumo += f"• {novas_receitas} novas receitas registradas.\n"
             
-        if insights:
-            resumo += "\n\n" + "\n".join(insights)
-        
         return resumo
-
-    def _check_behavior_alert(self, user_phone, category, last_value):
-        """Compara o gasto atual com a sua tabela finbot_budgets (coluna amount)"""
-        budget_limit = db.get_budget_limit(user_phone, category)
-        if not budget_limit:
-            return None
-
-        total_gasto = db.category_total(user_phone, category)
-        percentual = (total_gasto / budget_limit) * 100
-
-        if percentual >= 100:
-            return f"🚨 *LIMITE ATINGIDO!* Seu gasto de R$ {last_value:.2f} em '{category}' fez você estourar sua meta de R$ {budget_limit:.2f}."
-        elif percentual >= 80:
-            return f"⚠️ *CUIDADO:* Você já usou {percentual:.0f}% da sua meta de '{category}'."
-        
-        return None
 
     def _get_mock_data(self):
         """Dados de fallback para quando a API estiver bloqueada (403)"""

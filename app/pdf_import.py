@@ -11,6 +11,9 @@ from app.ofx_schema import OpenFinancePayload
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Cliente compartilhado para evitar latência de inicialização
+_client = genai.Client(api_key=settings.gemini_api_key)
+
 async def converter_texto_c6_para_json_padrao(texto_pdf_cru: str) -> str:
     """
     Usa a interface oficial do Gemini 2.5 para estruturar e normalizar as 
@@ -18,19 +21,19 @@ async def converter_texto_c6_para_json_padrao(texto_pdf_cru: str) -> str:
     """
     system_prompt = "Você é um microsserviço de backend especialista em processamento de dados financeiros."
     user_prompt = f"""
-    Sua tarefa é ler o texto bruto de uma fatura do C6 Bank e convertê-lo em um objeto JSON com uma chave raiz chamada 'transactions'.
+    Sua tarefa é ler o texto bruto de um extrato ou fatura do C6 Bank e convertê-lo em um objeto JSON com a chave 'transactions'.
 
     Regras de Negócio:
     1. Ignore linhas de cabeçalho, subtotais ou avisos informativos.
     2. Ignore linhas de 'Estorno' (mantenha apenas as despesas reais).
     3. Identifique o nome do banco ('C6 Bank'), o titular e os 4 últimos dígitos do cartão.
-    4. Para cada transação de despesa/gasto:
-       - 'id': Gere um ID determinístico no formato 'c6_8525_data_valor_reduzido' (ex: c6_8525_20260503_19493).
+    4. Para cada transação encontrada (compras no cartão, pagamentos de boletos, pix ou transferências):
+       - 'id': Gere um ID determinístico baseado na origem, data e valor (ex: c6_8525_20260503_19493).
        - 'date': Converta para ISO YYYY-MM-DD. Se a fatura referenciar um ano específico (como 2026), use-o como base.
        - 'description': Nome limpo do estabelecimento (ex: 'SLEEP HOUSE').
        - 'amount': Deve ser um número FLOAT POSITIVO (ex: 194.93).
        - 'category': Mapeie rigorosamente para uma destas: 'Alimentação', 'Transporte', 'Lazer', 'Moradia', 'Saúde', 'Educação' ou 'Outros'.
-       - 'payment_method': Sempre 'credito'.
+       - 'payment_method': Identifique se é 'credito' (compras na fatura) ou 'debito' (pagamentos de boletos/contas).
        - 'type': Sempre 'expense'.
 
     Texto Bruto do Extrato:
@@ -40,18 +43,18 @@ async def converter_texto_c6_para_json_padrao(texto_pdf_cru: str) -> str:
     """
 
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        
         # Força o modelo de forma nativa a responder apenas JSON válido
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
+                response = _client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=user_prompt,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
-                        response_mime_type="application/json"
+                        response_mime_type="application/json",
+                        response_schema=OpenFinancePayload,
+                        temperature=0.1
                     )
                 )
                 break
@@ -63,17 +66,7 @@ async def converter_texto_c6_para_json_padrao(texto_pdf_cru: str) -> str:
                     continue
                 raise exc
 
-        text = response.text.strip()
-        # Limpeza robusta: remove blocos de código markdown (ex: ```json ... ```) 
-        # que a IA pode inserir mesmo com a instrução de mime_type
-        if text.startswith("```"):
-            lines = text.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].startswith("```"):
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        return text
+        return response.text.strip()
     except Exception as e:
         logger.error(f"Erro ao chamar o Gemini no pdf_import: {e}")
         raise e

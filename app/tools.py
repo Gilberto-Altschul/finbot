@@ -98,6 +98,17 @@ SCHEMAS: list[dict] = [
                 "historico": {"type": "boolean"}
             }
         }
+    },
+    {
+        "name": "ultimos_gastos",
+        "description": "Retorna uma lista dos últimos gastos registrados pelo usuário.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limite": {"type": "integer", "description": "Quantidade de registros a retornar (padrão 10)."},
+                "payment_method": {"type": "string", "enum": ["debito", "credito", "dinheiro"], "description": "Método de pagamento para filtrar os gastos."}
+            }
+        }
     }
 ]
 
@@ -107,6 +118,18 @@ def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
     logger.info(f"Executando handler nativo: {name} com args {args}")
 
     match name:
+        case "sincronizar_banco":
+            # Importação local para evitar dependência circular com app.agent
+            from app.pluggy_service import PluggyService
+            service = PluggyService()
+            
+            arquivo = args.get("arquivo")
+            if arquivo:
+                res = service.sync_from_file(user_phone, arquivo)
+            else:
+                res = service.sync_user_transactions(user_phone, args.get("account_id"))
+            return {"mensagem": res}
+
         case "registrar_receita":
             valor = float(args["valor"])
             categoria = args["categoria"]
@@ -155,7 +178,7 @@ def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     return {"registrado": True, "tipo": "credito", "valor": valor, "categoria": categoria, "subcategoria": subcategoria, "descricao": descricao, "beneficiario": beneficiario, "data": expense_date.isoformat(), "fatura_vencimento": due.isoformat(), "fatura_label": fatura_label(due), "total_fatura": db.fatura_total(user_phone, due.isoformat(), dia_corte)}
             else:
                 row = db.save_expense(user_phone, valor, categoria, descricao, beneficiario, subcategoria, expense_date, "expense", method)
-                return {"registrado": True, "id": row.get("id"), "valor": valor, "categoria": categoria, "subcategoria": subcategoria, "descricao": descricao, "beneficiario": beneficiario, "data": expense_date.isoformat(), "total_categoria_mes": db.category_total(user_phone, categoria), "total_mes": db.monthly_total(user_phone)}
+                return {"registrado": True, "tipo": "debito", "id": row.get("id"), "valor": valor, "categoria": categoria, "subcategoria": subcategoria, "descricao": descricao, "beneficiario": beneficiario, "data": expense_date.isoformat(), "total_categoria_mes": db.category_total(user_phone, categoria), "total_mes": db.monthly_total(user_phone)}
 
         case "resumo_mensal" | "consultar_gastos_do_mes":
             mes = date.today().strftime("%Y-%m")
@@ -222,6 +245,12 @@ def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     "status": "🔴" if pct > 100 else "⚠️" if pct >= 80 else "✅"
                 })
             return {"mes": mes, "limites": processed}
+
+        case "ultimos_gastos":
+            limite = int(args.get("limite") or 10)
+            payment_method = args.get("payment_method")
+            gastos = db.get_latest_expenses(user_phone, limite, payment_method)
+            return {"gastos": gastos, "payment_method": payment_method}
 
         case _:
             return {"mensagem": "Ação executada."}

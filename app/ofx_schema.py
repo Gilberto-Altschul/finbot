@@ -11,7 +11,7 @@ class StandardTransaction(BaseModel):
     id: str = Field(..., description="ID determinístico baseado no hash dos dados da transação")
     date: str = Field(..., description="Data no formato ISO YYYY-MM-DD")
     description: str
-    amount: float = Field(..., description="Valor negativo para despesas")
+    amount: float = Field(..., description="Valor positivo para despesas")
     currency: str = "BRL"
     category_raw: str
     category: str

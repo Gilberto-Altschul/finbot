@@ -4,7 +4,8 @@ import asyncio
 import base64
 from collections import deque
 import io
-import requests
+import time
+import httpx
 from pypdf import PdfReader
 
 from fastapi import FastAPI, Form, BackgroundTasks, Response
@@ -49,23 +50,28 @@ async def _process(user_phone: str, user_message: str) -> None:
 async def async_process_pdf_extract(user_phone: str, media_url: str, senha_fornecida: str = None):
     """Executado em segundo plano para descriptografar, ler e processar as metas do PDF."""
     try:
+        start_time = time.perf_counter()
         # Adiciona autenticação básica para evitar Erro 401 ao baixar mídia protegida do Twilio.
         # Usando headers explícitos para maior robustez na autenticação.
         auth_string = f"{settings.twilio_account_sid}:{settings.twilio_auth_token}"
         encoded_auth = base64.b64encode(auth_string.encode()).decode()
         headers = {"Authorization": f"Basic {encoded_auth}"}
-        response = requests.get(
-            media_url, 
-            headers=headers,
-            timeout=15
-        )
-        response.raise_for_status() # Levanta um HTTPError para respostas de erro (4xx ou 5xx)
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                media_url, 
+                headers=headers,
+                timeout=15.0,
+                follow_redirects=True
+            )
+            response.raise_for_status()
+        download_time = time.perf_counter() - start_time
 
         # Verifica se o Content-Type é realmente um PDF
         content_type = response.headers.get("Content-Type", "").lower()
         if "application/pdf" not in content_type:
             logger.error(f"Downloaded file is not a PDF. Content-Type: {content_type}")
-            _send_whatsapp(user_phone, "❌ O arquivo que você enviou não parece ser um PDF válido. Por favor, tente novamente com um arquivo PDF.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "❌ O arquivo que você enviou não parece ser um PDF válido. Por favor, tente novamente com um arquivo PDF.")
             db.limpar_pdf_pendente(user_phone) # Limpa o estado pendente
             return
         pdf_file = io.BytesIO(response.content)
@@ -80,11 +86,11 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
                     "Por favor, *digite a senha do PDF* por aqui para eu processar "
                     "(geralmente os 4 ou 6 primeiros dígitos do seu CPF)."
                 )
-                _send_whatsapp(user_phone, reply)
+                await asyncio.to_thread(_send_whatsapp, user_phone, reply)
                 return
 
             if not reader.decrypt(senha_fornecida):
-                _send_whatsapp(user_phone, "❌ Senha incorreta. O arquivo continua protegido. Envie o PDF novamente no chat para tentar outra vez.")
+                await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Senha incorreta. O arquivo continua protegido. Envie o PDF novamente no chat para tentar outra vez.")
                 db.limpar_pdf_pendente(user_phone)
                 return
 
@@ -92,19 +98,25 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         db.limpar_pdf_pendente(user_phone)
         
         # Junta o texto bruto extraído de todas as páginas do extrato
-        texto_completo = "".join([page.extract_text() + "\n" for page in reader.pages])
+        def extract_all_text(): return "".join([(page.extract_text() or "") + "\n" for page in reader.pages])
+        texto_completo = await asyncio.to_thread(extract_all_text)
+        parse_time = time.perf_counter() - start_time - download_time
             
         # Executa a tradução assíncrona da LLM de forma segura dentro da BackgroundTask
         json_padrao_contrato = await pdf_import.converter_texto_c6_para_json_padrao(texto_completo)
+        llm_time = time.perf_counter() - start_time - download_time - parse_time
         
         # Roda a esteira de ingestão e calcula os estouros de limite (Budgets)
         diagnostico_final = ingestion.processar_ingestion_unificada(user_phone, json_padrao_contrato)
-        _send_whatsapp(user_phone, diagnostico_final)
+        total_time = time.perf_counter() - start_time
+        
+        logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, Parse: {parse_time:.2f}s, LLM: {llm_time:.2f}s)")
+        await asyncio.to_thread(_send_whatsapp, user_phone, diagnostico_final)
         
     except Exception as e:
         logger.error(f"Erro no processamento do PDF: {e}")
         db.limpar_pdf_pendente(user_phone)
-        _send_whatsapp(user_phone, "❌ Tive um problema técnico ao tentar abrir seu PDF.")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao tentar abrir seu PDF.")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -136,7 +148,7 @@ async def webhook(
         db._get_or_create_user_connection(user_phone)
     except Exception as exc:
         logger.error(f"Falha ao obter ou criar conexão de usuário para {user_phone}: {exc}")
-        _send_whatsapp(user_phone, "❌ Tive um problema técnico ao iniciar sua sessão. Por favor, tente novamente.")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao iniciar sua sessão. Por favor, tente novamente.")
         return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 1: O USUÁRIO ENVIOU UM ARQUIVO PDF (EXTRATO) ────────────────────

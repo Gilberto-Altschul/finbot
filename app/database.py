@@ -174,6 +174,18 @@ def monthly_total(user_phone: str) -> float:
     result = get_db().rpc("expenses_monthly_total", {"p_phone": user_phone}).execute()
     return _parse_rpc_float(result.data)
 
+def get_latest_expenses(user_phone: str, limit: int = 10, payment_method: str | None = None) -> list[dict]:
+    """Busca os últimos gastos registrados na tabela de despesas."""
+    try:
+        query = get_db().table("finbot_expenses").select("*").eq("user_phone", user_phone)
+        if payment_method:
+            query = query.eq("payment_method", payment_method)
+        result = query.order("created_at", desc=True).limit(limit).execute()
+        return result.data or []
+    except Exception as exc:
+        logger.error(f"Erro ao buscar últimos gastos: {exc}")
+        return []
+
 def monthly_income_total(user_phone: str) -> float:
     result = get_db().rpc("income_monthly_total", {"p_phone": user_phone}).execute()
     return _parse_rpc_float(result.data)
@@ -212,7 +224,7 @@ def get_all_budgets(user_phone: str, mes_referencia: str) -> list[dict]:
 
 def salvar_pdf_aguardando_senha(p_phone: str, media_url: str, status: str = "aguardando_senha"): # type: ignore
     try:
-        _get_or_create_user_connection(p_phone) # Garante que a linha exista
+        # Removida verificação redundante; garantida pelo webhook no app/main.py
         data = {"pending_pdf_url": media_url, "status": status}
         get_db().table("finbot_user_connections").update(data).eq("user_phone", p_phone).execute()
     except Exception as exc:
@@ -229,11 +241,40 @@ def obter_pdf_pendente(p_phone: str) -> str | None:
 
 def limpar_pdf_pendente(p_phone: str):
     try:
-        _get_or_create_user_connection(p_phone) # Garante que a linha exista
+        # Removida verificação redundante; garantida pelo webhook no app/main.py
         data = {"pending_pdf_url": None, "status": "ativo"}
         get_db().table("finbot_user_connections").update(data).eq("user_phone", p_phone).execute()
     except Exception as exc:
         logger.error(f"Erro crítico ao limpar PDF pendente para {p_phone}: {exc}")
+
+def filtrar_transacoes_existentes(user_phone: str, tx_ids: list[str]) -> set[str]:
+    """
+    Recebe uma lista de IDs e retorna quais deles já existem no banco.
+    Evita o problema de N+1 consultas de duplicidade.
+    """
+    if not tx_ids:
+        return set()
+    try:
+        res = get_db().table("finbot_expenses").select("pluggy_transaction_id").eq("user_phone", user_phone).in_("pluggy_transaction_id", tx_ids).execute()
+        return {row["pluggy_transaction_id"] for row in res.data}
+    except Exception as exc:
+        logger.error(f"Erro ao filtrar transações existentes: {exc}")
+        return set()
+
+def inserir_gastos_em_lote(gastos: list[dict]) -> bool:
+    """
+    Realiza um upsert múltiplo no Supabase. 
+    Garante que duplicatas não quebrem o lote.
+    """
+    if not gastos:
+        return True
+    try:
+        # Usamos upsert com on_conflict para garantir que se um ID já existir, ele apenas ignore ou atualize
+        get_db().table("finbot_expenses").upsert(gastos, on_conflict="pluggy_transaction_id").execute()
+        return True
+    except Exception as exc:
+        logger.error(f"Falha no insert em lote: {exc}")
+        return False
 
 def registrar_gasto_automatico(user_phone: str, valor: float, category: str, description: str, tx_id: str, metodo: str = "debito", tipo: str = "expense", data_tx: str | None = None) -> bool:
     try:

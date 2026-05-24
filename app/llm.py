@@ -10,6 +10,10 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Singleton do cliente GenAI para otimizar conexões
+_settings = get_settings()
+_client = genai.Client(api_key=_settings.gemini_api_key)
+
 async def call_llm(
     system: str,
     history: list[dict[str, str]],
@@ -20,12 +24,7 @@ async def call_llm(
     Chama de forma assíncrona o modelo Gemini adaptando o histórico
     e blindando contra falhas de envio de esquemas de ferramentas.
     """
-    settings = get_settings()
-    
     try:
-        # Inicializa o cliente oficial do SDK da Google utilizando a sua chave do .env
-        client = genai.Client(api_key=settings.gemini_api_key)
-        
         # Converte o histórico de conversação do banco para o formato de Contents aceito pelo SDK
         contents_payload = []
         for msg in history:
@@ -62,7 +61,7 @@ async def call_llm(
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
+                response = _client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=contents_payload,
                     config=config,
