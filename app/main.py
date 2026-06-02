@@ -6,7 +6,7 @@ from collections import deque
 import io
 import time
 import httpx
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from fastapi import FastAPI, Form, BackgroundTasks, Response
 from twilio.rest import Client
@@ -32,15 +32,25 @@ _twilio = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 def _send_whatsapp(to: str, body: str) -> None:
     """Dispara mensagens síncronas usando thread do asyncio para não travar a API."""
-    try:
-        msg = _twilio.messages.create(
-            from_=settings.twilio_whatsapp_number,
-            to=to,
-            body=body,
-        )
-        logger.info(f"Message sent to {to} | SID: {msg.sid}")
-    except Exception as exc:
-        logger.error(f"Failed to send WhatsApp to {to}: {exc}")
+    if not body or not str(body).strip():
+        logger.error(f"Erro: Tentativa de enviar corpo de mensagem vazio para {to}. Abortando envio.")
+        return
+
+    for attempt in range(3):
+        try:
+            msg = _twilio.messages.create(
+                from_=settings.twilio_whatsapp_number,
+                to=to,
+                body=body,
+            )
+            logger.info(f"Message sent to {to} | SID: {msg.sid}")
+            return
+        except Exception as exc:
+            if attempt < 2:
+                logger.warning(f"Retentativa de envio WhatsApp ({attempt+1}/3) por erro: {exc}")
+                time.sleep(1)
+                continue
+            logger.error(f"Falha definitiva ao enviar WhatsApp para {to}: {exc}")
 
 async def _process(user_phone: str, user_message: str) -> None:
     """Orquestra a conversa padrão delegando para o Agente Gemini."""
@@ -75,6 +85,7 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
             db.limpar_pdf_pendente(user_phone) # Limpa o estado pendente
             return
         pdf_file = io.BytesIO(response.content)
+        pdf_final_content = response.content
         
         reader = PdfReader(pdf_file)
         if reader.is_encrypted:
@@ -82,7 +93,7 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
                 # PDF protegido e ainda não temos a senha: pede agora
                 db.salvar_pdf_aguardando_senha(user_phone, media_url, status="aguardando_senha")
                 reply = (
-                    "🏦 *Extrato do C6 Bank recebido!* O arquivo está protegido.\n\n"
+                    "🏦 *Extrato do Bank recebido!* O arquivo está protegido.\n\n"
                     "Por favor, *digite a senha do PDF* por aqui para eu processar "
                     "(geralmente os 4 ou 6 primeiros dígitos do seu CPF)."
                 )
@@ -93,24 +104,30 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
                 await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Senha incorreta. O arquivo continua protegido. Envie o PDF novamente no chat para tentar outra vez.")
                 db.limpar_pdf_pendente(user_phone)
                 return
+            
+            # Se estava criptografado, geramos uma versão limpa (bytes) para o Gemini
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            with io.BytesIO() as output:
+                writer.write(output)
+                pdf_final_content = output.getvalue()
 
         # Desbloqueou o arquivo com sucesso? Reseta imediatamente o estado pendente no banco
         db.limpar_pdf_pendente(user_phone)
         
-        # Junta o texto bruto extraído de todas as páginas do extrato
-        def extract_all_text(): return "".join([(page.extract_text() or "") + "\n" for page in reader.pages])
-        texto_completo = await asyncio.to_thread(extract_all_text)
-        parse_time = time.perf_counter() - start_time - download_time
+        # Mensagem intermediária para manter o usuário engajado durante o processamento da IA
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🔍 *Leitura concluída!* Agora a inteligência artificial está organizando seus gastos... Só mais um momento.")
             
-        # Executa a tradução assíncrona da LLM de forma segura dentro da BackgroundTask
-        json_padrao_contrato = await pdf_import.converter_texto_c6_para_json_padrao(texto_completo)
-        llm_time = time.perf_counter() - start_time - download_time - parse_time
+        # AGORA ENVIAMOS OS BYTES DIRETAMENTE (Abordagem Nativa/Multimodal)
+        json_padrao_contrato = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
+        llm_time = time.perf_counter() - start_time - download_time
         
         # Roda a esteira de ingestão e calcula os estouros de limite (Budgets)
-        diagnostico_final = ingestion.processar_ingestion_unificada(user_phone, json_padrao_contrato)
+        diagnostico_final = await ingestion.processar_ingestion_unificada(user_phone, json_padrao_contrato)
         total_time = time.perf_counter() - start_time
         
-        logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, Parse: {parse_time:.2f}s, LLM: {llm_time:.2f}s)")
+        logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
         await asyncio.to_thread(_send_whatsapp, user_phone, diagnostico_final)
         
     except Exception as e:

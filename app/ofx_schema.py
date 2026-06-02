@@ -1,6 +1,6 @@
 # app/ofx_schema.py
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 class AccountInfo(BaseModel):
     bank: str
@@ -13,9 +13,12 @@ class StandardTransaction(BaseModel):
     description: str
     amount: float = Field(..., description="Valor positivo para despesas")
     currency: str = "BRL"
-    category_raw: str
+    category_raw: Optional[str] = "Não identificado"
     category: str
-    type: str = "CREDIT"
+    subcategory: Optional[str] = "Geral"
+    installment_of: Optional[int] = None
+    installment_total: Optional[int] = None
+    type: Literal["expense", "income"] = "expense" # Permite 'expense' ou 'income'
     payment_method: str = "credito"
 
 class OpenFinancePayload(BaseModel):

@@ -165,3 +165,33 @@ LANGUAGE SQL STABLE AS $$
     WHERE user_phone = p_phone AND LOWER(category) = LOWER(p_category)
     ORDER BY mes_referencia DESC;
 $$;
+
+-- ── Merchant Learning & Categories ──────────────────────────────────────────
+
+-- Tabela de aprendizado do FinBot ( Merchant -> Categoria )
+CREATE TABLE IF NOT EXISTS finbot_merchant_mappings (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_phone      TEXT NOT NULL,
+    merchant_name   TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    subcategory     TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_phone, merchant_name)
+);
+
+-- Tabelas auxiliares para categorização global e emojis
+CREATE TABLE IF NOT EXISTS finbot_categories (
+    id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    emoji TEXT
+);
+
+CREATE TABLE IF NOT EXISTS finbot_subcategories (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    category_name TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    keywords      TEXT[] DEFAULT '{}',
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_merchant_phone ON finbot_merchant_mappings(user_phone);

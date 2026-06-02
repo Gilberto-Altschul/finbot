@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 import asyncio
+import random
 from google import genai
 from google.genai import types, errors
 from app.config import get_settings
@@ -55,25 +56,47 @@ async def call_llm(
                 converted_tools.append({"function_declarations": [t]})
             config.tools = converted_tools
 
-        # Faz a chamada síncrona dentro da thread para o modelo recomendado para ações rápidas
-        # Altere para "gemini-2.5-flash" se já estiver utilizando o ambiente atualizado
-        
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                response = _client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=contents_payload,
-                    config=config,
-                )
+        # Prioriza a série 3.x Flash para velocidade e inteligência superior
+        modelos_para_tentar = [
+            "gemini-3.5-flash",          # Mais recente e rápido para agente
+            "gemini-3.1-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",          # Próxima geração Flash
+            "gemini-2.5-flash-lite",     # Sua customização (cota baixa, mas pode ser útil)
+            "gemini-1.5-flash",          # Cavalo de batalha, muito estável
+            "gemini-3.1-pro",            # Mais capaz, mas mais lento/custoso (último recurso)
+            "gemini-2.5-pro"             # Similar ao 3.1 Pro
+        ]
+        response = None
+
+        for model_name in modelos_para_tentar:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Chamando LLM com modelo: {model_name} (Tentativa {attempt+1})")
+                    response = await _client.aio.models.generate_content(
+                        model=model_name,
+                        contents=contents_payload,
+                        config=config
+                    )
+                    if response:
+                        logger.info(f"Sucesso com modelo: {model_name}")
+                        break
+                except (errors.ServerError, errors.ClientError) as exc:
+                    # Erros de cota ou instabilidade temporária
+                    if attempt < max_retries - 1 and ("429" in str(exc) or "503" in str(exc)):
+                        wait_time = (attempt + 1) * 3 + random.uniform(0, 1)
+                        logger.warning(f"Modelo {model_name} indisponível. Retentativa em {wait_time:.1f}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    logger.warning(f"Troca de modelo: {model_name} falhou. Tentando próximo da lista...")
+                    break # Sai do loop de retentativa para trocar o modelo
+            
+            if response:
                 break
-            except (errors.ServerError, errors.ClientError) as exc:
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 5
-                    logger.warning(f"Gemini API indisponível (503/429). Tentando novamente em {wait_time}s... ({attempt + 1}/{max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise exc
+
+        if not response:
+            raise Exception("Todos os modelos de IA falharam ou estão sem cota disponível.")
 
         # Verifica se o modelo decidiu acionar alguma ferramenta mapeada
         if response.function_calls:
