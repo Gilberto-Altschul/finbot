@@ -21,6 +21,9 @@ COPY . .
 # Expõe a porta que o teu bot/web server usa (geralmente 5000 ou 8080)
 EXPOSE 5000
 
+# Adiciona a pasta atual ao PYTHONPATH para o Python encontrar o módulo 'app'
+ENV PYTHONPATH=/app
+
 # Comando para iniciar o teu bot
 # Garante que o ficheiro principal é main.py ou o nome que definires
 CMD ["python", "app/main.py"]
