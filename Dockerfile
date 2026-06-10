@@ -26,4 +26,4 @@ ENV PYTHONPATH=/app
 
 # Comando para iniciar o teu bot
 # Garante que o ficheiro principal é main.py ou o nome que definires
-CMD ["python", "-m" "app.main"]
+CMD ["python", "-m", "app.main"]
