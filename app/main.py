@@ -205,3 +205,9 @@ async def webhook(
     logger.info(f"Incoming message from {user_phone}: {user_message}")
     background_tasks.add_task(_process, user_phone, user_message)
     return Response(content="<Response/>", media_type="text/xml")
+
+    if __name__ == "__main__":
+        import uvicorn
+        # A variável de ambiente PORT é injetada automaticamente pela Cloud
+        port = int(os.environ.get("PORT", 8080)) 
+        uvicorn.run(app, host="0.0.0.0", port=port)
