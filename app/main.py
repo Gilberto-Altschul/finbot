@@ -16,6 +16,7 @@ import app.database as db
 import app.pdf_import as pdf_import
 import app.ingestion as ingestion
 from app.config import get_settings
+from app.ofx_schema import OpenFinancePayload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FinBot", version="1.0.0")
 settings = get_settings()
+
+# Cliente HTTP persistente para evitar exaustão de sockets (WinError 10055)
+http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
 
 # Cache simples para evitar processar a mesma mensagem vinda de retentativas do Twilio
 processed_messages = deque(maxlen=1000)
@@ -67,14 +71,12 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         encoded_auth = base64.b64encode(auth_string.encode()).decode()
         headers = {"Authorization": f"Basic {encoded_auth}"}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                media_url, 
-                headers=headers,
-                timeout=15.0,
-                follow_redirects=True
-            )
-            response.raise_for_status()
+        response = await http_client.get(
+            media_url, 
+            headers=headers
+        )
+        response.raise_for_status()
+
         download_time = time.perf_counter() - start_time
 
         # Verifica se o Content-Type é realmente um PDF
@@ -117,14 +119,24 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         db.limpar_pdf_pendente(user_phone)
         
         # Mensagem intermediária para manter o usuário engajado durante o processamento da IA
-        await asyncio.to_thread(_send_whatsapp, user_phone, "🔍 *Leitura concluída!* Agora a inteligência artificial está organizando seus gastos... Só mais um momento.")
-            
-        # AGORA ENVIAMOS OS BYTES DIRETAMENTE (Abordagem Nativa/Multimodal)
-        json_padrao_contrato = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🔍 *Leitura concluída!* A inteligência artificial está organizando seus gastos... Só mais um momento.")
+
+        num_pages = len(PdfReader(io.BytesIO(pdf_final_content)).pages)
+        logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone} em UMA única chamada")
+
+        # Envia o PDF inteiro de uma vez — o Gemini 2.x suporta até 300 páginas
+        json_str = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
+        try:
+            payload = OpenFinancePayload.model_validate_json(json_str)
+            all_extracted_transactions = payload.transactions
+        except Exception as e:
+            logger.error(f"Erro ao validar JSON do PDF: {e}")
+            all_extracted_transactions = []
+
         llm_time = time.perf_counter() - start_time - download_time
         
         # Roda a esteira de ingestão e calcula os estouros de limite (Budgets)
-        diagnostico_final = await ingestion.processar_ingestion_unificada(user_phone, json_padrao_contrato)
+        diagnostico_final = await ingestion.processar_ingestion_unificada(user_phone, all_extracted_transactions)
         total_time = time.perf_counter() - start_time
         
         logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")

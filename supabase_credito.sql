@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS finbot_user_settings (
     user_phone            TEXT PRIMARY KEY,
     cartao_dia_vencimento INT  NOT NULL DEFAULT 1,
     cartao_dia_corte      INT  NOT NULL DEFAULT 24,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at            DATE NOT NULL DEFAULT CURRENT_DATE,
+    updated_at            DATE NOT NULL DEFAULT CURRENT_DATE
 );
 
 -- Auto-update updated_at
@@ -35,6 +35,7 @@ CREATE TRIGGER trg_user_settings_updated_at
 -- NOTA: usa created_at::DATE para evitar problemas de fuso horário.
 -- Datas manuais são salvas como T12:00:00Z e comparadas apenas pela data.
 
+DROP FUNCTION IF EXISTS expenses_by_fatura(TEXT, DATE, INT);
 CREATE OR REPLACE FUNCTION expenses_by_fatura(
     p_phone      TEXT,
     p_due_date   DATE,
@@ -42,19 +43,17 @@ CREATE OR REPLACE FUNCTION expenses_by_fatura(
 )
 RETURNS TABLE(
     id BIGINT, amount NUMERIC, category TEXT,
-    description TEXT, created_at TIMESTAMPTZ,
+    description TEXT, created_at DATE, purchase_date DATE,
     payment_method TEXT, installment_of INT, installment_total INT
 )
 LANGUAGE SQL STABLE AS $$
-    -- Filtra pelo mes do vencimento da fatura.
-    -- Cada lancamento de credito e salvo no 1o dia do mes do vencimento,
-    -- entao basta comparar o mes do created_at com o mes do p_due_date.
+    -- Filtra pelo mês de faturamento (billing_date) que corresponde ao vencimento da fatura.
     SELECT
-        id, amount, category, description, created_at,
+        id, amount, category, description, created_at, purchase_date,
         payment_method, installment_of, installment_total
     FROM finbot_expenses
     WHERE user_phone = p_phone
       AND payment_method = 'credito'
-      AND DATE_TRUNC('month', created_at::DATE) = DATE_TRUNC('month', p_due_date)
-    ORDER BY created_at DESC;
+      AND DATE_TRUNC('month', billing_date) = DATE_TRUNC('month', p_due_date)
+    ORDER BY purchase_date DESC;
 $$;

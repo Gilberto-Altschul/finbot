@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS finbot_budgets (
     category      TEXT        NOT NULL,
     amount        NUMERIC(10,2) NOT NULL CHECK (amount > 0),
     mes_referencia TEXT        NOT NULL,  -- formato 'YYYY-MM'
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at    DATE        NOT NULL DEFAULT CURRENT_DATE
 );
 
 CREATE INDEX IF NOT EXISTS idx_budgets_phone  ON finbot_budgets(user_phone);
@@ -48,7 +48,7 @@ $$;
 -- ── RPC: histórico de um limite por categoria ─────────────────────────────────
 
 CREATE OR REPLACE FUNCTION budget_history(p_phone TEXT, p_category TEXT)
-RETURNS TABLE(mes_referencia TEXT, amount NUMERIC, created_at TIMESTAMPTZ)
+RETURNS TABLE(mes_referencia TEXT, amount NUMERIC, created_at DATE)
 LANGUAGE SQL STABLE AS $$
     SELECT mes_referencia, amount, created_at
     FROM finbot_budgets

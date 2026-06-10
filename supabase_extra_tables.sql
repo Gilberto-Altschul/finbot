@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS finbot_categories (
     user_phone  TEXT NOT NULL REFERENCES finbot_user_settings(user_phone),
     name        TEXT NOT NULL,
     type        TEXT NOT NULL CHECK (type IN ('expense', 'income')),
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    created_at  DATE DEFAULT CURRENT_DATE,
     UNIQUE(user_phone, name)
 );
 
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS finbot_recurring (
     day_of_month    INT NOT NULL CHECK (day_of_month BETWEEN 1 AND 31),
     payment_method  TEXT DEFAULT 'debito',
     active          BOOLEAN DEFAULT TRUE,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    created_at      DATE DEFAULT CURRENT_DATE
 );
 
 -- Adicionar índices para performance

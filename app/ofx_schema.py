@@ -22,6 +22,6 @@ class StandardTransaction(BaseModel):
     payment_method: str = "credito"
 
 class OpenFinancePayload(BaseModel):
-    source: str = "c6_pdf"
-    account: AccountInfo
+    source: str = "pdf"
+    account: AccountInfo = Field(default_factory=lambda: AccountInfo(bank="Não identificado"))
     transactions: List[StandardTransaction]

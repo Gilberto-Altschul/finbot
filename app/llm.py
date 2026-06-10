@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Singleton do cliente GenAI para otimizar conexões
 _settings = get_settings()
-_client = genai.Client(api_key=_settings.gemini_api_key)
+# Usamos v1beta para garantir suporte a system_instruction e response_schema nos modelos 1.5
+_client = genai.Client(api_key=_settings.gemini_api_key, http_options={'api_version': 'v1beta'})
 
 async def call_llm(
     system: str,
@@ -56,16 +57,12 @@ async def call_llm(
                 converted_tools.append({"function_declarations": [t]})
             config.tools = converted_tools
 
-        # Prioriza a série 3.x Flash para velocidade e inteligência superior
+        # Prioridade para o 1.5-Flash-8B (Lite) devido à cota de 1.500 RPD no Free Tier
         modelos_para_tentar = [
-            "gemini-3.5-flash",          # Mais recente e rápido para agente
-            "gemini-3.1-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",          # Próxima geração Flash
-            "gemini-2.5-flash-lite",     # Sua customização (cota baixa, mas pode ser útil)
-            "gemini-1.5-flash",          # Cavalo de batalha, muito estável
-            "gemini-3.1-pro",            # Mais capaz, mas mais lento/custoso (último recurso)
-            "gemini-2.5-pro"             # Similar ao 3.1 Pro
+             "gemini-1.5-flash-8b",
+             "gemini-1.5-flash",
+             "gemini-2.0-flash",
+             "gemini-2.5-flash-lite"
         ]
         response = None
 
@@ -85,8 +82,8 @@ async def call_llm(
                 except (errors.ServerError, errors.ClientError) as exc:
                     # Erros de cota ou instabilidade temporária
                     if attempt < max_retries - 1 and ("429" in str(exc) or "503" in str(exc)):
-                        wait_time = (attempt + 1) * 3 + random.uniform(0, 1)
-                        logger.warning(f"Modelo {model_name} indisponível. Retentativa em {wait_time:.1f}s...")
+                        wait_time = (attempt + 1) * 5 + random.uniform(1, 3)
+                        logger.warning(f"Cota excedida. Retentativa rápida em {wait_time:.1f}s...")
                         await asyncio.sleep(wait_time)
                         continue
                     logger.warning(f"Troca de modelo: {model_name} falhou. Tentando próximo da lista...")

@@ -1,24 +1,18 @@
 # app/ingestion.py
-import json
 import logging
 from datetime import date
-from pydantic import ValidationError
-from app.ofx_schema import OpenFinancePayload
 import app.database as db
 
 logger = logging.getLogger(__name__)
 
-async def processar_ingestion_unificada(user_phone: str, json_padrao_str: str) -> str:
+async def processar_ingestion_unificada(user_phone: str, all_transactions: list) -> str:
     """
-    Lê o JSON gerado pelo tradutor de PDF e faz o upsert no banco de dados,
+    Recebe a lista de transações extraídas e faz o upsert no banco de dados,
     disparando alertas baseados nos limites (coluna amount) de finbot_budgets.
     """
     try:
-        # Validação rigorosa do payload via Pydantic
-        data = OpenFinancePayload.model_validate_json(json_padrao_str)
-        
-        all_transactions = data.transactions
-        logger.info(f"Recebidas {len(all_transactions)} transações do LLM para processamento.")
+        total_encontrado = len(all_transactions)
+        logger.info(f"Recebidas {total_encontrado} transações para processamento.")
 
         if not all_transactions:
             logger.info(f"Nenhuma transação encontrada no payload para {user_phone}")
@@ -28,7 +22,7 @@ async def processar_ingestion_unificada(user_phone: str, json_padrao_str: str) -
         # Normalizamos os IDs para minúsculas antes de enviar para o banco
         all_tx_ids = list(set(str(tx.id).strip().lower() for tx in all_transactions if tx.id))
         # Buscamos no banco e garantimos que o set de comparação também esteja normalizado
-        ids_existentes = {str(i).strip().lower() for i in db.filtrar_transacoes_existentes(user_phone, all_tx_ids)}
+        ids_existentes = db.filtrar_transacoes_existentes(user_phone, all_tx_ids)
         logger.info(f"Deduplicação: {len(ids_existentes)} IDs já conhecidos no banco.")
         logger.info(f"Total de IDs únicos do PDF para verificar: {len(all_tx_ids)}")
         
@@ -72,7 +66,8 @@ async def processar_ingestion_unificada(user_phone: str, json_padrao_str: str) -
                 "pluggy_transaction_id": tx_id,
                 "installment_of": tx.installment_of,
                 "installment_total": tx.installment_total,
-                "created_at": tx.date
+                "purchase_date": tx.date,
+                "billing_date": tx.date
             })
             
             ids_no_lote.add(tx_id)
@@ -85,16 +80,19 @@ async def processar_ingestion_unificada(user_phone: str, json_padrao_str: str) -
                 return "❌ Tive um problema ao salvar suas transações no banco de dados. Por favor, tente novamente."
 
         novos_gastos = len(novas_rows)
+        existentes = len(ids_existentes)
         
         if novos_gastos == 0:
-            return "✅ Seu extrato já estava totalmente sincronizado! Nenhuma nova transação foi importada."
+            return f"✅ Seu extrato já estava sincronizado!\n\n🔍 Encontrei {total_encontrado} transações, mas todas as {existentes} novidades já constavam no seu histórico."
             
-        resposta = f"🏦 *Extrato Processado!*\n\nImportei *{novos_gastos} novos gastos* para o seu histórico."
+        resposta = (
+            f"🏦 *Extrato Processado!*\n\n"
+            f"🔍 Encontrei {total_encontrado} transações no arquivo.\n"
+            f"✨ Importei *{novos_gastos} novos gastos*.\n"
+            f"♻️ {existentes} lançamentos foram ignorados por já existirem."
+        )
         return resposta
 
-    except ValidationError as ve:
-        logger.error(f"Erro de validação no schema do Gemini: {ve.json()}")
-        return "❌ O formato dos dados extraídos é inválido. Por favor, tente novamente."
     except Exception as e:
         logger.error(f"Erro na esteira de ingestão: {e}")
         return "❌ Erro ao processar o formato estruturado das transações."

@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     # LLM
     gemini_api_key: str
     groq_api_key: str = ""          # https://console.groq.com/keys
+    encryption_key: str = ""        # Chave Fernet de 32 bytes (base64)
     openrouter_api_key: str = ""    # https://openrouter.ai/keys
 
     # Twilio

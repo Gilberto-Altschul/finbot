@@ -7,7 +7,7 @@ import logging
 import app.database as db
 import re
 from app.llm import call_llm
-from app.utils import _normalize
+from app.utils import _normalize, SISTEMA_CATEGORIAS
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +22,38 @@ _HEALTH_FORCE_TERMS = [
     "plano de saude", "convenio", "unimed", "bradesco saude", "sulamerica", "amil", "odontoprev", "hapvida"
 ]
 
+# Termos que forçam a categoria Transporte para Seguro Automóvel
+_AUTO_FORCE_TERMS = [
+    "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
+]
+
+# Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
+_CLOTHING_FORCE_TERMS = [
+    "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "shein", "loja de roupa", "lingerie"
+]
+
+# Termos que forçam a categoria Família e Dependentes
+_FAMILY_FORCE_TERMS = [
+    "apoio familiar", "apoio", "mesada", "pensao", "ajuda familiar", "familiares", "dependentes"
+]
+
 SYSTEM_CATEGORIZER = """
 Você é o motor de classificação interna do FinBot. Sua única tarefa é ler a descrição de um gasto e mapeá-lo para uma SUBCATEGORIA e CATEGORIA válidas do sistema.
 
 SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA:
-- Alimentação: Delivery, Mercado, Restaurante, Padaria, Lanche, Café
-- Transporte: Aplicativo, Combustível, Estacionamento, Ônibus, Metrô, Oficina
-- Moradia: Aluguel, Condomínio, Contas, Faxina, Manutenção, Utensílios
-- Saúde: Farmácia, Academia, Médico, Dentista, Suplemento, Exame, Plano de Saúde, Convênio (Planos de saúde DEVEM ser categorizados aqui, NUNCA em Financeiro)
-- Pets: Ração, Veterinário, Petshop, Banho
-- Lazer: Streaming, Cinema, Show, Viagem, Bar, Balada, Presente
-- Educação: Curso, Livro, Faculdade, Software
-- Vestuário e Beleza: Roupa, Calçado, Cabelo, Barbearia, Manicure, Estética
-- Financeiro: Seguro (Apenas Auto, Vida ou Residencial. NÃO inclua Plano de Saúde aqui), Tarifa, Anuidade, Imposto, Taxa
+- Moradia: Aluguel/Financiamento, Condomínio, Energia, Água e Saneamento, Gás, Internet e TV, Empregada/Diarista, Reforma e Manutenção, Mobília, Seguro Residencial
+- Alimentação: Mercado, Feira e Hortifruti, Delivery, Restaurante, Padaria e Café, Bar e Petisco
+- Transporte: Aplicativo, Combustível, Transporte Público, Estacionamento, Manutenção Veículo, Financiamento Veículo, Passagem Aérea
+- Saúde: Plano de Saúde, Farmácia, Consulta e Exame, Academia e Esportes, Terapia, Nutrição
+- Lazer: Streaming, Cinema e Shows, Viagem, Bar e Balada, Hobbies e Jogos, Restaurante Social
+- Vestuário e Beleza: Roupas, Calçados, Beleza e Cabelo, Cosméticos, Presentes
+- Educação: Escola e Faculdade, Curso Online, Material Escolar, Idiomas
+- Financeiro: Empréstimo e Parcela, Seguro, Investimento, Imposto, Tarifa Bancária, Apostas
+- Pets: Ração e Petisco, Veterinário, Petshop e Banho, Plano Pet
+- Família e Dependentes: Mesada, Pensão, Apoio Familiar, Presente Familiar, Emergência Familiar, Empréstimo Pessoal
+- Empresa: MEI, Impostos PJ, Escritório, Marketing, Pró-labore, Ferramentas
+
+ATENÇÃO: NUNCA use a categoria 'Pessoal'. Se o gasto parecer de uso pessoal, use 'Lazer' ou 'Vestuário e Beleza' conforme o contexto.
 
 IMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', você DEVE retornar obrigatoriamente:
 {"categoria": "Perguntar", "subcategoria": "Perguntar"}
@@ -53,10 +72,25 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
     """
     desc_norm = _normalize(descricao)
 
-    # Camada -1: Proteção Hardcoded para Saúde (Evita conflito com Financeiro/Seguros)
+    # Camada -1: Proteção Hardcoded para Família e Dependentes (Prioridade Máxima)
+    if any(_normalize(term) in desc_norm for term in _FAMILY_FORCE_TERMS):
+        logger.info(f"Camada -1 (Family Priority) detectada: '{descricao}'. Categorizando como Família e Dependentes.")
+        return "Família e Dependentes", "Apoio Familiar"
+
+    # Camada -1.1: Proteção Hardcoded para Saúde (Evita conflito com Financeiro/Seguros)
     if any(_normalize(term) in desc_norm for term in _HEALTH_FORCE_TERMS):
-        logger.info(f"Camada -1 (Saúde Priority) detectada: '{descricao}'. Categorizando como Saúde.")
+        logger.info(f"Camada -1.1 (Saúde Priority) detectada: '{descricao}'. Categorizando como Saúde.")
         return "Saúde", "Plano de Saúde"
+
+    # Camada -1.2: Proteção Hardcoded para Seguro Automóvel (Vai para Transporte)
+    if any(_normalize(term) in desc_norm for term in _AUTO_FORCE_TERMS):
+        logger.info(f"Camada -1.2 (Auto Priority) detectada: '{descricao}'. Categorizando como Transporte.")
+        return "Transporte", "Seguro Automóvel"
+
+    # Camada -1.3: Proteção Hardcoded para Vestuário e Beleza
+    if any(_normalize(term) in desc_norm for term in _CLOTHING_FORCE_TERMS):
+        logger.info(f"Camada -1.3 (Clothing Priority) detectada: '{descricao}'. Categorizando como Vestuário e Beleza.")
+        return "Vestuário e Beleza", "Roupa"
 
     # Camada 0: Bloqueio de Ambiguidade (Prioridade Absoluta)
     if any(_normalize(term) in desc_norm for term in _AMBIGUOUS_TERMS):
@@ -74,12 +108,20 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
         from app.database import get_db
         res = get_db().table("finbot_subcategories").select("category_name, name, keywords").execute()
         
-        # Ordenamos para que 'Saúde' seja verificado antes de 'Financeiro' para evitar conflitos com 'Seguro'
-        sorted_subs = sorted(res.data, key=lambda x: 0 if _normalize(x.get('category_name')) == "saude" else 1)
+        # Ordenamos as subcategorias para priorizar Saúde e Transporte sobre Financeiro.
+        # Prioridade máxima para Família para evitar que keywords genéricas sejam capturadas por outras categorias.
+        def get_priority(cat_name):
+            cat_norm = _normalize(cat_name)
+            if "familia" in cat_norm or "dependente" in cat_norm or "apoio" in cat_norm: return -1 
+            if cat_norm == "saude": return 0
+            if cat_norm == "transporte": return 1
+            return 5
+
+        sorted_subs = sorted(res.data, key=lambda x: get_priority(x.get('category_name', '')))
         
         for sub in sorted_subs:
             keywords = sub.get("keywords", [])
-            if any(_normalize(kw) in desc_norm for kw in keywords):
+            if any(_normalize(kw) in desc_norm for kw in keywords) or _normalize(sub["name"]) in desc_norm:
                 logger.info(f"Camada 2 (Global Subcategory) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
                 db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])
                 return sub["category_name"], sub["name"]
