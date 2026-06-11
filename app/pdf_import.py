@@ -80,23 +80,23 @@ Regras específicas:
                     model=model_name,
                     contents=[
                         types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(
-                                    inline_data=types.Blob(
-                                        mime_type="application/pdf",
-                                        data=pdf_b64,
-                                    )
+                            role="user", # O role do conteúdo é sempre "user"
+                            parts=[ # O conteúdo é uma lista de partes
+                                types.Part( # A primeira parte é o PDF
+                                    inline_data=types.Blob( # Dados inline para o PDF
+                                        mime_type="application/pdf", # Tipo MIME do PDF
+                                        data=pdf_b64, # Dados do PDF em base64
+                                    ) # Fim da parte do PDF
                                 ),
                                 types.Part.from_text(text=user_instructions),
                             ],
                         )
                     ],
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
+                    system_instruction=system_prompt, # Argumento direto
+                    response_mime_type="application/json", # Argumento direto
+                    response_schema=OpenFinancePayload, # Argumento direto
+                    generation_config=types.GenerateContentConfig( # Apenas configurações de geração
                         temperature=0.1,
-                        response_mime_type="application/json",
-                        response_schema=OpenFinancePayload,
                         max_output_tokens=16384,  # Aumentado para evitar truncamento em extratos longos
                     ),
                 )
