@@ -8,6 +8,7 @@ import hashlib
 from google import genai
 from google.genai import types, errors
 
+from app.utils import _normalize # Import _normalize
 from app.config import get_settings  # type: ignore
 from app.ofx_schema import OpenFinancePayload, StandardTransaction  # type: ignore
 
@@ -19,10 +20,10 @@ _client = genai.Client(api_key=settings.gemini_api_key, http_options={'api_versi
 
 def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str) -> str:
     """Gera ID determinístico para a transação."""
-    cleaned_desc = re.sub(r'\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?', '', transaction.description)
-    raw_desc = "".join(filter(str.isalnum, cleaned_desc.lower()))
+    # Use a normalização menos agressiva para a descrição para preservar a unicidade
+    normalized_desc = _normalize(transaction.description)
     amt_str = "{:.2f}".format(abs(transaction.amount))
-    unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{raw_desc}|{transaction.type}"
+    unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}"
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
@@ -39,6 +40,7 @@ Regras:
 1. Ignore linhas de cabeçalho, subtotais, saldos do dia e avisos.
 2. Ignore linhas de Estorno.
 3. Para cada transação (compras, boletos, pix, transferências):
+   - **IMPORTANTE**: Ignore transações de "Pagamento de fatura", "Pagto fatura" ou similares.
    - id: ID temporário baseado na data e valor (ex: itau_20260503_1950)
    - date: ISO YYYY-MM-DD
    - description: nome limpo do estabelecimento (ex: DROGARIA SAO PAULO)
@@ -54,21 +56,22 @@ Regras específicas:
 - Planos de Saúde ou Convênios → category: Saúde, NUNCA Financeiro
 - Seguro Automóvel → category: Transporte
 - PIX recebido, transferências recebidas, INSS recebido → type: income
+- **Transações com valor negativo no PDF original** devem ser tratadas como `type: income` e o `amount` deve ser retornado como valor positivo.
 - Responda APENAS com o JSON, sem markdown.
 """
 
     pdf_b64 = base64.b64encode(pdf_content).decode()
 
     # Modelos atuais em ordem de preferência (custo vs capacidade)
-    modelos = [
-        "gemini-2.5-flash",       # Principal — melhor custo/benefício, 1M tokens contexto
-        "gemini-2.5-flash-lite",  # Fallback 1 — mais leve
-        "gemini-2.0-flash-lite",  # Fallback 2 — estável
+    models_to_try = [
+        "gemini-1.5-flash",       # Principal — melhor custo/benefício, 1M tokens contexto
+        "gemini-1.5-flash-8b",    # Fallback 1 — versão mais leve do 1.5 Flash
+        "gemini-1.5-pro",         # Fallback 2 — mais capaz, mas mais caro
     ]
 
     llm_response_text = None
 
-    for model_name in modelos:
+    for model_name in models_to_try:
         logger.info(f"Tentando extração com modelo: {model_name}")
         for attempt in range(3):
             try:
@@ -102,6 +105,7 @@ Regras específicas:
                     if finish_reason == "MAX_TOKENS":
                         logger.warning(f"⚠️ Resposta de {model_name} truncada (MAX_TOKENS). Tentando próximo modelo.")
                         llm_response_text = None  # Força tentar o próximo modelo
+                        logger.debug(f"Truncated LLM response (first 500 chars): {response.text[:500]}")
                         break
                     logger.info(f"Extração bem-sucedida com {model_name}")
                     break
@@ -120,11 +124,26 @@ Regras específicas:
             break
 
     if not llm_response_text:
+        logger.error(f"LLM did not return any content for user {user_phone} after multiple retries.")
         raise ValueError("LLM did not return any content after multiple retries.")
 
     # Parse Pydantic e geração de IDs determinísticos
     payload = OpenFinancePayload.model_validate_json(llm_response_text)
+    
+    final_transactions = []
     for tx in payload.transactions:
+        desc_lower = _normalize(tx.description)
+        
+        # 1. Filtro de segurança: Ignorar pagamentos de fatura
+        if "pagamento de fatura" in desc_lower or "pagto fatura" in desc_lower:
+            logger.info(f"Ignorando transação de pagamento de fatura: {tx.description}")
+            continue
+
+        # 2. Tratar valores negativos como income (caso a LLM tenha extraído o sinal)
+        if tx.amount < 0:
+            tx.amount = abs(tx.amount)
+            tx.type = "income"
+
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
         # Normaliza payment_method para 'credito' ou 'debito' para corresponder às restrições do banco de dados
@@ -135,4 +154,7 @@ Regras específicas:
             elif "debito" in normalized_method or "debit" in normalized_method:
                 tx.payment_method = "debito"
 
-    return payload.transactions
+        final_transactions.append(tx)
+
+    logger.info(f"Parsed {len(final_transactions)} transactions from LLM output for {user_phone}.")
+    return final_transactions
