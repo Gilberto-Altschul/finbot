@@ -127,4 +127,12 @@ Regras específicas:
     for tx in payload.transactions:
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
+        # Normaliza payment_method para 'credito' ou 'debito' para corresponder às restrições do banco de dados
+        if tx.payment_method:
+            normalized_method = tx.payment_method.lower()
+            if "credito" in normalized_method or "credit" in normalized_method:
+                tx.payment_method = "credito"
+            elif "debito" in normalized_method or "debit" in normalized_method:
+                tx.payment_method = "debito"
+
     return payload.transactions

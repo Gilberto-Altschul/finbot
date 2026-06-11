@@ -543,7 +543,7 @@ def get_user_item_id(user_phone: str) -> str | None:
         logger.error(f"Erro em get_user_item_id: {e}")
         return None
 
-def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descricao: str, pluggy_id: str, tipo: str = "expense", data_tx: str | None = None) -> bool:
+def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descricao: str, pluggy_id: str, tipo: str = "expense", data_tx: str | None = None, payment_method: str = "debito") -> bool:
     """Registra um gasto vindo da Pluggy se o ID ainda não existir."""
     try:
         # Verifica duplicata individual
@@ -558,6 +558,7 @@ def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descri
             "description": descricao,
             "pluggy_transaction_id": pluggy_id,
             "transaction_type": tipo,
+            "payment_method": payment_method,
             "purchase_date": (data_tx[:10] if data_tx else date.today().isoformat()),
             "billing_date": (data_tx[:10] if data_tx else date.today().isoformat())
         }

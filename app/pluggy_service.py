@@ -111,6 +111,11 @@ class PluggyService:
             raw_amount = float(tx.get("amount", 0))
             amount = abs(raw_amount)
             tipo = "income" if raw_amount > 0 else "expense"
+            
+            # Determina o payment_method com base no campo 'type' da Pluggy
+            pluggy_tx_type = tx.get("type", "").lower()
+            payment_method = "credito" if pluggy_tx_type == "credit" else "debito"
+
             data_iso = tx.get("date")
             
             # Se o JSON for de Contas (Accounts) em vez de Transações, amount será 0
@@ -134,7 +139,8 @@ class PluggyService:
                 descricao=desc,
                 pluggy_id=tx["id"],
                 tipo=tipo,
-                data_tx=data_iso
+                data_tx=data_iso,
+                payment_method=payment_method
             )
 
             if is_new:
