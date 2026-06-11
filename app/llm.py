@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Singleton do cliente GenAI para otimizar conexões
 _settings = get_settings()
-_client = genai.Client(api_key=_settings.gemini_api_key, http_options={'api_version': 'v1'})
+# Usamos v1beta para suporte total a system_instruction e response_schema no Google AI Studio
+_client = genai.Client(api_key=_settings.gemini_api_key, http_options={'api_version': 'v1beta'})
 
 async def call_llm(
     system: str,
