@@ -59,7 +59,6 @@ async def call_llm(
 
         # Prioridade para o 1.5-Flash-8B (Lite) devido à cota de 1.500 RPD no Free Tier
         modelos_para_tentar = [
-            "gemini-2.0-flash",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
             "gemini-1.5-flash-8b",

@@ -65,7 +65,6 @@ Regras específicas:
 
     # Modelos atuais em ordem de preferência (custo vs capacidade)
     models_to_try = [
-        "gemini-2.0-flash",       # Nova geração (High Speed)
         "gemini-2.5-flash",       # Versão mais recente do console
         "gemini-2.5-flash-lite",  # Ultra-rápido para extração simples
         "gemini-1.5-flash-8b",    # Fallback estável rápido
