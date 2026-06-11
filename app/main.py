@@ -3,6 +3,7 @@ import logging
 import asyncio
 import base64
 import os
+from contextlib import asynccontextmanager
 from collections import deque
 import io
 import time
@@ -31,11 +32,24 @@ logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-app = FastAPI(title="FinBot", version="1.0.0")
 settings = get_settings()
 
-# Cliente HTTP persistente para evitar exaustão de sockets (WinError 10055)
-http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+# Gerenciamento de ciclo de vida (Startup/Shutdown)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Inicializa o cliente HTTP dentro do loop assíncrono
+    global http_client
+    http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+    logger.info("HTTP Client inicializado no lifespan.")
+    yield
+    # Shutdown: Fecha as conexões de forma limpa
+    await http_client.aclose()
+    logger.info("HTTP Client encerrado.")
+
+app = FastAPI(title="FinBot", version="1.0.0", lifespan=lifespan)
+
+# Definido globalmente, mas instanciado no lifespan
+http_client: httpx.AsyncClient = None
 
 # Cache simples para evitar processar a mesma mensagem vinda de retentativas do Twilio
 processed_messages = deque(maxlen=1000)

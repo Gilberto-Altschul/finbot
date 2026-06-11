@@ -112,12 +112,14 @@ Regras específicas:
                         break
                     logger.info(f"Extração bem-sucedida com {model_name}")
                     break
-            except (errors.ServerError, errors.ClientError) as exc:
+            except Exception as exc:
                 err_str = str(exc)
-                is_retryable = "503" in err_str or "429" in err_str
+                # Detecta se é erro de cota ou sobrecarga (429 ou 503)
+                is_retryable = any(code in err_str for code in ["429", "503", "Resource has been exhausted"])
+                
                 if attempt < 2 and is_retryable:
-                    wait = (2 ** attempt) * 20 + random.uniform(2, 10)
-                    logger.warning(f"{model_name} ocupado. Retentativa {attempt+1} em {wait:.1f}s...")
+                    wait = (attempt + 1) * 15 + random.uniform(5, 15)
+                    logger.warning(f"⚠️ {model_name} ocupado/cota excedida. Retentativa {attempt+1} em {wait:.1f}s...")
                     await asyncio.sleep(wait)
                     continue
                 logger.error(f"Modelo {model_name} falhou: {exc}")
