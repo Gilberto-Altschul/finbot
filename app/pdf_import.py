@@ -14,7 +14,6 @@ from app.ofx_schema import OpenFinancePayload, StandardTransaction  # type: igno
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Usamos v1beta para suporte total a Structured Output e System Instructions nos modelos 1.5
 _client = genai.Client(api_key=settings.gemini_api_key, http_options={'api_version': 'v1beta'})
 
 
@@ -30,7 +29,6 @@ def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: 
 async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) -> list[StandardTransaction]:
     """
     Envia o PDF como base64 inline para o Gemini — sem File API.
-    Compatível com todos os modelos Gemini 2.x (v1 e v1beta).
     """
     system_prompt = "Você é um microsserviço de backend especialista em processamento de dados financeiros."
 
@@ -61,13 +59,11 @@ Regras específicas:
 
     pdf_b64 = base64.b64encode(pdf_content).decode()
 
-    # Prioridade para o 1.5-Flash-8B (Lite) para processamento massivo de extratos
+    # Modelos atuais em ordem de preferência (custo vs capacidade)
     modelos = [
-        "gemini-1.5-flash-8b",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-pro"
+        "gemini-2.5-flash",       # Principal — melhor custo/benefício, 1M tokens contexto
+        "gemini-2.5-flash-lite",  # Fallback 1 — mais leve
+        "gemini-2.0-flash-lite",  # Fallback 2 — estável
     ]
 
     llm_response_text = None
@@ -97,15 +93,16 @@ Regras específicas:
                         temperature=0.1,
                         response_mime_type="application/json",
                         response_schema=OpenFinancePayload,
-                        max_output_tokens=8192,
+                        max_output_tokens=16384,  # Aumentado para evitar truncamento em extratos longos
                     ),
                 )
                 llm_response_text = response.text.strip() if response.text else ""
                 if llm_response_text:
-                    # Verifica se a resposta foi interrompida por excesso de tokens (importante para extratos longos)
                     finish_reason = response.candidates[0].finish_reason
                     if finish_reason == "MAX_TOKENS":
-                        logger.warning(f"⚠️ A resposta do modelo {model_name} foi truncada (MAX_TOKENS). O JSON pode estar incompleto.")
+                        logger.warning(f"⚠️ Resposta de {model_name} truncada (MAX_TOKENS). Tentando próximo modelo.")
+                        llm_response_text = None  # Força tentar o próximo modelo
+                        break
                     logger.info(f"Extração bem-sucedida com {model_name}")
                     break
             except (errors.ServerError, errors.ClientError) as exc:
