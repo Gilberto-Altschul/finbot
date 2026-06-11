@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Usamos a versão v1 (GA) para garantir estabilidade no processamento de extratos
-_client = genai.Client(api_key=settings.gemini_api_key)
+_client = genai.Client(api_key=settings.gemini_api_key, http_options={'api_version': 'v1'})
 
 
 def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str) -> str:

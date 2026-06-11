@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Singleton do cliente GenAI para otimizar conexões
 _settings = get_settings()
-_client = genai.Client(api_key=_settings.gemini_api_key)
+_client = genai.Client(api_key=_settings.gemini_api_key, http_options={'api_version': 'v1'})
 
 async def call_llm(
     system: str,
