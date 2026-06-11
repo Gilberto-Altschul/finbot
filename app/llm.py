@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Singleton do cliente GenAI para otimizar conexões
 _settings = get_settings()
-# Usamos v1beta para suporte total a system_instruction e response_schema no Google AI Studio
-_client = genai.Client(api_key=_settings.gemini_api_key, http_options={'api_version': 'v1beta'})
+#modelos Deixamos o SDK gerenciar a versão da API automaticamente para evitar erros 404/400
+_client = genai.Client(api_key=_settings.gemini_api_key)
 
 async def call_llm(
     system: str,
@@ -59,6 +59,9 @@ async def call_llm(
 
         # Prioridade para o 1.5-Flash-8B (Lite) devido à cota de 1.500 RPD no Free Tier
         modelos_para_tentar = [
+            "gemini-2.0-flash",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-1.5-flash-8b",
             "gemini-1.5-flash",
             "gemini-1.5-pro"

@@ -15,8 +15,8 @@ from app.ofx_schema import OpenFinancePayload, StandardTransaction  # type: igno
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Voltamos para v1beta: os recursos de extração estruturada (JSON Schema) são validados neste endpoint
-_client = genai.Client(api_key=settings.gemini_api_key, http_options={'api_version': 'v1beta'})
+# Deixamos o SDK gerenciar a versão da API automaticamente para evitar erros 404/400
+_client = genai.Client(api_key=settings.gemini_api_key)
 
 
 def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str, index: int = 0) -> str:
@@ -65,8 +65,11 @@ Regras específicas:
 
     # Modelos atuais em ordem de preferência (custo vs capacidade)
     models_to_try = [
-        "gemini-1.5-flash",       # Principal — melhor custo/benefício, 1M tokens contexto
-        "gemini-1.5-flash-8b",    # Fallback 1 — versão mais leve do 1.5 Flash
+        "gemini-2.0-flash",       # Nova geração (High Speed)
+        "gemini-2.5-flash",       # Versão mais recente do console
+        "gemini-2.5-flash-lite",  # Ultra-rápido para extração simples
+        "gemini-1.5-flash-8b",    # Fallback estável rápido
+        "gemini-1.5-flash",       # Fallback 1
         "gemini-1.5-pro",         # Fallback 2 — mais capaz, mas mais caro
     ]
 
