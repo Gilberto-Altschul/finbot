@@ -92,12 +92,12 @@ Regras específicas:
                             ],
                         )
                     ],
-                    system_instruction=system_prompt, # Argumento direto
-                    response_mime_type="application/json", # Argumento direto
-                    response_schema=OpenFinancePayload, # Argumento direto
-                    generation_config=types.GenerateContentConfig( # Apenas configurações de geração
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        response_schema=OpenFinancePayload,
                         temperature=0.1,
-                        max_output_tokens=16384,  # Aumentado para evitar truncamento em extratos longos
+                        max_output_tokens=16384,
                     ),
                 )
                 llm_response_text = response.text.strip() if response.text else ""
