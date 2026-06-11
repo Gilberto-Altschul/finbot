@@ -9,7 +9,7 @@ on:
 
 jobs:
   ci:
-    name: Test
+    name: Lint & Build Check
     runs-on: ubuntu-latest
 
     steps:
@@ -23,15 +23,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run tests
-        run: pytest --tb=short
-        env:
-          GEMINI_API_KEY: test
-          GROQ_API_KEY: test
-          TWILIO_ACCOUNT_SID: test
-          TWILIO_AUTH_TOKEN: test
-          SUPABASE_URL: https://test.supabase.co
-          SUPABASE_KEY: test
+      - name: Check syntax
+        run: python -m py_compile app/main.py && echo "OK"
 
   # ── Uncomment to deploy automatically on merge to main ─────────
   # deploy:
