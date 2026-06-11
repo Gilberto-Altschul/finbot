@@ -2,6 +2,7 @@
 import logging
 import asyncio
 import base64
+import os
 from collections import deque
 import io
 import time
@@ -23,6 +24,12 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Reduz o ruído nos logs silenciando o cliente HTTP do Twilio e bibliotecas de transporte.
+# Isso evita logs verbosos de headers (como os que você recebeu) em cada transação.
+logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI(title="FinBot", version="1.0.0")
 settings = get_settings()
@@ -76,20 +83,21 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
             headers=headers
         )
         response.raise_for_status()
-
         download_time = time.perf_counter() - start_time
 
-        # Verifica se o Content-Type é realmente um PDF
+        # Validação robusta de Content-Type antes de tentar parsear o PDF
         content_type = response.headers.get("Content-Type", "").lower()
         if "application/pdf" not in content_type:
             logger.error(f"Downloaded file is not a PDF. Content-Type: {content_type}")
-            await asyncio.to_thread(_send_whatsapp, user_phone, "❌ O arquivo que você enviou não parece ser um PDF válido. Por favor, tente novamente com um arquivo PDF.")
+            msg_err = "❌ O arquivo que você enviou não parece ser um PDF válido. Por favor, envie o extrato original do banco."
+            await asyncio.to_thread(_send_whatsapp, user_phone, msg_err)
             db.limpar_pdf_pendente(user_phone) # Limpa o estado pendente
             return
-        pdf_file = io.BytesIO(response.content)
+
         pdf_final_content = response.content
-        
-        reader = PdfReader(pdf_file)
+        # Instancia o reader apenas após garantir que o download foi bem sucedido
+        reader = PdfReader(io.BytesIO(pdf_final_content))
+
         if reader.is_encrypted:
             if not senha_fornecida:
                 # PDF protegido e ainda não temos a senha: pede agora
@@ -118,11 +126,10 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         # Desbloqueou o arquivo com sucesso? Reseta imediatamente o estado pendente no banco
         db.limpar_pdf_pendente(user_phone)
         
-        # Mensagem intermediária para manter o usuário engajado durante o processamento da IA
-        await asyncio.to_thread(_send_whatsapp, user_phone, "🔍 *Leitura concluída!* A inteligência artificial está organizando seus gastos... Só mais um momento.")
-
-        num_pages = len(PdfReader(io.BytesIO(pdf_final_content)).pages)
-        logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone} em UMA única chamada")
+        # Otimização: Reutiliza o objeto reader para evitar novo processamento de bytes
+        num_pages = len(reader.pages)
+        logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone}")
+        await asyncio.to_thread(_send_whatsapp, user_phone, f"🔍 *PDF de {num_pages} páginas lido!* A inteligência artificial está organizando seus gastos... Só mais um momento.")
 
         # Envia o PDF inteiro de uma vez — o Gemini 2.x suporta até 300 páginas
         json_str = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
@@ -142,10 +149,10 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
         await asyncio.to_thread(_send_whatsapp, user_phone, diagnostico_final)
         
-    except Exception as e:
-        logger.error(f"Erro no processamento do PDF: {e}")
+    except Exception as exc:
+        logger.error(f"Erro crítico no processamento do PDF para {user_phone}: {exc}", exc_info=True)
         db.limpar_pdf_pendente(user_phone)
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao tentar abrir seu PDF.")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. Por favor, verifique se o arquivo está correto e tente novamente.")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -163,6 +170,8 @@ async def webhook(
     MediaUrl0: str = Form(None),
     MediaContentType0: str = Form(None)
 ):
+    # DICA: Em produção, adicione aqui a validação de assinatura do Twilio usando
+    # twilio.request_validator.RequestValidator para segurança máxima.
     # Proteção de idempotência contra loops e retentativas rápidas do Twilio
     if MessageSid in processed_messages:
         logger.warning(f"Mensagem duplicada ignorada: {MessageSid}")
@@ -206,8 +215,4 @@ async def webhook(
     background_tasks.add_task(_process, user_phone, user_message)
     return Response(content="<Response/>", media_type="text/xml")
 
-    if __name__ == "__main__":
-        import uvicorn
-        # A variável de ambiente PORT é injetada automaticamente pela Cloud
-        port = int(os.environ.get("PORT", 8080)) 
-        uvicorn.run(app, host="0.0.0.0", port=port)
+    
