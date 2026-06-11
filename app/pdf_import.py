@@ -19,12 +19,12 @@ settings = get_settings()
 _client = genai.Client(api_key=settings.gemini_api_key, http_options={'api_version': 'v1'})
 
 
-def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str) -> str:
+def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str, index: int = 0) -> str:
     """Gera ID determinístico para a transação."""
     # Use a normalização menos agressiva para a descrição para preservar a unicidade
     normalized_desc = _normalize(transaction.description)
     amt_str = "{:.2f}".format(abs(transaction.amount))
-    unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}"
+    unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}|{index}"
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
@@ -129,10 +129,12 @@ Regras específicas:
         raise ValueError("LLM did not return any content after multiple retries.")
 
     # Parse Pydantic e geração de IDs determinísticos
-    payload = OpenFinancePayload.model_validate_json(llm_response_text)
+    # Limpa markdown do JSON se a IA ignorar a instrução de responder apenas texto puro
+    json_clean = re.sub(r'```json\s?|\s?```', '', llm_response_text).strip()
+    payload = OpenFinancePayload.model_validate_json(json_clean)
     
     final_transactions = []
-    for tx in payload.transactions:
+    for i, tx in enumerate(payload.transactions):
         desc_lower = _normalize(tx.description)
         
         # 1. Filtro de segurança: Ignorar pagamentos de fatura
@@ -145,7 +147,7 @@ Regras específicas:
             tx.amount = abs(tx.amount)
             tx.type = "income"
 
-        tx.id = _generate_transaction_hash_id(tx, user_phone)
+        tx.id = _generate_transaction_hash_id(tx, user_phone, i)
 
         # Normaliza payment_method para 'credito' ou 'debito' para corresponder às restrições do banco de dados
         if tx.payment_method:
