@@ -449,17 +449,17 @@ def save_user_merchant_mapping(user_phone: str, merchant: str, category: str, su
     except Exception as e:
         logger.error(f"Erro ao salvar mapeamento do estabelecimento: {e}")
 
-def obter_pdf_pendente(user_phone: str) -> str | None:
-    """Busca se o usuário possui algum PDF pendente de processamento na tabela de conexões."""
+def obter_pdf_pendente(user_phone: str) -> tuple[str, str] | None:
+    """Busca se o usuário possui algum PDF pendente de processamento na tabela de conexões, retornando a URL e o status."""
     try:
         res = get_db().table("finbot_user_connections") \
-            .select("pending_pdf_url") \
+            .select("pending_pdf_url, status") \
             .ilike("user_phone", _q(user_phone)) \
             .in_("status", ["aguardando_senha", "processando"]) \
             .limit(1).execute()
         
         if res.data and res.data[0].get("pending_pdf_url"):
-            return res.data[0]["pending_pdf_url"]
+            return res.data[0]["pending_pdf_url"], res.data[0]["status"]
         return None
     except Exception as e:
         logger.error(f"Erro em obter_pdf_pendente para {user_phone}: {e}")

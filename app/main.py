@@ -200,15 +200,23 @@ async def webhook(
 
     # ── CASO 2: MENSAGEM DE TEXTO ORDINÁRIA (PODE SER UMA SENHA OU CONVERSA) ──
     # Verifica se o banco de dados tem um link de extrato retido aguardando validação
-    pdf_pendente_url = db.obter_pdf_pendente(user_phone)
+    pending_pdf_info = db.obter_pdf_pendente(user_phone)
     
-    if pdf_pendente_url:
-        logger.info(f"Senha recebida de {user_phone}. Iniciando descriptografia em segundo plano.")
-        await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Descriptografando e processando suas transações...")
+    if pending_pdf_info:
+        pdf_pendente_url, pdf_status = pending_pdf_info
         
-        # Dispara o processamento pesado em segundo plano liberando o HTTP do Twilio na hora
-        background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
-        return Response(content="<Response/>", media_type="text/xml")
+        if pdf_status == "aguardando_senha":
+            logger.info(f"Senha recebida de {user_phone}. Iniciando descriptografia em segundo plano.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Descriptografando e processando suas transações...")
+            
+            # Dispara o processamento pesado em segundo plano liberando o HTTP do Twilio na hora
+            background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
+            return Response(content="<Response/>", media_type="text/xml")
+        elif pdf_status == "processando":
+            # PDF está sendo processado, mas não está aguardando senha. Tratar como mensagem normal.
+            logger.info(f"PDF ainda em processamento para {user_phone}. Mensagem '{user_message}' tratada como comando normal.")
+            background_tasks.add_task(_process, user_phone, user_message)
+            return Response(content="<Response/>", media_type="text/xml")
 
     # Caso padrão: O usuário enviou uma mensagem de texto normal, delega para a IA reativa
     logger.info(f"Incoming message from {user_phone}: {user_message}")
