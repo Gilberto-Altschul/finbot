@@ -131,14 +131,8 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone}")
         await asyncio.to_thread(_send_whatsapp, user_phone, f"🔍 *PDF de {num_pages} páginas lido!* A inteligência artificial está organizando seus gastos... Só mais um momento.")
 
-        # Envia o PDF inteiro de uma vez — o Gemini 2.x suporta até 300 páginas
-        json_str = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
-        try:
-            payload = OpenFinancePayload.model_validate_json(json_str)
-            all_extracted_transactions = payload.transactions
-        except Exception as e:
-            logger.error(f"Erro ao validar JSON do PDF: {e}")
-            all_extracted_transactions = []
+        # Extração via IA: O pdf_import agora retorna a lista de objetos diretamente para evitar dupla validação
+        all_extracted_transactions = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
 
         llm_time = time.perf_counter() - start_time - download_time
         
@@ -149,10 +143,18 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
         await asyncio.to_thread(_send_whatsapp, user_phone, diagnostico_final)
         
-    except Exception as exc:
-        logger.error(f"Erro crítico no processamento do PDF para {user_phone}: {exc}", exc_info=True)
+    except ValueError as ve:
+        logger.error(f"Falha na Extração IA para {user_phone}: {ve}")
         db.limpar_pdf_pendente(user_phone)
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. Por favor, verifique se o arquivo está correto e tente novamente.")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ No momento, não consegui analisar seu extrato devido a uma alta demanda na inteligência artificial. Por favor, tente enviar novamente em alguns instantes.")
+    except httpx.HTTPStatusError as hse:
+        logger.error(f"Erro ao baixar arquivo do Twilio ({hse.response.status_code}) para {user_phone}")
+        db.limpar_pdf_pendente(user_phone)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Não consegui acessar o arquivo enviado. Por favor, tente reenviar o PDF.")
+    except Exception as exc:
+        logger.error(f"Erro crítico imprevisto no PDF ({user_phone}): {exc}", exc_info=True)
+        db.limpar_pdf_pendente(user_phone)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. Por favor, verifique se o arquivo está correto.")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 

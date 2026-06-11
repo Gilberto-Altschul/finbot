@@ -27,7 +27,7 @@ def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: 
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
-async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) -> str:
+async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) -> list[StandardTransaction]:
     """
     Envia o PDF como base64 inline para o Gemini — sem File API.
     Compatível com todos os modelos Gemini 2.x (v1 e v1beta).
@@ -130,4 +130,4 @@ Regras específicas:
     for tx in payload.transactions:
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
-    return payload.model_dump_json()
+    return payload.transactions
