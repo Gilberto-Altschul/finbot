@@ -592,3 +592,47 @@ def atualizar_transacao(tx_id: str, updates: dict):
 
 def excluir_transacao(tx_id: str):
     return get_db().table("finbot_expenses").delete().eq("id", tx_id).execute()
+
+# ── ADICIONAR AO FINAL DO app/database.py ────────────────────────────────────
+# Estas funções gerenciam transações pendentes de confirmação de categoria
+
+import json
+
+def salvar_transacoes_pendentes(user_phone: str, transactions_json: str) -> None:
+    """Salva lista de transações (JSON) aguardando confirmação de categoria pelo usuário."""
+    try:
+        row = {
+            "user_phone": _s(user_phone),
+            "pending_transactions": transactions_json,
+            "status": "aguardando_categorizacao"
+        }
+        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+    except Exception as e:
+        logger.error(f"Erro em salvar_transacoes_pendentes: {e}")
+
+def obter_transacoes_pendentes(user_phone: str) -> str | None:
+    """Retorna o JSON de transações pendentes de categorização, se houver."""
+    try:
+        res = get_db().table("finbot_user_connections") \
+            .select("pending_transactions, status") \
+            .ilike("user_phone", _q(user_phone)) \
+            .eq("status", "aguardando_categorizacao") \
+            .limit(1).execute()
+        if res.data and res.data[0].get("pending_transactions"):
+            return res.data[0]["pending_transactions"]
+        return None
+    except Exception as e:
+        logger.error(f"Erro em obter_transacoes_pendentes: {e}")
+        return None
+
+def limpar_transacoes_pendentes(user_phone: str) -> None:
+    """Limpa o estado de categorização pendente após confirmação ou cancelamento."""
+    try:
+        row = {
+            "user_phone": _s(user_phone),
+            "pending_transactions": None,
+            "status": "ativo"
+        }
+        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+    except Exception as e:
+        logger.error(f"Erro em limpar_transacoes_pendentes: {e}")
