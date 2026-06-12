@@ -29,7 +29,8 @@ _AUTO_FORCE_TERMS = [
 
 # Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
 _CLOTHING_FORCE_TERMS = [
-    "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "shein", "loja de roupa", "lingerie"
+    "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "shein", "loja de roupa", "lingerie",
+    "manicure", "pedicure", "salao", "cabelo", "estetica", "barbearia", "beleza", "cosmetico"
 ]
 
 # Termos que forçam a categoria Família e Dependentes
@@ -90,7 +91,8 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
     # Camada -1.3: Proteção Hardcoded para Vestuário e Beleza
     if any(_normalize(term) in desc_norm for term in _CLOTHING_FORCE_TERMS):
         logger.info(f"Camada -1.3 (Clothing Priority) detectada: '{descricao}'. Categorizando como Vestuário e Beleza.")
-        return "Vestuário e Beleza", "Roupa"
+        sub = "Beleza e Cabelo" if any(x in desc_norm for x in ["manicure", "salao", "barbearia", "estetica", "beleza"]) else "Roupas"
+        return "Vestuário e Beleza", sub
 
     # Camada 0: Bloqueio de Ambiguidade (Prioridade Absoluta)
     if any(_normalize(term) in desc_norm for term in _AMBIGUOUS_TERMS):
