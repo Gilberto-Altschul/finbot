@@ -516,24 +516,29 @@ def filtrar_transacoes_existentes(user_phone: str, tx_ids: list[str]) -> set[str
         logger.error(f"Erro em filtrar_transacoes_existentes: {e}")
         raise e # Interrompe para evitar importação duplicada por falha de consulta
 
-def inserir_gastos_em_lote(rows: list[dict]) -> bool:
-    """Insere várias transações de uma única vez para otimizar a performance."""
+def inserir_gastos_em_lote(rows: list[dict]) -> int:
+    """Insere transações ignorando duplicatas. Retorna o número de registros efetivamente inseridos."""
     if not rows:
-        return True
+        return 0
     for r in rows:
         if "user_phone" in r:
             r["user_phone"] = _s(r["user_phone"])
     try:
-        # Batcheamos a inserção em blocos de 100 para evitar payloads JSON excessivos.
+        inseridos = 0
         batch_size = 100
         for i in range(0, len(rows), batch_size):
             batch = rows[i:i + batch_size]
-            get_db().table("finbot_expenses").insert(batch).execute()
-        return True
+            res = get_db().table("finbot_expenses").upsert(
+                batch,
+                on_conflict="user_phone,purchase_date,amount,payment_method,installment_of,description",
+                ignore_duplicates=True
+            ).execute()
+            inseridos += len(res.data) if res.data else 0
+            return inseridos
     except Exception as e:
         logger.error(f"Erro ao inserir gastos em lote: {e}")
-        return False
-
+        return -1  # sinaliza erro
+    
 def get_user_item_id(user_phone: str) -> str | None:
     """Recupera o ID de conexão da Pluggy associado ao usuário."""
     try:

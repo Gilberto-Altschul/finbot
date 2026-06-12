@@ -78,10 +78,10 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
         if not all_transactions:
             return "✅ Processamento concluído: nenhuma transação foi encontrada no extrato.", None
 
-        # 1. Filtra duplicatas em massa
+        # 1. Filtra duplicatas por hash (primeira linha de defesa)
         all_tx_ids = list(set(str(tx.id).strip().lower() for tx in all_transactions if tx.id))
         ids_existentes = db.filtrar_transacoes_existentes(user_phone, all_tx_ids)
-        logger.info(f"Deduplicação: {len(ids_existentes)} IDs já conhecidos no banco.")
+        logger.info(f"Deduplicação por hash: {len(ids_existentes)} IDs já conhecidos no banco.")
 
         novas_rows = []
         ids_no_lote = set()
@@ -120,36 +120,42 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
             ids_no_lote.add(tx_id)
 
         if not novas_rows:
-            existentes = len(ids_existentes)
             return (
                 f"✅ Seu extrato já estava sincronizado!\n\n"
-                f"🔍 Encontrei {total_encontrado} transações, mas todas as {existentes} "
-                f"novidades já constavam no seu histórico."
+                f"🔍 Encontrei {total_encontrado} transações, mas todas já constavam no seu histórico."
             ), None
 
         # 2. Separa transações "Outros" para perguntar ao usuário
         outros = [r for r in novas_rows if r["category"] == "Outros"]
         nao_outros = [r for r in novas_rows if r["category"] != "Outros"]
 
-        # Grava imediatamente as transações já categorizadas
+        # 3. Grava imediatamente as transações já categorizadas
+        # inserir_gastos_em_lote retorna int (inseridos reais) ou -1 (erro)
+        inseridos_nao_outros = 0
         if nao_outros:
-            sucesso = db.inserir_gastos_em_lote(nao_outros)
-            if not sucesso:
-                return "❌ Tive um problema ao salvar suas transações no banco de dados. Por favor, tente novamente.", None
+            inseridos_nao_outros = db.inserir_gastos_em_lote(nao_outros)
+            if inseridos_nao_outros == -1:
+                return "❌ Tive um problema ao salvar suas transações. Por favor, tente novamente.", None
 
-        # Se há transações "Outros", salva pendentes e pede ao usuário
+        # 4. Se há transações "Outros", salva pendentes e pede ao usuário
         if outros:
             transactions_json = json.dumps(outros, ensure_ascii=False, default=str)
             db.salvar_transacoes_pendentes(user_phone, transactions_json)
 
             resumo = ""
             if nao_outros:
-                resumo = f"✨ Importei *{len(nao_outros)} transações* com categoria identificada.\n\n"
+                duplicatas_banco = len(nao_outros) - inseridos_nao_outros
+                resumo = f"✨ Importei *{inseridos_nao_outros} transações* com categoria identificada.\n"
+                if duplicatas_banco > 0:
+                    resumo += f"♻️ {duplicatas_banco} ignorados por já existirem.\n"
+                resumo += "\n"
 
             return resumo + _montar_mensagem_categorizacao(outros), outros
 
-        # Tudo categorizado, retorna diagnóstico final
-        return _montar_diagnostico(total_encontrado, len(novas_rows), len(ids_existentes)), None
+        # 5. Tudo categorizado — monta diagnóstico com números reais do banco
+        duplicatas_banco = len(novas_rows) - inseridos_nao_outros
+        total_ignorados = len(ids_existentes) + duplicatas_banco
+        return _montar_diagnostico(total_encontrado, inseridos_nao_outros, total_ignorados), None
 
     except Exception as e:
         logger.error(f"Erro na esteira de ingestão: {e}")
@@ -162,23 +168,27 @@ async def gravar_transacoes_confirmadas(user_phone: str, transactions: list[dict
         if not transactions:
             return "✅ Nenhuma transação pendente para gravar."
 
-        sucesso = db.inserir_gastos_em_lote(transactions)
+        inseridos = db.inserir_gastos_em_lote(transactions)
         db.limpar_transacoes_pendentes(user_phone)
 
-        if not sucesso:
+        if inseridos == -1:
             return "❌ Tive um problema ao salvar as transações confirmadas. Por favor, tente novamente."
 
-        return f"✅ *{len(transactions)} transações* salvas com sucesso! 🎉"
+        duplicatas = len(transactions) - inseridos
+        msg = f"✅ *{inseridos} transações* salvas com sucesso! 🎉"
+        if duplicatas > 0:
+            msg += f"\n♻️ {duplicatas} ignoradas por já existirem."
+        return msg
 
     except Exception as e:
         logger.error(f"Erro em gravar_transacoes_confirmadas: {e}")
         return "❌ Erro técnico ao gravar transações confirmadas."
 
 
-def _montar_diagnostico(total: int, novos: int, existentes: int) -> str:
+def _montar_diagnostico(total: int, novos: int, ignorados: int) -> str:
     return (
         f"🏦 *Extrato Processado!*\n\n"
         f"🔍 Encontrei {total} transações no arquivo.\n"
         f"✨ Importei *{novos} novos gastos*.\n"
-        f"♻️ {existentes} lançamentos ignorados por já existirem."
+        f"♻️ {ignorados} lançamentos ignorados por já existirem."
     )
