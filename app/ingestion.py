@@ -15,18 +15,26 @@ CATEGORIAS_VALIDAS = [
 
 def _montar_mensagem_categorizacao(transacoes_outros: list[dict]) -> str:
     """Monta a mensagem interativa pedindo categorias para transações 'Outros'."""
-    linhas = ["🤔 *Não consegui categorizar estas transações:*\n"]
+    n = len(transacoes_outros)
+    linhas = [f"🤔 *{n} transações precisam de categoria:*\n"]
     for i, tx in enumerate(transacoes_outros, 1):
         valor = f"R$ {float(tx['amount']):.2f}".replace(".", ",")
         linhas.append(f"*{i}.* {tx['description']} — {valor}")
 
     linhas.append("\n📋 *Categorias disponíveis:*")
     linhas.append("Alimentação · Transporte · Lazer · Moradia · Saúde")
-    linhas.append("Vestuário e Beleza · Educação · Pets · Financeiro · Extra")
+    linhas.append("Vestuário e Beleza · Educação · Pets · Financeiro · Extra · Outros")
 
-    linhas.append("\n✏️ Responda no formato:")
-    linhas.append("*1 Alimentação, 2 Transporte, 3 Lazer*")
-    linhas.append("\nOu digite *ok* para salvar tudo como *Outros*.")
+    nums = list(range(1, n + 1))
+    exemplo_parts = [f"{i} Categoria" for i in nums[:3]]
+    if n > 3:
+        exemplo_parts.append(f"... {n} Categoria")
+    exemplo = ", ".join(exemplo_parts)
+
+    linhas.append(f"\n✏️ *Responda com TODOS os {n} números em uma única mensagem:*")
+    linhas.append(f"Ex: _{exemplo}_")
+    linhas.append(f"\n⚠️ Não envie item por item — responda tudo de uma vez.")
+    linhas.append("Ou digite *ok* para salvar tudo como *Outros*.")
     return "\n".join(linhas)
 
 
