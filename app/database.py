@@ -530,7 +530,7 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
             batch = rows[i:i + batch_size]
             res = get_db().table("finbot_expenses").upsert(
                 batch,
-                on_conflict="user_phone,purchase_date,amount,payment_method,installment_of,description",
+                on_conflict="user_phone,purchase_date,amount,payment_method,description",
                 ignore_duplicates=True
             ).execute()
             inseridos += len(res.data) if res.data else 0
