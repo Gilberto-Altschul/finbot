@@ -39,9 +39,9 @@ REGRAS IMPORTANTES:
 - SAÚDE vs FINANCEIRO: Planos de Saúde ou Convênios DEVEM ser registrados na categoria 'Saúde'. A categoria 'Financeiro' é para taxas e seguros de bens (vida/casa). Seguros de automóvel pertencem à categoria 'Transporte'.
 
 CATEGORIAS E SUBCATEGORIAS:
-- Moradia: Aluguel, Condomínio, Contas, Faxina, Manutenção, Utensílios
+- Moradia: Aluguel, Condomínio, Contas, Faxina, Manutenção Residencial, Utensílios
 - Alimentação: Delivery, Mercado, Restaurante, Padaria, Lanche, Café
-- Transporte: Aplicativo, Combustível, Estacionamento, Ônibus, Metrô, Oficina, Seguro Automóvel
+- Transporte: Aplicativo, Combustível, Estacionamento, Ônibus, Metrô, Oficina, Manutenção Veículo, Seguro Automóvel
 - Saúde: Farmácia, Academia, Médico, Dentista, Suplemento, Exame, Plano de Saúde, Convênio
 - Lazer: Streaming, Cinema, Show, Viagem, Bar, Balada, Presente
 - Vestuário e Beleza: Roupa, Calçado, Cabelo, Barbearia, Manicure, Estética

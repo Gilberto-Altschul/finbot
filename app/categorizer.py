@@ -42,9 +42,9 @@ SYSTEM_CATEGORIZER = """
 Você é o motor de classificação interna do FinBot. Sua única tarefa é ler a descrição de um gasto e mapeá-lo para uma SUBCATEGORIA e CATEGORIA válidas do sistema.
 
 SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA:
-- Moradia: Aluguel/Financiamento, Condomínio, Energia, Água e Saneamento, Gás, Internet e TV, Empregada/Diarista, Reforma e Manutenção, Mobília, Seguro Residencial
+- Moradia: Aluguel/Financiamento, Condomínio, Energia, Água e Saneamento, Gás, Internet e TV, Empregada/Diarista, Manutenção Residencial, Reforma, Mobília, Seguro Residencial
 - Alimentação: Mercado, Feira e Hortifruti, Delivery, Restaurante, Padaria e Café, Bar e Petisco
-- Transporte: Aplicativo, Combustível, Transporte Público, Estacionamento, Manutenção Veículo, Financiamento Veículo, Passagem Aérea
+- Transporte: Aplicativo, Combustível, Transporte Público, Estacionamento, Manutenção Veículo, Oficina, Financiamento Veículo, Passagem Aérea
 - Saúde: Plano de Saúde, Farmácia, Consulta e Exame, Academia e Esportes, Terapia, Nutrição
 - Lazer: Streaming, Cinema e Shows, Viagem, Bar e Balada, Hobbies e Jogos, Restaurante Social
 - Vestuário e Beleza: Roupas, Calçados, Beleza e Cabelo, Cosméticos, Presentes
