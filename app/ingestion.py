@@ -312,8 +312,18 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
 
         # 4. Se há transações "Outros", salva pendentes e pede ao usuário
         if outros:
+            logger.info(f"Salvando {len(outros)} transações pendentes para {user_phone}")
             transactions_json = json.dumps(outros, ensure_ascii=False, default=str)
+            logger.info(f"JSON size: {len(transactions_json)} chars")
             db.salvar_transacoes_pendentes(user_phone, transactions_json)
+            # Verifica o que foi salvo
+            salvo = db.obter_transacoes_pendentes(user_phone)
+            if salvo:
+                import json as _json
+                salvo_list = _json.loads(salvo)
+                logger.info(f"Verificação pós-save: {len(salvo_list)} transações no banco")
+            else:
+                logger.error("ERRO: pending_transactions não foi salvo no banco!")
 
             resumo = ""
             if nao_outros:
