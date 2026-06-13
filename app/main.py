@@ -167,6 +167,19 @@ async def async_process_categorizacao(user_phone: str, resposta_usuario: str, tr
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+def _parece_categorizacao(mensagem: str) -> bool:
+    """
+    Retorna True se a mensagem parece uma resposta de categorização.
+    Padrões aceitos: começa com número ("1 roupa"), é "ok", ou lista de itens ("1 x, 2 y").
+    """
+    msg = mensagem.strip().lower()
+    if msg == "ok":
+        return True
+    # Verifica se começa com número seguido de espaço e texto
+    import re
+    return bool(re.match(r"^[0-9]+\s+[a-zA-Z]", msg))
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -207,7 +220,7 @@ async def webhook(
 
     # ── CASO 2: RESPOSTA DE CATEGORIZAÇÃO PENDENTE ───────────────────────────
     transactions_json = db.obter_transacoes_pendentes(user_phone)
-    if transactions_json:
+    if transactions_json and _parece_categorizacao(user_message):
         logger.info(f"Resposta de categorização recebida de {user_phone}: {user_message}")
         background_tasks.add_task(async_process_categorizacao, user_phone, user_message, transactions_json)
         return Response(content="<Response/>", media_type="text/xml")
