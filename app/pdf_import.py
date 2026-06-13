@@ -5,6 +5,7 @@ import asyncio
 import random
 import re
 import hashlib
+from datetime import date
 from google import genai
 from google.genai import types, errors
 
@@ -134,8 +135,24 @@ Regras específicas:
     json_clean = re.sub(r'```json\s?|\s?```', '', llm_response_text).strip()
     payload = OpenFinancePayload.model_validate_json(json_clean)
     
+    today = date.today()
     final_transactions = []
     for tx in payload.transactions:
+        # Lógica de correção de ano para o purchase_date:
+        # Se o mês da transação for maior que o mês atual, assumimos que pertence ao ano anterior.
+        try:
+            tx_dt = date.fromisoformat(tx.date)
+            # Caso 1: Mês futuro (Ex: transação em 12/2026 lida em 01/2026)
+            if tx_dt.month > today.month:
+                tx_dt = tx_dt.replace(year=today.year - 1)
+                tx.date = tx_dt.isoformat()
+            # Caso 2: Mesmo mês, mas dia futuro (Ex: hoje é dia 10, transação diz dia 15)
+            elif tx_dt.month == today.month and tx_dt.day > today.day:
+                tx_dt = tx_dt.replace(year=today.year - 1)
+                tx.date = tx_dt.isoformat()
+        except Exception as e:
+            logger.warning(f"Não foi possível validar o ano da transação '{tx.description}': {e}")
+
         desc_lower = _normalize(tx.description)
         
         # 1. Filtro de segurança: Ignorar pagamentos de fatura
