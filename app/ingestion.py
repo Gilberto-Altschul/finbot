@@ -46,24 +46,34 @@ def aplicar_categorizacao_usuario(transactions_json: str, resposta: str) -> list
     transactions = json.loads(transactions_json)
 
     if resposta.strip().lower() == "ok":
-        return transactions  # Mantém tudo como Outros
+        logger.info("Usuário escolheu salvar tudo como Outros.")
+        return transactions
 
     # Parse da resposta: "1 Alimentação, 2 Saúde, 3 Lazer"
     partes = [p.strip() for p in resposta.replace(";", ",").split(",")]
     mapeamento = {}
+
+    logger.info(f"Parse de categorização: {len(partes)} partes detectadas: {partes}")
 
     for parte in partes:
         tokens = parte.strip().split(" ", 1)
         if len(tokens) == 2:
             try:
                 idx = int(tokens[0]) - 1  # converte para índice 0-based
-                categoria = tokens[1].strip().title()
-                # Valida categoria
-                match = next((c for c in CATEGORIAS_VALIDAS if c.lower() == categoria.lower()), None)
+                categoria_input = tokens[1].strip()
+                match = next((c for c in CATEGORIAS_VALIDAS if c.lower() == categoria_input.lower()), None)
+                logger.info(f"  Item {idx+1}: input='{categoria_input}' → match='{match}'")
                 if match and 0 <= idx < len(transactions):
                     mapeamento[idx] = match
+                elif not match:
+                    logger.warning(f"  Categoria '{categoria_input}' não reconhecida — mantendo Outros.")
+                elif idx >= len(transactions):
+                    logger.warning(f"  Índice {idx+1} fora do range ({len(transactions)} transações).")
             except ValueError:
+                logger.warning(f"  Parte '{parte}' ignorada — número inválido.")
                 continue
+
+    logger.info(f"Mapeamento final: {mapeamento}")
 
     for idx, categoria in mapeamento.items():
         transactions[idx]["category"] = categoria
