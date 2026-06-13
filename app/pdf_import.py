@@ -36,6 +36,9 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
     user_instructions = """
 Analise o extrato bancário anexo e converta-o em um objeto JSON com a chave 'transactions'.
 
+ATENÇÃO: O extrato pode ter duas colunas de transações lado a lado (esquerda e direita).
+Leia e extraia TODAS as transações de AMBAS as colunas. Não ignore nenhuma coluna ou seção.
+
 Regras:
 1. Ignore linhas de cabeçalho, subtotais, saldos do dia e avisos.
 2. Ignore linhas de Estorno.
