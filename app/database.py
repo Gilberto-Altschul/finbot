@@ -526,14 +526,32 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
     try:
         inseridos = 0
         batch_size = 100
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i:i + batch_size]
+
+        # Separa parceladas e não parceladas — estratégias de dedup diferentes
+        parceladas = [r for r in rows if r.get("installment_of") is not None]
+        nao_parceladas = [r for r in rows if r.get("installment_of") is None]
+
+        # Parceladas: dedup pela constraint mês+descrição+parcela (evita reimport da mesma parcela)
+        for i in range(0, len(parceladas), batch_size):
+            batch = parceladas[i:i + batch_size]
             res = get_db().table("finbot_expenses").upsert(
                 batch,
                 on_conflict="user_phone,dedup_month,amount,payment_method,description,installment_of",
                 ignore_duplicates=True
             ).execute()
             inseridos += len(res.data) if res.data else 0
+
+        # Não parceladas: dedup só pelo hash (pluggy_transaction_id)
+        # Permite duas transações iguais no mesmo dia (compras distintas)
+        for i in range(0, len(nao_parceladas), batch_size):
+            batch = nao_parceladas[i:i + batch_size]
+            res = get_db().table("finbot_expenses").upsert(
+                batch,
+                on_conflict="pluggy_transaction_id",
+                ignore_duplicates=True
+            ).execute()
+            inseridos += len(res.data) if res.data else 0
+
         return inseridos
     except Exception as e:
         logger.error(f"Erro ao inserir gastos em lote: {e}")
