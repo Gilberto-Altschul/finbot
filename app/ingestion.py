@@ -12,6 +12,160 @@ CATEGORIAS_VALIDAS = [
     "Vestuário e Beleza", "Educação", "Pets", "Financeiro", "Extra", "Outros"
 ]
 
+# Mapa de subcategorias → (categoria, subcategoria)
+# O usuário digita palavras do dia a dia e o sistema resolve a hierarquia
+SUBCATEGORIA_MAP = {
+    # Alimentação
+    "mercado": ("Alimentação", "Mercado"),
+    "supermercado": ("Alimentação", "Mercado"),
+    "restaurante": ("Alimentação", "Restaurante"),
+    "lanche": ("Alimentação", "Lanche"),
+    "padaria": ("Alimentação", "Padaria"),
+    "delivery": ("Alimentação", "Delivery"),
+    "ifood": ("Alimentação", "Delivery"),
+    "cafe": ("Alimentação", "Café"),
+    "café": ("Alimentação", "Café"),
+    "comida": ("Alimentação", "Restaurante"),
+    "hortifruti": ("Alimentação", "Hortifruti"),
+    "acougue": ("Alimentação", "Açougue"),
+    "açougue": ("Alimentação", "Açougue"),
+    # Transporte
+    "uber": ("Transporte", "Aplicativo"),
+    "99": ("Transporte", "Aplicativo"),
+    "taxi": ("Transporte", "Táxi"),
+    "táxi": ("Transporte", "Táxi"),
+    "onibus": ("Transporte", "Ônibus"),
+    "ônibus": ("Transporte", "Ônibus"),
+    "metro": ("Transporte", "Metrô"),
+    "metrô": ("Transporte", "Metrô"),
+    "gasolina": ("Transporte", "Combustível"),
+    "combustivel": ("Transporte", "Combustível"),
+    "combustível": ("Transporte", "Combustível"),
+    "estacionamento": ("Transporte", "Estacionamento"),
+    "pedagio": ("Transporte", "Pedágio"),
+    "pedágio": ("Transporte", "Pedágio"),
+    "manutencao": ("Transporte", "Manutenção"),
+    "manutenção": ("Transporte", "Manutenção"),
+    "seguro auto": ("Transporte", "Seguro Auto"),
+    # Lazer
+    "cinema": ("Lazer", "Cinema"),
+    "streaming": ("Lazer", "Streaming"),
+    "netflix": ("Lazer", "Streaming"),
+    "spotify": ("Lazer", "Streaming"),
+    "jogo": ("Lazer", "Games"),
+    "games": ("Lazer", "Games"),
+    "viagem": ("Lazer", "Viagem"),
+    "hotel": ("Lazer", "Viagem"),
+    "bar": ("Lazer", "Bar"),
+    "balada": ("Lazer", "Balada"),
+    "show": ("Lazer", "Show"),
+    "teatro": ("Lazer", "Teatro"),
+    "parque": ("Lazer", "Parque"),
+    "diversao": ("Lazer", "Lazer Geral"),
+    "diversão": ("Lazer", "Lazer Geral"),
+    "entretenimento": ("Lazer", "Lazer Geral"),
+    # Moradia
+    "aluguel": ("Moradia", "Aluguel"),
+    "condominio": ("Moradia", "Condomínio"),
+    "condomínio": ("Moradia", "Condomínio"),
+    "luz": ("Moradia", "Energia Elétrica"),
+    "energia": ("Moradia", "Energia Elétrica"),
+    "agua": ("Moradia", "Água"),
+    "água": ("Moradia", "Água"),
+    "gas": ("Moradia", "Gás"),
+    "gás": ("Moradia", "Gás"),
+    "internet": ("Moradia", "Internet"),
+    "telefone": ("Moradia", "Telefone"),
+    "celular": ("Moradia", "Celular"),
+    "tv": ("Moradia", "TV por Assinatura"),
+    "reforma": ("Moradia", "Reforma"),
+    "mobilia": ("Moradia", "Mobília"),
+    "mobília": ("Moradia", "Mobília"),
+    "casa": ("Moradia", "Casa Geral"),
+    # Saúde
+    "farmacia": ("Saúde", "Farmácia"),
+    "farmácia": ("Saúde", "Farmácia"),
+    "remedio": ("Saúde", "Farmácia"),
+    "remédio": ("Saúde", "Farmácia"),
+    "medico": ("Saúde", "Consulta Médica"),
+    "médico": ("Saúde", "Consulta Médica"),
+    "consulta": ("Saúde", "Consulta Médica"),
+    "dentista": ("Saúde", "Dentista"),
+    "plano": ("Saúde", "Plano de Saúde"),
+    "convenio": ("Saúde", "Plano de Saúde"),
+    "convênio": ("Saúde", "Plano de Saúde"),
+    "academia": ("Saúde", "Academia"),
+    "exame": ("Saúde", "Exame"),
+    "hospital": ("Saúde", "Hospital"),
+    # Vestuário e Beleza
+    "roupa": ("Vestuário e Beleza", "Roupa"),
+    "roupas": ("Vestuário e Beleza", "Roupa"),
+    "calcado": ("Vestuário e Beleza", "Calçado"),
+    "calçado": ("Vestuário e Beleza", "Calçado"),
+    "tenis": ("Vestuário e Beleza", "Calçado"),
+    "tênis": ("Vestuário e Beleza", "Calçado"),
+    "bolsa": ("Vestuário e Beleza", "Acessório"),
+    "acessorio": ("Vestuário e Beleza", "Acessório"),
+    "acessório": ("Vestuário e Beleza", "Acessório"),
+    "salao": ("Vestuário e Beleza", "Salão"),
+    "salão": ("Vestuário e Beleza", "Salão"),
+    "cabelo": ("Vestuário e Beleza", "Salão"),
+    "cosmetico": ("Vestuário e Beleza", "Cosméticos"),
+    "cosmético": ("Vestuário e Beleza", "Cosméticos"),
+    "perfume": ("Vestuário e Beleza", "Cosméticos"),
+    "maquiagem": ("Vestuário e Beleza", "Cosméticos"),
+    "moda": ("Vestuário e Beleza", "Roupa"),
+    "vestuario": ("Vestuário e Beleza", "Roupa"),
+    "vestuário": ("Vestuário e Beleza", "Roupa"),
+    # Educação
+    "escola": ("Educação", "Escola"),
+    "colegio": ("Educação", "Escola"),
+    "colégio": ("Educação", "Escola"),
+    "faculdade": ("Educação", "Faculdade"),
+    "universidade": ("Educação", "Faculdade"),
+    "curso": ("Educação", "Curso"),
+    "livro": ("Educação", "Livro"),
+    "livros": ("Educação", "Livro"),
+    "material": ("Educação", "Material Escolar"),
+    "ingles": ("Educação", "Idioma"),
+    "inglês": ("Educação", "Idioma"),
+    # Pets
+    "pet": ("Pets", "Pet Geral"),
+    "animal": ("Pets", "Pet Geral"),
+    "veterinario": ("Pets", "Veterinário"),
+    "veterinário": ("Pets", "Veterinário"),
+    "racao": ("Pets", "Ração"),
+    "ração": ("Pets", "Ração"),
+    "petshop": ("Pets", "Pet Shop"),
+    # Financeiro
+    "seguro": ("Financeiro", "Seguro"),
+    "emprestimo": ("Financeiro", "Empréstimo"),
+    "empréstimo": ("Financeiro", "Empréstimo"),
+    "financiamento": ("Financeiro", "Financiamento"),
+    "investimento": ("Financeiro", "Investimento"),
+    "tarifa": ("Financeiro", "Tarifa Bancária"),
+    "banco": ("Financeiro", "Tarifa Bancária"),
+    "juros": ("Financeiro", "Juros"),
+    # Extra
+    "presente": ("Extra", "Presente"),
+    "gift": ("Extra", "Presente"),
+    "doacao": ("Extra", "Doação"),
+    "doação": ("Extra", "Doação"),
+    # Outros
+    "outros": ("Outros", "Geral"),
+    "geral": ("Outros", "Geral"),
+}
+
+
+def _resolver_categoria(subcategoria_input: str) -> tuple[str, str] | None:
+    """
+    Resolve (categoria, subcategoria) a partir de uma palavra do usuário.
+    Tenta match exato no mapa de subcategorias.
+    Retorna None se não reconhecido.
+    """
+    inp = subcategoria_input.strip().lower()
+    return SUBCATEGORIA_MAP.get(inp, None)
+
 
 def _montar_mensagem_categorizacao(transacoes_outros: list[dict]) -> str:
     """Monta a mensagem interativa pedindo categorias para transações 'Outros'."""
@@ -21,19 +175,20 @@ def _montar_mensagem_categorizacao(transacoes_outros: list[dict]) -> str:
         valor = f"R$ {float(tx['amount']):.2f}".replace(".", ",")
         linhas.append(f"*{i}.* {tx['description']} — {valor}")
 
-    linhas.append("\n📋 *Categorias disponíveis:*")
-    linhas.append("Alimentação · Transporte · Lazer · Moradia · Saúde")
-    linhas.append("Vestuário e Beleza · Educação · Pets · Financeiro · Extra · Outros")
+    linhas.append("\n💡 *Digite a subcategoria com palavras do dia a dia:*")
+    linhas.append("roupa · calçado · mercado · restaurante · farmácia · médico")
+    linhas.append("gasolina · uber · streaming · aluguel · curso · livro · pet")
+    linhas.append("seguro · presente · ou qualquer outra palavra")
 
     nums = list(range(1, n + 1))
-    exemplo_parts = [f"{i} Categoria" for i in nums[:3]]
+    exemplo_parts = [f"{i} roupa" if i == 1 else f"{i} mercado" if i == 2 else f"{i} farmácia" for i in nums[:3]]
     if n > 3:
-        exemplo_parts.append(f"... {n} Categoria")
-    exemplo = ", ".join(exemplo_parts)
+        exemplo_parts.append(f"... {n} streaming")
+    exemplo = ", ".join(exemplo_parts[:min(n, 4)])
 
     linhas.append(f"\n✏️ *Responda com TODOS os {n} números em uma única mensagem:*")
     linhas.append(f"Ex: _{exemplo}_")
-    linhas.append(f"\n⚠️ Não envie item por item — responda tudo de uma vez.")
+    linhas.append(f"\n⚠️ Envie tudo de uma vez — não item por item.")
     linhas.append("Ou digite *ok* para salvar tudo como *Outros*.")
     return "\n".join(linhas)
 
@@ -61,12 +216,12 @@ def aplicar_categorizacao_usuario(transactions_json: str, resposta: str) -> list
             try:
                 idx = int(tokens[0]) - 1  # converte para índice 0-based
                 categoria_input = tokens[1].strip()
-                match = next((c for c in CATEGORIAS_VALIDAS if c.lower() == categoria_input.lower()), None)
-                logger.info(f"  Item {idx+1}: input='{categoria_input}' → match='{match}'")
-                if match and 0 <= idx < len(transactions):
-                    mapeamento[idx] = match
-                elif not match:
-                    logger.warning(f"  Categoria '{categoria_input}' não reconhecida — mantendo Outros.")
+                resolved = _resolver_categoria(categoria_input)
+                logger.info(f"  Item {idx+1}: input='{categoria_input}' → resolved='{resolved}'")
+                if resolved and 0 <= idx < len(transactions):
+                    mapeamento[idx] = resolved
+                elif not resolved:
+                    logger.warning(f"  Subcategoria '{categoria_input}' não reconhecida — mantendo Outros.")
                 elif idx >= len(transactions):
                     logger.warning(f"  Índice {idx+1} fora do range ({len(transactions)} transações).")
             except ValueError:
@@ -75,9 +230,9 @@ def aplicar_categorizacao_usuario(transactions_json: str, resposta: str) -> list
 
     logger.info(f"Mapeamento final: {mapeamento}")
 
-    for idx, categoria in mapeamento.items():
+    for idx, (categoria, subcategoria) in mapeamento.items():
         transactions[idx]["category"] = categoria
-        transactions[idx]["subcategory"] = "Geral"
+        transactions[idx]["subcategory"] = subcategoria
 
     return transactions
 
