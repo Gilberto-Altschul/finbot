@@ -341,7 +341,15 @@ async def gravar_transacoes_confirmadas(user_phone: str, transactions: list[dict
         if not transactions:
             return "✅ Nenhuma transação pendente para gravar."
 
+        logger.info(f"Gravando {len(transactions)} transações confirmadas para {user_phone}")
+
+        # Garante que o user_phone está correto em todas as rows (sobrescreve o valor do JSON salvo)
+        # Isso evita dupla criptografia caso o JSON tenha sido salvo com valor já criptografado
+        for tx in transactions:
+            tx["user_phone"] = user_phone
+
         inseridos = db.inserir_gastos_em_lote(transactions)
+        logger.info(f"inserir_gastos_em_lote retornou: {inseridos}")
         db.limpar_transacoes_pendentes(user_phone)
 
         if inseridos == -1:
@@ -354,7 +362,7 @@ async def gravar_transacoes_confirmadas(user_phone: str, transactions: list[dict
         return msg
 
     except Exception as e:
-        logger.error(f"Erro em gravar_transacoes_confirmadas: {e}")
+        logger.error(f"Erro em gravar_transacoes_confirmadas: {e}", exc_info=True)
         return "❌ Erro técnico ao gravar transações confirmadas."
 
 
