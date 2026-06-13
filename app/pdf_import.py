@@ -64,11 +64,9 @@ Regras específicas:
 
     # Modelos atuais em ordem de preferência (custo vs capacidade)
     models_to_try = [
-        "gemini-2.5-flash",       # Versão mais recente do console
-        "gemini-2.5-flash-lite",  # Ultra-rápido para extração simples
-        "gemini-1.5-flash-8b",    # Fallback estável rápido
-        "gemini-1.5-flash",       # Fallback 1
-        "gemini-1.5-pro",         # Fallback 2 — mais capaz, mas mais caro
+        "gemini-2.5-flash-lite",  # Principal — rápido, barato e suporta PDFs
+        "gemini-2.5-flash",       # Fallback — mais capaz
+        "gemini-2.0-flash-lite",  # Fallback estável
     ]
 
     llm_response_text = None
@@ -97,8 +95,8 @@ Regras específicas:
                         system_instruction=system_prompt,
                         response_mime_type="application/json",
                         response_schema=OpenFinancePayload,
-                        temperature=0.1,
-                        max_output_tokens=16384,
+                        temperature=0.0,
+                        max_output_tokens=32768,
                     ),
                 )
                 llm_response_text = response.text.strip() if response.text else ""
