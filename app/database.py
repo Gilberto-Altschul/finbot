@@ -534,7 +534,7 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
                 ignore_duplicates=True
             ).execute()
             inseridos += len(res.data) if res.data else 0
-            return inseridos
+        return inseridos
     except Exception as e:
         logger.error(f"Erro ao inserir gastos em lote: {e}")
         return -1  # sinaliza erro
@@ -606,12 +606,8 @@ import json
 def salvar_transacoes_pendentes(user_phone: str, transactions_json: str) -> None:
     """Salva lista de transações (JSON) aguardando confirmação de categoria pelo usuário."""
     try:
-        row = {
-            "user_phone": _s(user_phone),
-            "pending_transactions": transactions_json,
-            "status": "aguardando_categorizacao"
-        }
-        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+        # Usa update direto para garantir que o JSON completo seja salvo sem conflito de criptografia
+        get_db().table("finbot_user_connections")             .update({"pending_transactions": transactions_json, "status": "aguardando_categorizacao"})             .ilike("user_phone", _q(user_phone))             .execute()
     except Exception as e:
         logger.error(f"Erro em salvar_transacoes_pendentes: {e}")
 
