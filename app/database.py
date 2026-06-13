@@ -527,25 +527,25 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
         inseridos = 0
         batch_size = 100
 
-        # Separa parceladas e não parceladas — estratégias de dedup diferentes
-        parceladas = [r for r in rows if r.get("installment_of") is not None]
-        nao_parceladas = [r for r in rows if r.get("installment_of") is None]
-
-        # Parceladas: dedup pela constraint mês+descrição+parcela (evita reimport da mesma parcela)
-        for i in range(0, len(parceladas), batch_size):
-            batch = parceladas[i:i + batch_size]
-            res = get_db().table("finbot_expenses").upsert(
-                batch,
-                on_conflict="user_phone,dedup_month,amount,payment_method,description,installment_of",
-                ignore_duplicates=True
-            ).execute()
-            inseridos += len(res.data) if res.data else 0
-
-        # Não parceladas: insert simples — dedup já feita pelo hash antes de chegar aqui
-        for i in range(0, len(nao_parceladas), batch_size):
-            batch = nao_parceladas[i:i + batch_size]
-            res = get_db().table("finbot_expenses").insert(batch).execute()
-            inseridos += len(res.data) if res.data else 0
+        # Insert simples para todas — dedup feita pelo hash (pluggy_transaction_id) no ingestion.py
+        # O índice uq_finbot_expenses_parcela no banco serve como segunda linha de defesa para parceladas
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            try:
+                res = get_db().table("finbot_expenses").insert(batch).execute()
+                inseridos += len(res.data) if res.data else 0
+            except Exception as batch_err:
+                err_str = str(batch_err)
+                if "duplicate" in err_str.lower() or "23505" in err_str:
+                    # Constraint violation — insere um por um para salvar o máximo possível
+                    for row in batch:
+                        try:
+                            res = get_db().table("finbot_expenses").insert(row).execute()
+                            inseridos += len(res.data) if res.data else 0
+                        except Exception:
+                            pass  # duplicata real, ignora
+                else:
+                    raise
 
         return inseridos
     except Exception as e:
