@@ -541,15 +541,10 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
             ).execute()
             inseridos += len(res.data) if res.data else 0
 
-        # Não parceladas: dedup só pelo hash (pluggy_transaction_id)
-        # Permite duas transações iguais no mesmo dia (compras distintas)
+        # Não parceladas: insert simples — dedup já feita pelo hash antes de chegar aqui
         for i in range(0, len(nao_parceladas), batch_size):
             batch = nao_parceladas[i:i + batch_size]
-            res = get_db().table("finbot_expenses").upsert(
-                batch,
-                on_conflict="pluggy_transaction_id",
-                ignore_duplicates=True
-            ).execute()
+            res = get_db().table("finbot_expenses").insert(batch).execute()
             inseridos += len(res.data) if res.data else 0
 
         return inseridos
