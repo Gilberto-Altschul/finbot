@@ -44,9 +44,14 @@ Regras:
    - id: ID temporário baseado na data e valor (ex: itau_20260503_1950)
    - date: data ORIGINAL da compra no formato ISO YYYY-MM-DD.
      IMPORTANTE: use sempre a coluna "Compra" ou "Data" do extrato, NUNCA a data de lançamento na fatura.
-     Para parcelamentos, a data da compra original (ex: 31/08) é diferente da data da fatura (ex: 01/04).
-     Se o mês da compra (ex: 08) for maior que o mês da fatura (ex: 04), o ano da compra é o ano anterior ao da fatura.
-     Exemplo: fatura de abril/2026 com compra em "31/08" → date: 2025-08-31
+     As datas no extrato aparecem no formato DD/MM sem ano. Use as seguintes regras para determinar o ano:
+     - Se o mês da compra for MAIOR que o mês da fatura → ano da compra = ano da fatura - 1
+     - Se o mês da compra for MENOR ou IGUAL ao mês da fatura → ano da compra = ano da fatura
+     Exemplo com fatura de abril/2026 (mês 04, ano 2026):
+       - compra em "31/08" → mês 08 > mês 04 → ano 2025 → date: 2025-08-31
+       - compra em "25/02" → mês 02 < mês 04 → ano 2026 → date: 2026-02-25
+       - compra em "01/04" → mês 04 = mês 04 → ano 2026 → date: 2026-04-01
+     O mês e ano da fatura atual estão indicados no cabeçalho do PDF.
    - description: nome limpo do estabelecimento (ex: DROGARIA SAO PAULO)
    - amount: float positivo
    - category: uma de: Alimentação, Transporte, Lazer, Moradia, Saúde, Vestuário e Beleza, Educação, Pets, Financeiro, Extra, Outros
