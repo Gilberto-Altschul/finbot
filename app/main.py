@@ -218,14 +218,7 @@ async def webhook(
         background_tasks.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
         return Response(content="<Response/>", media_type="text/xml")
 
-    # ── CASO 2: RESPOSTA DE CATEGORIZAÇÃO PENDENTE ───────────────────────────
-    transactions_json = db.obter_transacoes_pendentes(user_phone)
-    if transactions_json and _parece_categorizacao(user_message):
-        logger.info(f"Resposta de categorização recebida de {user_phone}: {user_message}")
-        background_tasks.add_task(async_process_categorizacao, user_phone, user_message, transactions_json)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 3: SENHA DE PDF PENDENTE ────────────────────────────────────────
+    # ── CASO 2: SENHA DE PDF PENDENTE (prioridade alta) ─────────────────────
     pending_pdf_info = db.obter_pdf_pendente(user_phone)
     if pending_pdf_info:
         pdf_pendente_url, pdf_status = pending_pdf_info
@@ -238,6 +231,13 @@ async def webhook(
             logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
             background_tasks.add_task(_process, user_phone, user_message)
             return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 3: RESPOSTA DE CATEGORIZAÇÃO PENDENTE ───────────────────────────
+    transactions_json = db.obter_transacoes_pendentes(user_phone)
+    if transactions_json and _parece_categorizacao(user_message):
+        logger.info(f"Resposta de categorização recebida de {user_phone}: {user_message}")
+        background_tasks.add_task(async_process_categorizacao, user_phone, user_message, transactions_json)
+        return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 4: MENSAGEM NORMAL ───────────────────────────────────────────────
     logger.info(f"Incoming message from {user_phone}: {user_message}")
