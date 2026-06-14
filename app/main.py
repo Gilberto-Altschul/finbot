@@ -213,7 +213,8 @@ async def webhook(
     # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
     if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
         logger.info(f"PDF recebido de {user_phone}.")
-        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="processando")
+        # Inicia como aguardando_senha — se não for protegido, o processamento ignora a senha
+        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="aguardando_senha")
         await asyncio.to_thread(_send_whatsapp, user_phone, "🏦 *Extrato recebido!* Verificando o arquivo...")
         background_tasks.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
         return Response(content="<Response/>", media_type="text/xml")
@@ -228,8 +229,15 @@ async def webhook(
             background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
             return Response(content="<Response/>", media_type="text/xml")
         elif pdf_status == "processando":
-            logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
-            background_tasks.add_task(_process, user_phone, user_message)
+            # Se parece senha (só números), guarda para usar depois
+            if user_message.strip().isdigit() and len(user_message.strip()) >= 4:
+                logger.info(f"Possível senha recebida durante processamento para {user_phone}. Guardando.")
+                db.salvar_pdf_aguardando_senha(user_phone, pdf_pendente_url, status="aguardando_senha")
+                await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Processando seu extrato...")
+                background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
+            else:
+                logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
+                background_tasks.add_task(_process, user_phone, user_message)
             return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 3: RESPOSTA DE CATEGORIZAÇÃO PENDENTE ───────────────────────────
