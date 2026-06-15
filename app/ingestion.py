@@ -288,7 +288,7 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
                 "installment_of": tx.installment_of,
                 "installment_total": tx.installment_total,
                 "purchase_date": tx.date,
-                "billing_date": tx.date,
+                "billing_date": getattr(tx, "billing_date", None) or tx.date,
             })
             ids_no_lote.add(tx_id)
 

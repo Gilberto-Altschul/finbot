@@ -84,15 +84,24 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
             if m:
                 fatura_mes = MESES_PT.get(m.group(1).lower()[:3])
                 fatura_ano = int(m.group(2))
+        # Detecta dia de vencimento
+        fatura_dia = None
+        m_dia = re.search(r'vencimento\D{0,10}(\d{2})/(\d{2})/(\d{4})', texto_pdf, re.IGNORECASE)
+        if m_dia:
+            fatura_dia = int(m_dia.group(1))
+
         if fatura_mes and fatura_ano:
-            logger.info(f"Fatura detectada: {fatura_mes:02d}/{fatura_ano}")
+            billing_date = f"{fatura_ano}-{fatura_mes:02d}-{fatura_dia:02d}" if fatura_dia else f"{fatura_ano}-{fatura_mes:02d}-01"
+            logger.info(f"Fatura detectada: vencimento {billing_date}")
         else:
             # Fallback: usa mês/ano atual
             from datetime import datetime
             now = datetime.now()
             fatura_mes = now.month
             fatura_ano = now.year
-            logger.warning(f"Não detectou mês/ano da fatura. Usando atual: {fatura_mes:02d}/{fatura_ano}")
+            fatura_dia = now.day
+            billing_date = now.strftime("%Y-%m-%d")
+            logger.warning(f"Não detectou mês/ano da fatura. Usando atual: {billing_date}")
 
     # 3. Monta o conteúdo para o Gemini
     if texto_pdf and len(texto_pdf.strip()) > 100:
@@ -273,6 +282,9 @@ Regras:
                 pass
 
         tx.id = _generate_transaction_hash_id(tx, user_phone)
+
+        # Define billing_date como vencimento da fatura para crédito
+        tx.billing_date = billing_date
 
         if tx.payment_method:
             normalized_method = tx.payment_method.lower()

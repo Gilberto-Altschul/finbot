@@ -20,6 +20,7 @@ class StandardTransaction(BaseModel):
     installment_total: Optional[int] = None
     type: Literal["expense", "income"] = "expense" # Permite 'expense' ou 'income'
     payment_method: str = "credito"
+    billing_date: Optional[str] = None  # Data de vencimento da fatura (crédito) ou data da compra (débito)
 
 class OpenFinancePayload(BaseModel):
     source: str = "pdf"
