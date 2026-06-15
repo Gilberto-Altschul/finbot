@@ -53,16 +53,54 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
     # 1. Extrai texto de forma determinística
     try:
         texto_pdf = _extrair_texto_pdf(pdf_content)
+        logger.info(f"Primeiros 500 chars do texto:\n{texto_pdf[:500]}")
     except Exception as e:
         logger.error(f"Erro ao extrair texto com pdfplumber: {e}. Tentando fallback com PDF nativo.")
         texto_pdf = None
 
-    # 2. Monta o conteúdo para o Gemini
+    # 2. Detecta mês/ano da fatura a partir do texto extraído
+    fatura_mes = None
+    fatura_ano = None
+    if texto_pdf:
+        # Padrões comuns: "vencimento 01/06/2026", "25/04/26 a 26/05/26", "junho/2026", "jun/26"
+        MESES_PT = {
+            'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+            'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12
+        }
+        # Padrão: DD/MM/YYYY após "vencimento"
+        m = re.search(r'vencimento\D{0,10}(\d{2})/(\d{2})/(\d{4})', texto_pdf, re.IGNORECASE)
+        if m:
+            fatura_mes = int(m.group(2))
+            fatura_ano = int(m.group(3))
+        # Padrão Santander: "Esta Fatura DD/MM/YY a DD/MM/YY"
+        if not fatura_mes:
+            m = re.search(r'Esta Fatura\s+\d{2}/\d{2}/\d{2}\s+a\s+(\d{2})/(\d{2})/(\d{2})', texto_pdf, re.IGNORECASE)
+            if m:
+                fatura_mes = int(m.group(2))
+                fatura_ano = 2000 + int(m.group(3))
+        # Padrão: "junho/2026" ou "jun/2026"
+        if not fatura_mes:
+            m = re.search(r'(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z]*/(\d{4})', texto_pdf, re.IGNORECASE)
+            if m:
+                fatura_mes = MESES_PT.get(m.group(1).lower()[:3])
+                fatura_ano = int(m.group(2))
+        if fatura_mes and fatura_ano:
+            logger.info(f"Fatura detectada: {fatura_mes:02d}/{fatura_ano}")
+        else:
+            # Fallback: usa mês/ano atual
+            from datetime import datetime
+            now = datetime.now()
+            fatura_mes = now.month
+            fatura_ano = now.year
+            logger.warning(f"Não detectou mês/ano da fatura. Usando atual: {fatura_mes:02d}/{fatura_ano}")
+
+    # 3. Monta o conteúdo para o Gemini
     if texto_pdf and len(texto_pdf.strip()) > 100:
-        # Abordagem híbrida: texto extraído pelo pdfplumber
         logger.info("Usando abordagem híbrida: texto pdfplumber → Gemini")
         user_instructions = f"""
 Analise o texto de extrato bancário abaixo e converta-o em um objeto JSON com a chave 'transactions'.
+
+INFORMAÇÃO IMPORTANTE: Esta fatura é do mês {fatura_mes:02d}/{fatura_ano}.
 
 ATENÇÃO: O extrato pode ter duas colunas de transações lado a lado (esquerda e direita).
 Leia e extraia TODAS as transações de AMBAS as colunas. Não ignore nenhuma coluna ou seção.
@@ -76,10 +114,12 @@ Regras:
    - date: data ORIGINAL da compra no formato ISO YYYY-MM-DD.
      As datas aparecem no formato DD/MM (dia/mês) — NUNCA interprete como MM/DD.
      Exemplo: "03/05" = dia 03 de maio, NÃO dia 05 de março.
-     Regras para o ano:
-     - Se o mês da compra for MAIOR que o mês da fatura → ano = ano da fatura - 1
-     - Se o mês da compra for MENOR ou IGUAL ao mês da fatura → ano = ano da fatura
-     O mês e ano da fatura estão no cabeçalho do texto.
+     A fatura é do mês {fatura_mes:02d}/{fatura_ano}. Use estas regras para o ano:
+     - Se o mês da compra for MAIOR que o mês da fatura ({fatura_mes}) → ano = {fatura_ano - 1}
+     - Se o mês da compra for MENOR ou IGUAL ao mês da fatura ({fatura_mes}) → ano = {fatura_ano}
+     Exemplos concretos para esta fatura:
+       - compra em "19/05" → mês 05 ≤ {fatura_mes} → ano {fatura_ano} → date: {fatura_ano}-05-19
+       - compra em "08/07" → mês 07 > {fatura_mes} → ano {fatura_ano - 1} → date: {fatura_ano - 1}-07-08
    - description: nome limpo do estabelecimento (ex: DROGARIA SAO PAULO)
    - amount: float positivo
    - category: uma de: Alimentação, Transporte, Lazer, Moradia, Saúde, Vestuário e Beleza, Educação, Pets, Financeiro, Extra, Outros
