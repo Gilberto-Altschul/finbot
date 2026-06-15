@@ -242,7 +242,10 @@ Regras:
     for tx in payload.transactions:
         desc_lower = _normalize(tx.description)
 
-        if "pagamento de fatura" in desc_lower or "pagto fatura" in desc_lower:
+        if any(p in desc_lower for p in [
+            "pagamento de fatura", "pagto fatura", "pag fatura",
+            "pagamento fatura", "payment", "pag. fatura"
+        ]):
             logger.info(f"Ignorando pagamento de fatura: {tx.description}")
             continue
 
@@ -257,6 +260,9 @@ Regras:
             if "credito" in normalized_method or "credit" in normalized_method:
                 tx.payment_method = "credito"
             elif "debito" in normalized_method or "debit" in normalized_method:
+                tx.payment_method = "debito"
+            else:
+                # boleto, pix, ted, doc → debito
                 tx.payment_method = "debito"
 
         final_transactions.append(tx)
