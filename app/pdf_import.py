@@ -117,9 +117,13 @@ Regras:
      A fatura é do mês {fatura_mes:02d}/{fatura_ano}. Use estas regras para o ano:
      - Se o mês da compra for MAIOR que o mês da fatura ({fatura_mes}) → ano = {fatura_ano - 1}
      - Se o mês da compra for MENOR ou IGUAL ao mês da fatura ({fatura_mes}) → ano = {fatura_ano}
-     Exemplos concretos para esta fatura:
-       - compra em "19/05" → mês 05 ≤ {fatura_mes} → ano {fatura_ano} → date: {fatura_ano}-05-19
-       - compra em "08/07" → mês 07 > {fatura_mes} → ano {fatura_ano - 1} → date: {fatura_ano - 1}-07-08
+     Exemplos concretos para esta fatura (mês {fatura_mes}/{fatura_ano}):
+       - compra em "19/05" ou "19 mai" → mês 05 ≤ {fatura_mes} → ano {fatura_ano} → date: {fatura_ano}-05-19
+       - compra em "27/02" ou "27 fev" → mês 02 ≤ {fatura_mes} → ano {fatura_ano} → date: {fatura_ano}-02-27
+       - compra em "17/03" ou "17 mar" → mês 03 ≤ {fatura_mes} → ano {fatura_ano} → date: {fatura_ano}-03-17
+       - compra em "26/12" ou "26 dez" → mês 12 > {fatura_mes} → ano {fatura_ano - 1} → date: {fatura_ano - 1}-12-26
+       - compra em "08/07" ou "08 jul" → mês 07 > {fatura_mes} → ano {fatura_ano - 1} → date: {fatura_ano - 1}-07-08
+     NUNCA use ano {fatura_ano + 1} — todas as compras são de {fatura_ano - 1} ou {fatura_ano}.
    - description: nome limpo do estabelecimento (ex: DROGARIA SAO PAULO)
    - amount: float positivo
    - category: uma de: Alimentação, Transporte, Lazer, Moradia, Saúde, Vestuário e Beleza, Educação, Pets, Financeiro, Extra, Outros
@@ -252,6 +256,21 @@ Regras:
         if tx.amount < 0:
             tx.amount = abs(tx.amount)
             tx.type = "income"
+
+        # Corrige anos futuros — nenhuma compra pode ser de ano posterior à fatura
+        if fatura_ano and tx.date:
+            try:
+                parts = tx.date.split('-')
+                tx_ano = int(parts[0])
+                tx_mes = int(parts[1])
+                tx_dia = int(parts[2])
+                if tx_ano > fatura_ano:
+                    # Ano futuro — corrige para ano da fatura ou anterior
+                    tx_ano_correto = fatura_ano if tx_mes <= fatura_mes else fatura_ano - 1
+                    tx.date = f"{tx_ano_correto}-{tx_mes:02d}-{tx_dia:02d}"
+                    logger.warning(f"Ano futuro corrigido: {tx.description} {parts[0]} → {tx_ano_correto}")
+            except Exception:
+                pass
 
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
