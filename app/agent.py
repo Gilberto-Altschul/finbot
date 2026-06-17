@@ -39,7 +39,7 @@ REGRAS IMPORTANTES:
 - SAÚDE vs FINANCEIRO: Planos de Saúde ou Convênios DEVEM ser registrados na categoria 'Saúde'. A categoria 'Financeiro' é para taxas e seguros de bens (vida/casa). Seguros de automóvel pertencem à categoria 'Transporte'.
 
 CATEGORIAS E SUBCATEGORIAS:
-- Moradia: Aluguel, Condomínio, Contas, Faxina, Manutenção Residencial, Utensílios
+- Moradia: Aluguel, Condomínio, Contas, Celular, Faxina, Manutenção Residencial, Utensílios
 - Alimentação: Delivery, Mercado, Restaurante, Padaria, Lanche, Café
 - Transporte: Aplicativo, Combustível, Estacionamento, Ônibus, Metrô, Oficina, Manutenção Veículo, Seguro Automóvel
 - Saúde: Farmácia, Academia, Médico, Dentista, Suplemento, Exame, Plano de Saúde, Convênio
@@ -159,7 +159,7 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
         return (
             "📁 *Guia de Categorias e Exemplos (Keywords)*\n"
             "Use esses termos para facilitar a organização:\n\n"
-            "🏠 *Moradia:* Aluguel (QuintoAndar), Condomínio, Energia (Enel), Água, Gás, Internet (Claro/Vivo), Faxina, Reforma (Leroy), Mobília\n\n"
+            "🏠 *Moradia:* Aluguel (QuintoAndar), Condomínio, Energia (Enel), Água, Gás, Internet (Claro/Vivo), Celular, Faxina, Reforma (Leroy), Mobília\n\n"
             "🍔 *Alimentação:* Mercado (Assaí/Extra), Feira, Delivery (iFood/Rappi), Restaurante, Padaria, Café, Bar\n"
             "_(⚠️ Em restaurantes/bares eu pergunto se é social ou dia a dia!)_\n\n"
             "🚗 *Transporte:* Apps (Uber/99), Combustível (Posto), Público (Metrô), Estacionamento, Manutenção, Passagem Aérea\n\n"
