@@ -184,8 +184,31 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     msg = re.sub(r"\[.*\]\s+.*:\s+", "", message).strip()
     msg_norm = _normalize(msg)
 
-    # 1. PRIORIDADE MÁXIMA: Gasto Manual (Fast Path) - Detecta 'cafe 1' ou 'Almoço 35.50'
-    # Movido para o topo absoluto para garantir que registros simples não caiam na LLM
+    # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
+
+    # Paginação (Ex: "listar 5 pag 2")
+    if "listar" in msg_norm and "pag" in msg_norm:
+        m_pag = re.search(r"pag (\d+)", msg_norm)
+        pagina = int(m_pag.group(1)) if m_pag else 1
+        
+        m_mes = re.search(r"listar (\d+)", msg_norm)
+        mes = m_mes.group(1) if m_mes else str(date.today().month)
+        
+        return {"tool": "listar_gastos_detalhados", "args": {"mes": mes, "pagina": pagina}}
+
+    # Comando "Acertar" (Ex: "acertar 1 excluir")
+    if msg_norm.startswith("acertar"):
+        parts = msg_norm.split()
+        try:
+            if len(parts) >= 3:
+                return {
+                 "tool": "processar_comando_acerto", 
+                 "args": {"indice": int(parts[1]), "acao": parts[2], "valor": " ".join(parts[3:])}
+                }
+        except (ValueError, IndexError):
+            pass
+
+    # 2. Gasto Manual (Fast Path) - Detecta 'cafe 1' ou 'Almoço 35.50'
     m = _EXPENSE_RE.match(msg)
     if m:
         desc_raw = m.group("desc").strip()
@@ -310,28 +333,6 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                             "tool": "registrar_gasto",
                             "args": {"valor": valor, "categoria": cat_escolhida, "subcategoria": desc_raw.capitalize(), "descricao": desc_raw, "payment_method": method}
                         }
-
-    # 1. PRIORIDADE MÁXIMA: Paginação (Ex: "listar 5 pag 2")
-    if "listar" in msg_norm and "pag" in msg_norm:
-        m_pag = re.search(r"pag (\d+)", msg_norm)
-        pagina = int(m_pag.group(1)) if m_pag else 1
-        
-        m_mes = re.search(r"listar (\d+)", msg_norm)
-        mes = m_mes.group(1) if m_mes else str(date.today().month)
-        
-        return {"tool": "listar_gastos_detalhados", "args": {"mes": mes, "pagina": pagina}}
-
-    # 2. Comando "Acertar"
-    if msg_norm.startswith("acertar"):
-        parts = msg_norm.split()
-        try:
-            if len(parts) >= 3:
-                return {
-                 "tool": "processar_comando_acerto", 
-                 "args": {"indice": int(parts[1]), "acao": parts[2], "valor": " ".join(parts[3:])}
-                }
-        except (ValueError, IndexError):
-            pass
 
     # 3. Detecção de Mês por extenso (Evita chamadas desnecessárias à LLM)
     target_month = None
