@@ -3,6 +3,7 @@ import logging
 import json
 from datetime import date
 import app.database as db
+from app.categorizer import categorizar_gasto_hibrido
 
 logger = logging.getLogger(__name__)
 
@@ -267,14 +268,17 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
 
             valor = abs(tx.amount)
 
-            # Checa mapeamento do usuário para este estabelecimento
-            mapping = db.get_user_merchant_mapping(user_phone, tx.description)
-            if mapping:
-                categoria_final = mapping["category_name"]
-                subcategoria_final = mapping["subcategory_name"]
-            else:
-                categoria_final = tx.category
-                subcategoria_final = tx.subcategory or "Geral"
+            # Motor híbrido de categorização: regras do usuário → keywords globais → LLM
+            # Passa (tx.category, tx.subcategory) como fallback caso o parser dedicado já tenha uma sugestão
+            fallback = (tx.category, tx.subcategory) if tx.category and tx.category != "Outros" else None
+            categoria_final, subcategoria_final = await categorizar_gasto_hibrido(
+                user_phone, tx.description, fallback=fallback
+            )
+
+            # "Perguntar" é tratado como Outros — vai para a fila de confirmação manual
+            if categoria_final == "Perguntar":
+                categoria_final = "Outros"
+                subcategoria_final = "Outros"
 
             novas_rows.append({
                 "pluggy_transaction_id": tx_id,
