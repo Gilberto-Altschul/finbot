@@ -158,14 +158,55 @@ SUBCATEGORIA_MAP = {
 }
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Calcula a distância de Levenshtein entre duas strings."""
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    if len(b) == 0:
+        return len(a)
+    previous_row = range(len(b) + 1)
+    for i, ca in enumerate(a):
+        current_row = [i + 1]
+        for j, cb in enumerate(b):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (ca != cb)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
 def _resolver_categoria(subcategoria_input: str) -> tuple[str, str] | None:
     """
     Resolve (categoria, subcategoria) a partir de uma palavra do usuário.
-    Tenta match exato no mapa de subcategorias.
+    1. Tenta match exato no mapa de subcategorias.
+    2. Se não encontrar, tenta fuzzy match (tolerante a typos pequenos).
     Retorna None se não reconhecido.
     """
     inp = subcategoria_input.strip().lower()
-    return SUBCATEGORIA_MAP.get(inp, None)
+
+    # Match exato
+    exato = SUBCATEGORIA_MAP.get(inp, None)
+    if exato:
+        return exato
+
+    # Fuzzy match: aceita até 1 erro de digitação para palavras curtas (<=6 chars)
+    # e até 2 erros para palavras mais longas
+    max_dist = 1 if len(inp) <= 6 else 2
+    melhor_match = None
+    melhor_dist = max_dist + 1
+
+    for chave in SUBCATEGORIA_MAP:
+        dist = _levenshtein(inp, chave)
+        if dist <= max_dist and dist < melhor_dist:
+            melhor_dist = dist
+            melhor_match = chave
+
+    if melhor_match:
+        logger.info(f"Fuzzy match: '{inp}' → '{melhor_match}' (distância {melhor_dist})")
+        return SUBCATEGORIA_MAP[melhor_match]
+
+    return None
 
 
 def _montar_mensagem_categorizacao(transacoes_outros: list[dict]) -> str:
@@ -329,13 +370,15 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list)
             else:
                 logger.error("ERRO: pending_transactions não foi salvo no banco!")
 
-            resumo = ""
+            resumo = f"🔍 Encontrei {total_encontrado} transações no arquivo.\n"
             if nao_outros:
                 duplicatas_banco = len(nao_outros) - inseridos_nao_outros
-                resumo = f"✨ Importei *{inseridos_nao_outros} transações* com categoria identificada.\n"
+                resumo += f"✨ Importei *{inseridos_nao_outros} transações* com categoria identificada.\n"
                 if duplicatas_banco > 0:
                     resumo += f"♻️ {duplicatas_banco} ignorados por já existirem.\n"
-                resumo += "\n"
+            if ids_existentes:
+                resumo += f"♻️ {len(ids_existentes)} já constavam no seu histórico.\n"
+            resumo += "\n"
 
             return resumo + _montar_mensagem_categorizacao(outros), outros
 
