@@ -85,6 +85,11 @@ SUBCATEGORIA_MAP = {
     "casa": ("Moradia", "Casa Geral"),
     # Saúde
     "farmacia": ("Saúde", "Farmácia"),
+    "suplemento": ("Saúde", "Farmácia"),
+    "suplementos": ("Saúde", "Farmácia"),
+    "vitamina": ("Saúde", "Farmácia"),
+    "whey": ("Saúde", "Farmácia"),
+    "proteina": ("Saúde", "Farmácia"),
     "farmácia": ("Saúde", "Farmácia"),
     "remedio": ("Saúde", "Farmácia"),
     "remédio": ("Saúde", "Farmácia"),
