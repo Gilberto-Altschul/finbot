@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 # Termos que SEMPRE devem disparar a pergunta ao usuário, independente de histórico ou banco.
 _AMBIGUOUS_TERMS = [
     "restaurante", "restaurant", "bar", "pub", "boteco", "cervejaria",
-    "padaria", "cafe", "café", "lanche", "bakery", "bistro", "gastronomia", "doceria"
+    "padaria", "cafe", "café", "lanche", "bakery", "bistro", "gastronomia", "doceria",
+    # Marketplaces genéricos — vendem de tudo, não dá para inferir categoria pela loja
+    "mercadolivre", "mercado livre", "amazon", "shopee", "aliexpress",
+    "magazine luiza", "magalu", "americanas.com", "submarino", "shein",
 ]
 
 # Termos que forçam a categoria Saúde para evitar conflitos com 'Seguro' no Financeiro
