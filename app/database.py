@@ -619,22 +619,42 @@ import json
 def salvar_transacoes_pendentes(user_phone: str, transactions_json: str) -> None:
     """Salva lista de transações (JSON) aguardando confirmação de categoria pelo usuário."""
     try:
-        # Usa update direto para garantir que o JSON completo seja salvo sem conflito de criptografia
-        get_db().table("finbot_user_connections")             .update({"pending_transactions": transactions_json, "status": "aguardando_categorizacao"})             .ilike("user_phone", _q(user_phone))             .execute()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        get_db().table("finbot_user_connections") \
+            .update({
+                "pending_transactions": transactions_json,
+                "status": "aguardando_categorizacao",
+                "pending_transactions_at": now,
+            }) \
+            .ilike("user_phone", _q(user_phone)) \
+            .execute()
     except Exception as e:
         logger.error(f"Erro em salvar_transacoes_pendentes: {e}")
 
-def obter_transacoes_pendentes(user_phone: str) -> str | None:
-    """Retorna o JSON de transações pendentes de categorização, se houver."""
+def obter_transacoes_pendentes(user_phone: str, timeout_minutos: int = 10) -> str | None:
+    """Retorna o JSON de transações pendentes de categorização, se houver e não tiver expirado."""
     try:
+        from datetime import datetime, timezone, timedelta
         res = get_db().table("finbot_user_connections") \
-            .select("pending_transactions, status") \
+            .select("pending_transactions, status, pending_transactions_at") \
             .ilike("user_phone", _q(user_phone)) \
             .eq("status", "aguardando_categorizacao") \
             .limit(1).execute()
-        if res.data and res.data[0].get("pending_transactions"):
-            return res.data[0]["pending_transactions"]
-        return None
+        if not res.data or not res.data[0].get("pending_transactions"):
+            return None
+        # Verifica se não expirou
+        salvo_em = res.data[0].get("pending_transactions_at")
+        if salvo_em:
+            try:
+                salvo_dt = datetime.fromisoformat(salvo_em)
+                if datetime.now(timezone.utc) - salvo_dt > timedelta(minutes=timeout_minutos):
+                    logger.info(f"Transações pendentes expiraram para {user_phone}. Limpando.")
+                    limpar_transacoes_pendentes(user_phone)
+                    return None
+            except Exception:
+                pass
+        return res.data[0]["pending_transactions"]
     except Exception as e:
         logger.error(f"Erro em obter_transacoes_pendentes: {e}")
         return None

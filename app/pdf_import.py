@@ -22,10 +22,21 @@ _client = genai.Client(api_key=settings.gemini_api_key)
 
 
 def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: str) -> str:
-    """Gera ID determinístico para a transação pelo conteúdo."""
+    """
+    Gera ID determinístico para a transação pelo conteúdo.
+    Para transações de crédito com billing_date, inclui o billing_date no hash
+    para distinguir a mesma compra em faturas diferentes (ex: compra próxima ao corte
+    que aparece tanto na fatura de junho quanto na de julho).
+    """
     normalized_desc = _normalize(transaction.description)
     amt_str = "{:.2f}".format(abs(transaction.amount))
-    unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}"
+
+    billing = getattr(transaction, 'billing_date', None)
+    if billing and transaction.payment_method == 'credito':
+        unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}|{billing}"
+    else:
+        unique_string = f"{user_phone}|{transaction.date}|{amt_str}|{normalized_desc}|{transaction.type}"
+
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
