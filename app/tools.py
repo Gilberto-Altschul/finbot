@@ -113,7 +113,10 @@ SCHEMAS: list[dict] = [
         "description": "Consulta os lançamentos e o total especificamente da FATURA DO CARTÃO DE CRÉDITO. Não use para gastos gerais ou débito.",
         "parameters": {
             "type": "object",
-            "properties": {"mes": {"type": "string"}}
+            "properties": {
+                "mes": {"type": "string"},
+                "pagina": {"type": "integer", "description": "Página dos lançamentos (default: 1). Use quando o usuário pedir 'fatura pág 2'."}
+            }
         }
     },
     {
@@ -564,14 +567,13 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
         case "consultar_fatura" | "consultar_fatura_atual":
             dia_corte, dia_vencimento = db.get_card_settings(user_phone)
             parsed = _parse_month_year(args.get("mes") or args.get("mes_ano"))
+            pagina = int(args.get("pagina", 1))
             
             if parsed:
                 year, month = parsed
                 last_day = monthrange(year, month)[1]
                 due = date(year, month, min(dia_vencimento, last_day))
             else:
-                # UX: Por padrão, mostra a fatura com o vencimento mais próximo (hoje ou no futuro).
-                # O cálculo original fatura_vencimento(hoje) mostra onde caem compras de HOJE (ex: Julho).
                 hoje = date.today()
                 last_day_now = monthrange(hoje.year, hoje.month)[1]
                 due_this_month = date(hoje.year, hoje.month, min(dia_vencimento, last_day_now))
@@ -579,7 +581,6 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 if hoje <= due_this_month:
                     due = due_this_month
                 else:
-                    # Se o vencimento deste mês já passou, busca o próximo ciclo (ex: Junho)
                     due = fatura_vencimento(hoje.replace(day=1), dia_corte, dia_vencimento)
 
             gastos = db.expenses_by_fatura(user_phone, due.isoformat(), dia_corte)
@@ -587,28 +588,36 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             if not gastos:
                 return {"mensagem": f"📅 A sua *{fatura_label(due)}* não possui gastos registrados até o momento."}
 
-            linhas = []
-            total_fatura = 0.0
-            for g in gastos:
-                valor = float(g["amount"])
-                total_fatura += valor
+            # Paginação: 15 itens por página para caber no limite de 1600 chars
+            PAGE_SIZE = 15
+            total_itens = len(gastos)
+            total_paginas = (total_itens + PAGE_SIZE - 1) // PAGE_SIZE
+            inicio = (pagina - 1) * PAGE_SIZE
+            fim = inicio + PAGE_SIZE
+            gastos_pagina = gastos[inicio:fim]
 
-                # Extrai a data para exibição (DD/MM)
+            linhas = []
+            total_fatura = sum(float(g["amount"]) for g in gastos)
+
+            for g in gastos_pagina:
+                valor = float(g["amount"])
                 dt_raw = g.get("purchase_date") or g.get("billing_date")
                 dt_display = f"{dt_raw[8:10]}/{dt_raw[5:7]} | " if dt_raw and len(dt_raw) >= 10 else ""
                 
                 desc_base = g['description']
                 parc_info = f"({g['installment_of']}/{g['installment_total']})" if g.get('installment_of') else None
-                
-                # Adiciona a parcela apenas se ela já não estiver contida na descrição (evita duplicidade)
                 desc_final = f"{desc_base} {parc_info}" if parc_info and parc_info not in desc_base else desc_base
                 
                 linhas.append(f" • {dt_display}{desc_final}: R$ {_fmt_moeda(valor)}")
 
             msg = f"💳 *{fatura_label(due).capitalize()}*\n"
             msg += f"📅 Vencimento: {due.strftime('%d/%m/%Y')}\n"
-            msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n\n"
-            msg += "🧾 *Lançamentos:*\n" + "\n".join(linhas)
+            msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n"
+            if total_paginas > 1:
+                msg += f"📄 Página {pagina}/{total_paginas}\n"
+            msg += f"\n🧾 *Lançamentos:*\n" + "\n".join(linhas)
+            if pagina < total_paginas:
+                msg += f"\n\n➡️ Digite *fatura pág {pagina + 1}* para ver mais."
 
             return {"tipo_resposta_estruturada": "consultar_fatura", "mensagem": msg, "total": round(total_fatura, 2)}
 
