@@ -96,7 +96,8 @@ class PluggyService:
             tx_resp.raise_for_status()
 
             # Log detalhado do JSON bruto
-            logger.info(f"JSON bruto da Pluggy: {tx_resp.text}")
+            print("JSON bruto da Pluggy:", tx_resp.text)            
+            #logger.info(f"JSON bruto da Pluggy: {tx_resp.text}")
 
             transactions = tx_resp.json().get("results", [])
             logger.info(f"Transações do mês vigente: {len(transactions)}")
