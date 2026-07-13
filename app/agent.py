@@ -76,6 +76,9 @@ _KEYWORD_TOOLS = {
     
    
     # --- FINANCEIRO & SALDO ---
+    "sincronizar": "sincronizar_banco",
+    "sync": "sincronizar_banco",
+
     "saldo": "consultar_saldo",
     "receitas": "listar_receitas",
     "fatura": "consultar_fatura",
@@ -177,6 +180,10 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     if tool_name == "direct_reply":
         return args["mensagem"]
     result = await tool_registry.execute(tool_name, args, user_phone)
+
+    if tool_name == "sincronizar_banco":
+        return result.get("mensagem", "❌ Não consegui sincronizar com a Pluggy.")
+    
     return _format_output(result, tool_name, user_phone)
 
 async def _classify(message: str, user_phone: str) -> dict | None:
