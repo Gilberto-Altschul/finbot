@@ -19,13 +19,17 @@ class PluggyService:
         }
 
     async def _process_transactions(self, user_phone: str, transactions: list[dict]) -> tuple[str, list[dict] | None]:
-        """Converte transações da Pluggy e insere em lote no banco."""
+        """Converte transações da Pluggy para o formato padrão e insere em lote no banco, com logs detalhados."""
         if not transactions:
+            logger.info("Nenhuma transação recebida da Pluggy.")
             return "✅ Sincronização concluída. Nenhuma nova transação encontrada.", None
 
         rows = []
         for tx in transactions:
+            logger.info(f"Transação recebida da Pluggy: {tx}")  # loga cada transação bruta
+
             if not tx.get("amount") or not tx.get("description"):
+                logger.warning(f"Transação descartada por falta de campos obrigatórios: {tx}")
                 continue
 
             raw_amount = float(tx["amount"])
@@ -39,8 +43,8 @@ class PluggyService:
                 "pluggy_transaction_id": tx["id"],
                 "transaction_type": tipo,
                 "payment_method": tx.get("paymentMethod", "debito").lower(),
-                "purchase_date": tx["date"][:10],
-                "billing_date": tx.get("creditCardDate", tx["date"])[:10],
+                "purchase_date": tx.get("date", "")[:10],
+                "billing_date": tx.get("creditCardDate", tx.get("date", ""))[:10],
             }
             rows.append(row)
 
@@ -89,8 +93,11 @@ class PluggyService:
                 params={"accountId": target_account_id, "dateFrom": primeiro_dia_mes},
                 timeout=30,
             )
-            logger.info(f"JSON bruto da Pluggy: {tx_resp.text}")
             tx_resp.raise_for_status()
+
+            # Log detalhado do JSON bruto
+            logger.info(f"JSON bruto da Pluggy: {tx_resp.text}")
+
             transactions = tx_resp.json().get("results", [])
             logger.info(f"Transações do mês vigente: {len(transactions)}")
 
