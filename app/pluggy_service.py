@@ -1,8 +1,8 @@
 import requests
 import json
 import logging
+from datetime import datetime, timedelta
 import app.database as db
-from datetime import datetime
 from app.config import get_settings
 import app.agent as agent  # Para usar a inferência de categoria
 
@@ -11,32 +11,56 @@ logger = logging.getLogger(__name__)
 class PluggyService:
     def __init__(self):
         settings = get_settings()
-        # Pilar 1: AUTH - Pega o Secret do seu .env
-        # Remove espaços e aspas acidentais que podem vir do .env
-        self.api_key = settings.pluggy_client_secret.strip().replace('"', '').replace("'", "") if settings.pluggy_client_secret else ""
         self.client_id = settings.pluggy_client_id
+        # Remove espaços e aspas acidentais que podem vir do .env
+        self.client_secret = settings.pluggy_client_secret.strip().replace('"', '').replace("'", "") if settings.pluggy_client_secret else ""
         self.base_url = "https://api.pluggy.ai"
-        self.headers = {
-            "accept": "application/json",
-            "x-api-key": self.api_key
-        }
 
-        if not self.api_key:
+        self._api_key = None
+        self._api_key_expires_at = None
+
+        if not self.client_secret:
             logger.error("PLUGGY_CLIENT_SECRET não encontrado nas configurações! Verifique seu arquivo .env")
-        else:
-            logger.info(f"PluggyService inicializado. Key carregada: {self.api_key[:4]}...{self.api_key[-4:]}")
+
+    def _get_api_key(self) -> str:
+        """
+        Autentica em /auth com clientId + clientSecret e retorna um apiKey válido.
+        Reaproveita o apiKey em cache enquanto não expirar (~2h de validade real).
+        """
+        now = datetime.now()
+        if self._api_key and self._api_key_expires_at and now < self._api_key_expires_at:
+            return self._api_key
+
+        url = f"{self.base_url}/auth"
+        payload = {"clientId": self.client_id, "clientSecret": self.client_secret}
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+        self._api_key = data["apiKey"]
+        self._api_key_expires_at = now + timedelta(minutes=110)  # margem de segurança
+        logger.info(f"Novo apiKey Pluggy obtido: {self._api_key[:4]}...{self._api_key[-4:]}")
+        return self._api_key
+
+    @property
+    def headers(self):
+        return {
+            "accept": "application/json",
+            "x-api-key": self._get_api_key(),
+        }
 
     def create_connect_token(self):
         """
         Gera um token temporário para abrir o widget da Pluggy e conectar um novo banco.
+        Esse endpoint aceita clientId/clientSecret direto no payload, sem precisar do apiKey.
         """
         url = f"{self.base_url}/connect_token"
         payload = {
             "clientId": self.client_id,
-            "clientSecret": self.api_key
+            "clientSecret": self.client_secret,
         }
         try:
-            response = requests.post(url, headers=self.headers, json=payload)
+            response = requests.post(url, json=payload)
             response.raise_for_status()
             return response.json().get("accessToken")
         except Exception as e:
@@ -68,12 +92,12 @@ class PluggyService:
         
         try:
             response = requests.get(url, headers=self.headers)
-            
+
             # Fallback se o trial estiver expirado (Erro 403)
             if response.status_code == 403:
                 error_detail = response.json() if response.ok is False and response.text else "Sem detalhes"
                 logger.error(f"Erro 403 na Pluggy (API_KEY_INVALID). Detalhes: {error_detail}")
-                
+
                 # Fallback automático para o arquivo local para não travar o desenvolvimento
                 logger.warning("Usando fallback: processando 'transacoes.json' local.")
                 return self.sync_from_file(user_phone, "transacoes.json")
@@ -111,13 +135,13 @@ class PluggyService:
             raw_amount = float(tx.get("amount", 0))
             amount = abs(raw_amount)
             tipo = "income" if raw_amount > 0 else "expense"
-            
+
             # Determina o payment_method com base no campo 'type' da Pluggy
             pluggy_tx_type = tx.get("type", "").lower()
             payment_method = "credito" if pluggy_tx_type == "credit" else "debito"
 
             data_iso = tx.get("date")
-            
+
             # Se o JSON for de Contas (Accounts) em vez de Transações, amount será 0
             if raw_amount == 0 and "balance" in tx:
                 logger.warning(f"Ignorando item de saldo da conta: {tx.get('name')}")
@@ -152,7 +176,7 @@ class PluggyService:
                 ignorados_duplicados += 1
 
         logger.info(f"Sincronização finalizada: {novos_gastos} gastos, {novas_receitas} receitas.")
-        
+
         if novos_gastos == 0 and novas_receitas == 0:
             resumo = "✅ Seu extrato está atualizado. Nenhuma transação nova detectada."
             if ignorados_duplicados > 0:
@@ -164,7 +188,7 @@ class PluggyService:
             resumo += f"• {novos_gastos} novos gastos registrados.\n"
         if novas_receitas > 0:
             resumo += f"• {novas_receitas} novas receitas registradas.\n"
-            
+
         return resumo
 
     def _get_mock_data(self):
