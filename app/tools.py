@@ -15,6 +15,7 @@ import app.database as db
 from app.billing import fatura_vencimento, fatura_label, parcelas
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
 from app.categorizer import categorizar_gasto_hibrido
+from app.pluggy_service import PluggyService
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,11 @@ _SESSAO_LISTAGEM = {}
 SCHEMAS: list[dict] = [
     {
         "name": "sincronizar_banco",
-        "description": "Busca transações automáticas via Open Finance (Pluggy).",
+        "description": "Busca transações bancárias automáticas via Open Finance (Pluggy). Use para 'sincronizar', 'atualizar extrato' ou 'buscar transações'.",
         "parameters": {
             "type": "object",
             "properties": {
-                "arquivo": {"type": "string"},
-                "account_id": {"type": "string"}
+                "account_id": {"type": "string", "description": "ID da conta específica para sincronizar. Se omitido, sincroniza a primeira encontrada."}
             }
         }
     },
@@ -222,6 +222,12 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
         return None
 
     match name:
+        case "sincronizar_banco":
+            pluggy = PluggyService()
+            mensagem, _ = await pluggy.sync_user_transactions(user_phone, args.get("account_id"))
+            # A função de ingestão já retorna a mensagem final formatada.
+            return {"mensagem": mensagem}
+
         case "listar_gastos_detalhados":
             mes_arg = args.get("mes")
             pagina = int(args.get("pagina", 1))
