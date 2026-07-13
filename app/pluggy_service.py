@@ -8,16 +8,6 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-
-class PluggyService:
-    def __init__(self):
-
-from app.config import get_settings
-import requests, logging
-
-logger = logging.getLogger(__name__)
-settings = get_settings()
-
 class PluggyService:
     def __init__(self):
         # 🔹 Faz a chamada ao endpoint de autenticação
@@ -29,6 +19,7 @@ class PluggyService:
             },
             timeout=30
         )
+
         auth_resp.raise_for_status()
         api_key = auth_resp.json()["apiKey"]
 
@@ -38,6 +29,42 @@ class PluggyService:
            "accept": "application/json"           
         }
 
+    async def sync_user_transactions(self, user_phone: str, account_id: str = None):
+        """
+        Busca transações da Pluggy e processa para salvar no banco.
+        """
+        try:
+            hoje = date.today()
+            inicio_mes = hoje.replace(day=1).isoformat()
+    
+            params = {
+                "accountId": account_id,
+                "fromDate": inicio_mes,   # 🔹 primeiro dia do mês corrente
+                "toDate": hoje.isoformat()  # 🔹 até hoje
+            } if account_id else {
+                "fromDate": inicio_mes,
+                "toDate": hoje.isoformat()
+            }
+    
+            tx_resp = requests.get(
+                f"{self.base_url}/v2/transactions",
+                headers=self.headers,
+                params=params,
+                timeout=30
+            )            tx_resp.raise_for_status()
+
+            # 🔹 Loga o JSON bruto no Railway
+            print("JSON bruto da Pluggy:", tx_resp.text)
+
+            data = tx_resp.json()
+            transactions = data.get("results", [])
+
+            resumo, rows = await self._process_transactions(user_phone, transactions)
+            return resumo, rows
+
+        except Exception as e:
+            logger.error(f"Erro na sincronização Pluggy: {e}", exc_info=True)
+            return f"❌ Falha na sincronização: {e}", None
 
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
