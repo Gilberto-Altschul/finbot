@@ -1,12 +1,10 @@
 # app/pluggy_service.py
 import logging
 import requests
-from datetime import date, timedelta
+from datetime import date
 
 import app.database as db
-import app.ingestion as ingestion
 from app.config import get_settings
-from app.ofx_schema import StandardTransaction
 
 logger = logging.getLogger(__name__)
 
@@ -21,29 +19,39 @@ class PluggyService:
         }
 
     async def _process_transactions(self, user_phone: str, transactions: list[dict]) -> tuple[str, list[dict] | None]:
-        """Converte transações da Pluggy para o formato padrão e envia para ingestão."""
+        """Converte transações da Pluggy e insere em lote no banco."""
         if not transactions:
             return "✅ Sincronização concluída. Nenhuma nova transação encontrada.", None
 
-        standard_txns = []
+        rows = []
         for tx in transactions:
-            # Ignora transações sem valor ou descrição
-            if not tx.get('amount') or not tx.get('description'):
+            if not tx.get("amount") or not tx.get("description"):
                 continue
 
-            standard_txns.append(StandardTransaction(
-                id=tx['id'],
-                date=tx['date'][:10], # Pega apenas YYYY-MM-DD
-                description=tx['description'],
-                amount=abs(float(tx['amount'])),
-                category="Outros", # A categorização ocorrerá na esteira de ingestão
-                subcategory="Geral",
-                type='income' if float(tx['amount']) > 0 else 'expense',
-                payment_method=tx.get('paymentMethod', 'debito').lower(),
-                billing_date=tx.get('creditCardDate', tx['date'])[:10],
-            ))
+            raw_amount = float(tx["amount"])
+            tipo = "income" if raw_amount > 0 else "expense"
 
-        return await ingestion.processar_ingestion_unificada(user_phone, standard_txns)
+            row = {
+                "user_phone": user_phone,
+                "amount": abs(raw_amount),
+                "category": "Outros",  # categorização virá depois
+                "description": tx["description"],
+                "pluggy_transaction_id": tx["id"],
+                "transaction_type": tipo,
+                "payment_method": tx.get("paymentMethod", "debito").lower(),
+                "purchase_date": tx["date"][:10],
+                "billing_date": tx.get("creditCardDate", tx["date"])[:10],
+            }
+            rows.append(row)
+
+        inseridos = db.inserir_gastos_em_lote(rows)
+        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
+
+        if inseridos == 0:
+            return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
+
+        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
+        return resumo, rows
 
     async def sync_user_transactions(self, user_phone: str, account_id: str | None = None) -> tuple[str, list[dict] | None]:
         """
@@ -72,6 +80,7 @@ class PluggyService:
             # Se não foi passado um account_id, usa a primeira conta encontrada
             target_account_id = account_id or accounts[0]['id']
 
+            # Primeiro dia do mês atual
             primeiro_dia_mes = date.today().replace(day=1).strftime('%Y-%m-%d')
 
             tx_resp = requests.get(
