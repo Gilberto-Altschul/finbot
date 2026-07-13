@@ -29,45 +29,42 @@ class PluggyService:
            "accept": "application/json"           
         }
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str = None):
-        """
-        Busca transações da Pluggy e processa para salvar no banco.
-        """
+    async def sync_user_transactions(self, user_phone: str, account_id: str = None, item_id: str = None):
         try:
             hoje = date.today()
             inicio_mes = hoje.replace(day=1).isoformat()
     
             params = {
-                "accountId": account_id,
-                "fromDate": inicio_mes,   # 🔹 primeiro dia do mês corrente
-                "toDate": hoje.isoformat()  # 🔹 até hoje
-            } if account_id else {
                 "fromDate": inicio_mes,
                 "toDate": hoje.isoformat()
             }
+    
+            # 🔹 É obrigatório passar accountId ou itemId
+            if account_id:
+                params["accountId"] = account_id
+            elif item_id:
+                params["itemId"] = item_id
     
             tx_resp = requests.get(
                 f"{self.base_url}/v2/transactions",
                 headers=self.headers,
                 params=params,
                 timeout=30
-            )            
-            
+            )
             tx_resp.raise_for_status()
-
-            # 🔹 Loga o JSON bruto no Railway
+    
             print("JSON bruto da Pluggy:", tx_resp.text)
-
+    
             data = tx_resp.json()
             transactions = data.get("results", [])
-
+    
             resumo, rows = await self._process_transactions(user_phone, transactions)
             return resumo, rows
-
+    
         except Exception as e:
             logger.error(f"Erro na sincronização Pluggy: {e}", exc_info=True)
             return f"❌ Falha na sincronização: {e}", None
-
+    
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
     ) -> tuple[str, list[dict] | None]:
