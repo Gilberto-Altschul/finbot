@@ -11,11 +11,31 @@ logger = logging.getLogger(__name__)
 
 class PluggyService:
     def __init__(self):
-        settings = get_settings()
+
+from app.config import get_settings
+import requests, logging
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+class PluggyService:
+    def __init__(self):
+        # 🔹 Faz a chamada ao endpoint de autenticação
+        auth_resp = requests.post(
+            "https://api.pluggy.ai/auth",
+            json={
+                "clientId": settings.pluggy_client_id,
+                "clientSecret": settings.pluggy_client_secret
+            },
+            timeout=30
+        )
+        auth_resp.raise_for_status()
+        api_key = auth_resp.json()["apiKey"]
+
+        # 🔹 Usa o apiKey retornado para todas as chamadas seguintes
         self.base_url = "https://api.pluggy.ai"
-        self.headers = {
-            "X-API-KEY": settings.pluggy_api_key,
-            "accept": "application/json"
+        self.headers = {"X-API-KEY": api_key,
+           "accept": "application/json"           
         }
 
 
