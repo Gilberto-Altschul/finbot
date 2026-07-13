@@ -89,6 +89,7 @@ class PluggyService:
                 params={"accountId": target_account_id, "dateFrom": primeiro_dia_mes},
                 timeout=30,
             )
+            logger.info(f"JSON bruto da Pluggy: {tx_resp.text}")
             tx_resp.raise_for_status()
             transactions = tx_resp.json().get("results", [])
             logger.info(f"Transações do mês vigente: {len(transactions)}")
