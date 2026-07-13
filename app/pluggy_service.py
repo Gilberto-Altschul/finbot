@@ -46,42 +46,48 @@ class PluggyService:
         return await ingestion.processar_ingestion_unificada(user_phone, standard_txns)
 
     async def sync_user_transactions(self, user_phone: str, account_id: str | None = None) -> tuple[str, list[dict] | None]:
-    """
-    Executa o fluxo completo: Busca Item -> Lista Contas -> Puxa Transações ->
-    Salva no Banco -> Analisa Comportamento.
-    """
-    item_id = db.get_user_item_id(user_phone)
-    if not item_id:
-        return "❌ Nenhuma conta bancária conectada. Conecte seu banco primeiro.", None
+        """
+        Executa o fluxo completo: Busca Item -> Lista Contas -> Puxa Transações ->
+        Salva no Banco -> Analisa Comportamento.
+        """
+        item_id = db.get_user_item_id(user_phone)
+        if not item_id:
+            return "❌ Nenhuma conta bancária conectada. Conecte seu banco primeiro.", None
 
-    logger.info(f"Sincronizando transações para {user_phone} (Item: {item_id})")
+        logger.info(f"Sincronizando transações para {user_phone} (Item: {item_id})")
 
-    try:
-        accounts_resp = requests.get(
-            f"{self.base_url}/accounts",
-            headers=self.headers,
-            params={"itemId": item_id},
-            timeout=20,
-        )
-        accounts_resp.raise_for_status()
-        accounts = accounts_resp.json().get("results", [])
+        try:
+            accounts_resp = requests.get(
+                f"{self.base_url}/accounts",
+                headers=self.headers,
+                params={"itemId": item_id},
+                timeout=20,
+            )
+            accounts_resp.raise_for_status()
+            accounts = accounts_resp.json().get("results", [])
 
-        if not accounts:
-            return "⚠️ Nenhuma conta encontrada para este item.", None
+            if not accounts:
+                return "⚠️ Nenhuma conta encontrada para este item.", None
 
-        # Por simplicidade, vamos focar na primeira conta encontrada, mas poderia iterar
-        target_account_id = account_id or accounts[0]['id']
-        date_from = (date.today() - timedelta(days=90)).strftime('%Y-%m-%d')
+            # Se não foi passado um account_id, usa a primeira conta encontrada
+            target_account_id = account_id or accounts[0]['id']
+            date_from = (date.today() - timedelta(days=90)).strftime('%Y-%m-%d')
 
-        tx_resp = requests.get(f"{self.base_url}/transactions", headers=self.headers, params={"accountId": target_account_id, "from": date_from}, timeout=30)
-        tx_resp.raise_for_status()
-        transactions = tx_resp.json().get("results", [])
+            tx_resp = requests.get(
+                f"{self.base_url}/v2/transactions",
+                headers=self.headers,
+                params={"accountId": target_account_id, "dateFrom": date_from},
+                timeout=30,
+            )
+            tx_resp.raise_for_status()
+            transactions = tx_resp.json().get("results", [])
 
-        return await self._process_transactions(user_phone, transactions)
+            logger.info(f"Total de transações retornadas: {len(transactions)}")
+            return await self._process_transactions(user_phone, transactions)
 
-    except requests.HTTPError as e:
-        logger.error(f"Erro HTTP ao sincronizar com a Pluggy: {e.response.text}")
-        return f"❌ Tive um problema de comunicação com seu banco (HTTP {e.response.status_code}). Tente de novo.", None
-    except Exception as e:
-        logger.error(f"Erro inesperado ao sincronizar Pluggy: {e}", exc_info=True)
-        return f"❌ Desculpe, um erro técnico inesperado ocorreu ao sincronizar.", None
+        except requests.HTTPError as e:
+            logger.error(f"Erro HTTP ao sincronizar com a Pluggy: {e.response.text}")
+            return f"❌ Tive um problema de comunicação com seu banco (HTTP {e.response.status_code}). Tente de novo.", None
+        except Exception as e:
+            logger.error(f"Erro inesperado ao sincronizar Pluggy: {e}", exc_info=True)
+            return f"❌ Desculpe, um erro técnico inesperado ocorreu ao sincronizar.", None
