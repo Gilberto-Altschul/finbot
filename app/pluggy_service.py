@@ -29,21 +29,19 @@ class PluggyService:
            "accept": "application/json"           
         }
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str = None, item_id: str = None):
+    async def sync_user_transactions(self, user_phone: str, account_id: str):
+        """
+        Busca transações da Pluggy para a conta informada e salva no banco.
+        """
         try:
             hoje = date.today()
             inicio_mes = hoje.replace(day=1).isoformat()
     
             params = {
-                "fromDate": inicio_mes,
-                "toDate": hoje.isoformat()
+                "accountId": account_id,   # 🔹 obrigatório
+                "fromDate": inicio_mes,    # 🔹 início do mês corrente
+                "toDate": hoje.isoformat() # 🔹 até hoje
             }
-    
-            # 🔹 É obrigatório passar accountId ou itemId
-            if account_id:
-                params["accountId"] = account_id
-            elif item_id:
-                params["itemId"] = item_id
     
             tx_resp = requests.get(
                 f"{self.base_url}/v2/transactions",
@@ -64,7 +62,7 @@ class PluggyService:
         except Exception as e:
             logger.error(f"Erro na sincronização Pluggy: {e}", exc_info=True)
             return f"❌ Falha na sincronização: {e}", None
-    
+        
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
     ) -> tuple[str, list[dict] | None]:
