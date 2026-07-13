@@ -39,8 +39,8 @@ def sync_user_transactions(self, user_phone: str, account_id: str | None = None)
                 tx_resp = requests.get(
                     f"{self.base_url}/v2/transactions",
                     headers=self.headers,
-                    params={"accountId": acc_id},
-                    timeout=15,
+                    params={"accountId": acc_id, "dateFrom": "2025-07-01"},
+                    timeout=15, 
                 )
 
                 if tx_resp.status_code != 200:
