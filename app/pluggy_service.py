@@ -7,7 +7,7 @@ import app.database as db
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-
+settings = get_settings()
 class PluggyService:
     def __init__(self):
         # 🔹 Faz a chamada ao endpoint de autenticação
