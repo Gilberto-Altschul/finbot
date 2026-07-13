@@ -1,29 +1,12 @@
-"""
-Sanity check rápido para validar a autenticação com o Pluggy.
-
-Uso:
-    python check_pluggy_auth.py
-
-Testa, em sequência:
-  1. POST /auth        -> confirma que clientId/clientSecret são válidos e retorna um apiKey
-  2. GET  /items/{id}  -> confirma que o DEFAULT_ITEM_ID existe e está acessível com esse apiKey
-  3. GET  /accounts    -> lista as contas do item, pra você conferir os accountIds disponíveis
-  4. GET  /transactions -> puxa 1 transação de cada conta, só pra validar o endpoint fim-a-fim
-
-Não grava nada no banco. É só leitura, pensado pra rodar isolado do resto do app.
-"""
-
 import sys
 import requests
-
+from datetime import date
 from app.config import get_settings
 
 BASE_URL = "https://api.pluggy.ai"
 
-
 def step(msg: str):
     print(f"\n{'=' * 60}\n{msg}\n{'=' * 60}")
-
 
 def main():
     settings = get_settings()
@@ -50,10 +33,6 @@ def main():
     except requests.exceptions.HTTPError as e:
         print(f"❌ Falha na autenticação: {e}")
         print(f"   Resposta: {resp.text}")
-        print("   Verifique se o PLUGGY_CLIENT_SECRET no .env está atualizado (não expirado/rotacionado).")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ Erro inesperado: {e}")
         sys.exit(1)
 
     headers = {"accept": "application/json", "x-api-key": api_key}
@@ -91,27 +70,31 @@ def main():
 
     # 4. Puxa 1 transação de cada conta
     if account_ids:
-        step("4. Testando /transactions em cada conta")
+        step("4. Testando /v2/transactions em cada conta")
         for acc_id in account_ids:
             try:
                 resp = requests.get(
-                    f"{BASE_URL}/transactions",
-                    headers=headers,
-                    params={"accountId": acc_id, "pageSize": 1},
-                    timeout=15,
+                       f"{BASE_URL}/v2/transactions", 
+                       headers=headers,
+                       params={"accountId": acc_id, "dateFrom": "2025-01-01"},
+                       timeout=15, 
                 )
-                resp.raise_for_status()
+                
+                if resp.status_code != 200:
+                    print(f"  ❌ Conta {acc_id}: erro {resp.status_code}")
+                    print(f"     Resposta: {resp.text}")
+                    continue
+
                 results = resp.json().get("results", [])
                 if results:
                     tx = results[0]
-                    print(f"  ✅ Conta {acc_id}: transação de exemplo -> {tx.get('description')} ({tx.get('amount')})")
+                    print(f"  ✅ Conta {acc_id}: transação -> {tx.get('description')} ({tx.get('amount')})")
                 else:
                     print(f"  ⚠️  Conta {acc_id}: nenhuma transação retornada.")
-            except requests.exceptions.HTTPError as e:
-                print(f"  ❌ Conta {acc_id}: falha -> {e}")
+            except Exception as e:
+                print(f"  ❌ Conta {acc_id}: erro inesperado -> {e}")
 
     print("\n✅ Sanity check concluído.")
-
 
 if __name__ == "__main__":
     main()
