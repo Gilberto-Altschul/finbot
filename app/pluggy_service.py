@@ -16,7 +16,7 @@ class PluggyService:
         settings = get_settings()
         self.base_url = "https://api.pluggy.ai"
         self.headers = {
-            "X-API-KEY": settings.gemini_api_key, # CORREÇÃO: Usar a chave correta da Pluggy
+            "X-API-KEY": settings.pluggy_api_key,
             "accept": "application/json"
         }
 
@@ -50,10 +50,6 @@ class PluggyService:
     Executa o fluxo completo: Busca Item -> Lista Contas -> Puxa Transações ->
     Salva no Banco -> Analisa Comportamento.
     """
-    settings = get_settings()
-    # A chave da API da Pluggy deve ser configurada no .env
-    self.headers["X-API-KEY"] = settings.pluggy_api_key
-    
     item_id = db.get_user_item_id(user_phone)
     if not item_id:
         return "❌ Nenhuma conta bancária conectada. Conecte seu banco primeiro.", None
