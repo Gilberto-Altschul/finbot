@@ -51,7 +51,9 @@ class PluggyService:
                 headers=self.headers,
                 params=params,
                 timeout=30
-            )            tx_resp.raise_for_status()
+            )            
+            
+            tx_resp.raise_for_status()
 
             # 🔹 Loga o JSON bruto no Railway
             print("JSON bruto da Pluggy:", tx_resp.text)
