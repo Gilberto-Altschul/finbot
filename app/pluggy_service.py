@@ -71,18 +71,19 @@ class PluggyService:
 
             # Se não foi passado um account_id, usa a primeira conta encontrada
             target_account_id = account_id or accounts[0]['id']
-            date_from = (date.today() - timedelta(days=90)).strftime('%Y-%m-%d')
+
+            primeiro_dia_mes = date.today().replace(day=1).strftime('%Y-%m-%d')
 
             tx_resp = requests.get(
                 f"{self.base_url}/v2/transactions",
                 headers=self.headers,
-                params={"accountId": target_account_id, "dateFrom": date_from},
+                params={"accountId": target_account_id, "dateFrom": primeiro_dia_mes},
                 timeout=30,
             )
             tx_resp.raise_for_status()
             transactions = tx_resp.json().get("results", [])
+            logger.info(f"Transações do mês vigente: {len(transactions)}")
 
-            logger.info(f"Total de transações retornadas: {len(transactions)}")
             return await self._process_transactions(user_phone, transactions)
 
         except requests.HTTPError as e:
