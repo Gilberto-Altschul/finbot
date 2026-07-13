@@ -193,6 +193,23 @@ async def _classify(message: str, user_phone: str) -> dict | None:
 
     # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
 
+    # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
+    if msg_norm.startswith("sincronizar"):
+        parts = msg_norm.split()
+        if len(parts) == 1:
+            return {
+                "tool": "direct_reply",
+                "args": {
+                    "mensagem": (
+                        "🔑 Para sincronizar, preciso saber qual conta usar.\n\n"
+                        "Digite: *sincronizar <account_id>*"
+                    )
+                }
+            }
+        else:
+            account_id = parts[1]
+            return {"tool": "sincronizar_banco", "args": {"account_id": account_id}}
+
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
         m_pag = re.search(r"pag (\d+)", msg_norm)
