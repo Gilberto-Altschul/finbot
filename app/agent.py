@@ -197,8 +197,6 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     msg_norm = _normalize(msg)
 
     # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
-
-    # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
     # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
     if msg_norm.startswith("sincronizar"):
         parts = msg_norm.split()
@@ -219,20 +217,25 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             return {"tool": "direct_reply", "args": {"mensagem": msg}}
 
         elif len(parts) == 2:
-            id_val = parts[1]
-
-            # Primeiro tenta buscar contas com esse id (se for itemId válido)
-            try:
-                contas = await pluggy_service.listar_contas(id_val)
-                if contas:
-                    msg = f"📂 *Contas do item {id_val}:*\n\n"
-                    for c in contas:
-                        msg += f"• {c['name']} ({c['type']}) — Account ID: {c['id']}\n"
-                    msg += "\nDigite: *sincronizar <account_id>* para escolher."
-                    return {"tool": "direct_reply", "args": {"mensagem": msg}}
-            except Exception:
-                # Se não for itemId válido, trata como accountId
-                return {"tool": "sincronizar_banco", "args": {"account_id": id_val}}
+                    id_val = parts[1]
+        
+                    # 1. Tenta listar contas (assumindo que seja um itemId)
+                    contas = await pluggy_service.listar_contas(id_val)
+                    
+                    if contas:
+                        msg = f"📂 *Contas do item {id_val}:*\n\n"
+                        for c in contas:
+                            msg += f"• {c['name']} ({c['type']}) — Account ID: {c['id']}\n"
+                        msg += "\nDigite: *sincronizar <account_id>* para escolher."
+                        return {"tool": "direct_reply", "args": {"mensagem": msg}}
+            
+                    # 2. Se não retornou contas, assume que é um Account ID e sincroniza
+                    # Aqui garantimos que id_val é uma string limpa
+                    else:
+                        return {
+                            "tool": "sincronizar_banco", 
+                            "args": {"account_id": str(id_val)}
+                        }
 
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
