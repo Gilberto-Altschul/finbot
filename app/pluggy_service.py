@@ -75,6 +75,9 @@ class PluggyService:
             "dateTo": date.today().isoformat()
         }
     
+        status = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers).json()
+        print(f"DEBUG: Status atual da conta: {status.get('syncStatus')}")    
+
         tx_resp = requests.get(
             f"{self.base_url}/v2/transactions",
             headers=self.headers,
@@ -82,9 +85,12 @@ class PluggyService:
             timeout=30
         )
         
-        tx_resp.raise_for_status() # Isso disparará erro se o token expirar ou for inválido
-        
         data = tx_resp.json()
+        if not data.get("results"):
+            print(f"DEBUG: Resposta vazia. Payload completo: {data}")
+        else:
+            print(f"DEBUG: Encontradas {len(data['results'])} transações.")        
+
         transactions = data.get("results", [])        
         resumo, rows = await self._process_transactions(user_phone, transactions)
         return resumo, rows
