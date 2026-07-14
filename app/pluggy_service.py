@@ -9,9 +9,12 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-API_KEY = os.getenv("PLUGGY_API_KEY")
+#API_KEY = os.getenv("PLUGGY_API_KEY")
 class PluggyService:
     def __init__(self):
+
+        self.API_KEY = os.getenv("PLUGGY_API_KEY")
+
         # 🔹 Faz a chamada ao endpoint de autenticação
         auth_resp = requests.post(
             "https://api.pluggy.ai/auth",
@@ -112,38 +115,24 @@ class PluggyService:
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
     
-    async def listar_contas(self, item_id: str):
-        resp = requests.get(
-            f"{self.base_url}/v2/accounts",
-            headers=self.headers,
-            params={"itemId": item_id},
-            timeout=30
-        )
+    async def listar_itens(self):
+        url = "https://api.pluggy.ai/v2/items"
+        headers = {"X-API-KEY": self.API_KEY}
+        resp = requests.get(url, headers=headers)
         resp.raise_for_status()
-        return resp.json().get("results", [])
-   
-    async def listar_itens(account_id: str):
-        url = "https://api.pluggy.ai/v2/transactions"
-        headers = {
-            "X-API-KEY": API_KEY,
-            "Content-Type": "application/json"
-        }
-    
-        params = {
-            "accountId": account_id,
-            # você pode incluir filtros opcionais:
-            # "from": "2024-01-01",
-            # "to": "2024-12-31",
-            # "pageSize": 50
-        }
-    
-        resp = requests.get(url, headers=headers, params=params)
-    
-        print("URL chamada:", resp.url)  # mostra a URL final com query string
-        print("Headers usados:", headers)
-        print("Status:", resp.status_code)
-        print("Resposta:", resp.text)
-    
-        resp.raise_for_status()
-        return resp.json()
+        return resp.json()["results"]
 
+    async def listar_contas(self, item_id: str):
+        url = f"https://api.pluggy.ai/v2/accounts?itemId={item_id}"
+        headers = {"X-API-KEY": self.API_KEY}
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["results"]
+
+    async def listar_transacoes(self, account_id: str):
+        url = f"https://api.pluggy.ai/v2/transactions?accountId={account_id}"
+        headers = {"X-API-KEY": self.API_KEY}
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["results"]
+    
