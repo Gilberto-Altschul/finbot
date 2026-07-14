@@ -21,6 +21,23 @@ class PluggyService:
         auth_resp.raise_for_status()
         api_key = auth_resp.json()["apiKey"]
 
+# --- INÍCIO DO LOG DE DEBUG PARA JWT ---
+        if api_key and '.' in api_key:
+            try:
+                parts = api_key.split('.')
+                if len(parts) >= 2:
+                    payload = parts[1]
+                    # Adiciona padding para base64 válido
+                    payload += '=' * (-len(payload) % 4)
+                    decoded_payload = json.loads(base64.urlsafe_b64decode(payload))
+                    
+                    logger.info("--- DEBUG JWT PLUGGY ---")
+                    logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
+                    logger.info("------------------------")
+            except Exception as e:
+                logger.error(f"Erro ao decodificar JWT para debug: {e}")
+        # --- FIM DO LOG DE DEBUG ---
+
         self.base_url = "https://api.pluggy.ai"
         self.headers = {
             "X-API-KEY": api_key,
