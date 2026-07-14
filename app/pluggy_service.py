@@ -45,7 +45,7 @@ class PluggyService:
             params = {
                 "accountId": account_id,   # 🔹 obrigatório
                 "dateFrom": inicio_mes,    # 🔹 início do mês corrente
-                "dateTo": hoje.isoformat(),  # 🔹 até hoje}
+            }
     
             tx_resp = requests.get(
                 f"{self.base_url}/v2/transactions",
