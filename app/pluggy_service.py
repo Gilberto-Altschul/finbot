@@ -120,13 +120,23 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-    async def listar_itens(self):
-        resp = requests.get(
-            f"{self.base_url}/v2/items",
-            headers=self.headers,
-            timeout=30
-        )
+
+    async def listar_itens(self, api_key):
+        url = "https://api.pluggy.ai/v2/transactions"
+        headers = {
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json"
+        }
+    
+        resp = requests.get(url, headers=headers)
+    
+        # Debug para verificar se está igual ao Insomnia
+        print("URL chamada:", url)
+        print("Headers usados:", headers)
+        print("Status:", resp.status_code)
+        print("Resposta:", resp.text)
+    
         resp.raise_for_status()
-        return resp.json().get("results", [])
+        return resp.json()
 
 
