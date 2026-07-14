@@ -52,7 +52,7 @@ class PluggyService:
 
         params = {
             "accountId": account_id,
-             "dateFrom": inicio_mes,
+            "dateFrom": inicio_mes,
             "dateTo": hoje.isoformat()
         }
 
