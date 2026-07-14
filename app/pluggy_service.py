@@ -9,6 +9,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+API_KEY = os.getenv("PLUGGY_API_KEY")
 class PluggyService:
     def __init__(self):
         # 🔹 Faz a chamada ao endpoint de autenticação
@@ -120,9 +121,7 @@ class PluggyService:
         )
         resp.raise_for_status()
         return resp.json().get("results", [])
-
-    API_KEY = os.getenv("PLUGGY_API_KEY")
-    
+   
     async def listar_itens(account_id: str):
         url = "https://api.pluggy.ai/v2/transactions"
         headers = {
