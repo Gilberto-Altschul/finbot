@@ -52,9 +52,10 @@ class PluggyService:
 
         params = {
             "accountId": account_id,
-            "dateFrom": inicio_mes
+            "pageSize": 50}
+#            "dateFrom": inicio_mes
 #            "dateTo": hoje.isoformat()
-        }
+#       }
 
         tx_resp = requests.get(
             f"{self.base_url}/v2/transactions",
