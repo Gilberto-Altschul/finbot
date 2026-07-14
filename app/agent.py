@@ -199,45 +199,40 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
 
     # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
+    # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
     if msg_norm.startswith("sincronizar"):
         parts = msg_norm.split()
         if len(parts) == 1:
-            # Nenhum accountId → listar itens primeiro
+            # Nenhum ID → listar itens primeiro
             itens = await pluggy_service.listar_itens()
             if not itens:
                 return {
                     "tool": "direct_reply",
                     "args": {"mensagem": "❌ Não encontrei nenhum item vinculado ao seu Open Finance."}
                 }
-    
+
             msg = "📂 *Itens disponíveis:*\n\n"
             for it in itens:
                 msg += f"• {it['institution']['name']} — Item ID: {it['id']}\n"
-    
+
             msg += "\nDigite: *sincronizar <item_id>* para ver as contas desse item."
             return {"tool": "direct_reply", "args": {"mensagem": msg}}
-    
-        elif len(parts) == 2 and re.match(r"^[0-9a-f-]+$", parts[1]):
-            # Usuário informou um itemId → listar contas
-            item_id = parts[1]
-            contas = await pluggy_service.listar_contas(item_id)
-            if not contas:
-                return {
-                    "tool": "direct_reply",
-                    "args": {"mensagem": f"❌ Não encontrei contas para o item {item_id}."}
-                }
-    
-            msg = f"📂 *Contas do item {item_id}:*\n\n"
-            for c in contas:
-                msg += f"• {c['name']} ({c['type']}) — Account ID: {c['id']}\n"
-    
-            msg += "\nDigite: *sincronizar <account_id>* para escolher."
-            return {"tool": "direct_reply", "args": {"mensagem": msg}}
-    
-        else:
-            # Usuário informou um accountId → sincronizar direto
-            account_id = parts[1]
-            return {"tool": "sincronizar_banco", "args": {"account_id": account_id}}
+
+        elif len(parts) == 2:
+            id_val = parts[1]
+
+            # Primeiro tenta buscar contas com esse id (se for itemId válido)
+            try:
+                contas = await pluggy_service.listar_contas(id_val)
+                if contas:
+                    msg = f"📂 *Contas do item {id_val}:*\n\n"
+                    for c in contas:
+                        msg += f"• {c['name']} ({c['type']}) — Account ID: {c['id']}\n"
+                    msg += "\nDigite: *sincronizar <account_id>* para escolher."
+                    return {"tool": "direct_reply", "args": {"mensagem": msg}}
+            except Exception:
+                # Se não for itemId válido, trata como accountId
+                return {"tool": "sincronizar_banco", "args": {"account_id": id_val}}
 
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
