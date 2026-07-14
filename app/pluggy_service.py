@@ -70,18 +70,26 @@ class PluggyService:
         # O método de autenticação (Auth) acontece no __init__ (primeira chamada)
         # Aqui fazemos a segunda chamada (Transactions)
 
-        url = f"{self.base_url}/v2/transactions"
         params = {
             "accountId": "8eb1ed47-ccd8-4018-8da3-63f1369aeb86",
             "dateFrom": "2026-07-01",
             "dateTo": "2026-07-14"
         }
-        print(f"DEBUG: Enviando GET para {url} com params {params}")
         
-        tx_resp = requests.get(url, headers=self.headers, params=params)
-        print(f"DEBUG: Status: {tx_resp.status_code}")
-        print(f"DEBUG: JSON retornado: {tx_resp.json()}")        
-
+        print(f"DEBUG: Enviando headers: {self.headers}")
+        print(f"DEBUG: Enviando params: {params}")
+        
+        tx_resp = requests.get(
+            f"{self.base_url}/v2/transactions",
+            headers=self.headers,
+            params=params,
+            timeout=30
+        )
+        
+        # LOG DE DIAGNÓSTICO
+        print(f"DEBUG: URL Final montada: {tx_resp.url}")
+        print(f"DEBUG: Resposta Status: {tx_resp.status_code}")
+        print(f"DEBUG: Resposta JSON: {tx_resp.json()}")
 #        params = {
 #            "accountId": account_id,
 #           "dateFrom": "2026-07-01", # Ajuste conforme necessário
