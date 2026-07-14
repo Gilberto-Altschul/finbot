@@ -1,5 +1,6 @@
 # app/pluggy_service.py
 import logging
+import os
 import requests
 from datetime import date
 
@@ -120,11 +121,11 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-
-    async def listar_itens(self, api_key):
+    API_KEY = os.getenv("PLUGGY_API_KEY")
+    async def listar_itens(self):
         url = "https://api.pluggy.ai/v2/transactions"
         headers = {
-            "X-API-KEY": api_key,
+            "X-API-KEY": self.API_KEY,
             "Content-Type": "application/json"
         }
     
