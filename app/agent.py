@@ -197,8 +197,8 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     if msg_norm.startswith("sincronizar"):
         parts = msg_norm.split()
         if len(parts) == 1:
-            # Nenhum accountId → listar contas
-            contas = pluggy_service.listar_contas(settings.default_item_id)
+            # Nenhum accountId informado → listar contas do item padrão
+            contas = await pluggy_service.listar_contas(settings.default_item_id)
             if not contas:
                 return {
                     "tool": "direct_reply",
@@ -207,13 +207,17 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     
             msg = "📂 *Contas disponíveis para sincronizar:*\n\n"
             for c in contas:
-                msg += f"• {c['name']} — ID: {c['id']}\n"
+                nome = c.get("name", "Conta")
+                cid = c.get("id")
+                tipo = c.get("type", "")
+                msg += f"• {nome} ({tipo}) — ID: {cid}\n"
     
             msg += "\nDigite: *sincronizar <account_id>* para escolher."
             return {"tool": "direct_reply", "args": {"mensagem": msg}}
         else:
             account_id = parts[1]
             return {"tool": "sincronizar_banco", "args": {"account_id": account_id}}
+
 
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
