@@ -1,4 +1,5 @@
 import requests
+import hashlib
 import json   
 import base64  
 import logging
@@ -13,6 +14,10 @@ settings = get_settings()
 class PluggyService:
     def __init__(self):
         # 🔹 Autenticação via clientId/clientSecret
+
+        logger.info(f"[DEBUG] clientId len={len(settings.pluggy_client_id)} sha256={hashlib.sha256(settings.pluggy_client_id.encode()).hexdigest()}")
+        logger.info(f"[DEBUG] clientSecret len={len(settings.pluggy_client_secret)} sha256={hashlib.sha256(settings.pluggy_client_secret.encode()).hexdigest()}")
+        
         auth_resp = requests.post(
             "https://api.pluggy.ai/auth",
             json={
@@ -38,7 +43,7 @@ class PluggyService:
                     logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
                     logger.info("------------------------")
                     logger.info(f"Pluggy api_key completo: {api_key}")
-                    
+
             except Exception as e:
                 logger.error(f"Erro ao decodificar JWT para debug: {e}")
         # --- FIM DO LOG DE DEBUG ---
