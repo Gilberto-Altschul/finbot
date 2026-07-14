@@ -2,7 +2,8 @@ import requests
 import json   
 import base64  
 import logging
-from datetime import date, time
+import time
+from datetime import date
 import app.database as db
 from app.config import get_settings
 
