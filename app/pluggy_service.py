@@ -69,32 +69,44 @@ class PluggyService:
     async def sync_user_transactions(self, user_phone: str, account_id: str):
         # O método de autenticação (Auth) acontece no __init__ (primeira chamada)
         # Aqui fazemos a segunda chamada (Transactions)
-        
+
+        url = f"{self.base_url}/v2/transactions"
         params = {
-            "accountId": account_id,
-            "dateFrom": "2026-07-01", # Ajuste conforme necessário
-            "dateTo": date.today().isoformat()
+            "accountId": "8eb1ed47-ccd8-4018-8da3-63f1369aeb86",
+            "dateFrom": "2026-07-01",
+            "dateTo": "2026-07-14"
         }
+        print(f"DEBUG: Enviando GET para {url} com params {params}")
+        
+        tx_resp = requests.get(url, headers=self.headers, params=params)
+        print(f"DEBUG: Status: {tx_resp.status_code}")
+        print(f"DEBUG: JSON retornado: {tx_resp.json()}")        
+
+#        params = {
+#            "accountId": account_id,
+#           "dateFrom": "2026-07-01", # Ajuste conforme necessário
+#           "dateTo": date.today().isoformat()
+#      }
     
-        status = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers).json()
-        print(f"DEBUG: Status atual da conta: {status.get('syncStatus')}")    
+#       status = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers).json()
+#        print(f"DEBUG: Status atual da conta: {status.get('syncStatus')}")    
 
-        print("DEBUG: Aguardando 15 segundos para sincronização do Pluggy...")
-        time.sleep(15)
+#        print("DEBUG: Aguardando 15 segundos para sincronização do Pluggy...")
+#        time.sleep(15)
 
-        tx_resp = requests.get(
-            f"{self.base_url}/v2/transactions",
-            headers=self.headers,
-            params=params,
-            timeout=30
-        )
+#        tx_resp = requests.get(
+#           f"{self.base_url}/v2/transactions",
+#           headers=self.headers,
+#           params=params,
+#            timeout=30
+#        )
         
         data = tx_resp.json()
 
-        # LOG COMPLETO PARA DIAGNÓSTICO 
-        print(f"DEBUG TOTAL: Status Code: {tx_resp.status_code}")
-        print(f"DEBUG TOTAL: Dados brutos recebidos: {data}")
-        print(f"DEBUG: URL chamada: {tx_resp.url}")
+#        # LOG COMPLETO PARA DIAGNÓSTICO 
+#        print(f"DEBUG TOTAL: Status Code: {tx_resp.status_code}")
+#        print(f"DEBUG TOTAL: Dados brutos recebidos: {data}")
+#        print(f"DEBUG: URL chamada: {tx_resp.url}")
 
 
         if not data.get("results"):
