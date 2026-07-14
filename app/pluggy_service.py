@@ -94,6 +94,8 @@ class PluggyService:
         # LOG COMPLETO PARA DIAGNÓSTICO 
         print(f"DEBUG TOTAL: Status Code: {tx_resp.status_code}")
         print(f"DEBUG TOTAL: Dados brutos recebidos: {data}")
+        print(f"DEBUG: URL chamada: {tx_resp.url}")
+
 
         if not data.get("results"):
             print(f"DEBUG: Resposta vazia. Payload completo: {data}")
