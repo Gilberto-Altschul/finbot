@@ -2,7 +2,7 @@ import requests
 import json   
 import base64  
 import logging
-from datetime import date
+from datetime import date, time
 import app.database as db
 from app.config import get_settings
 
@@ -77,6 +77,9 @@ class PluggyService:
     
         status = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers).json()
         print(f"DEBUG: Status atual da conta: {status.get('syncStatus')}")    
+
+        print("DEBUG: Aguardando 15 segundos para sincronização do Pluggy...")
+        time.sleep(15)
 
         tx_resp = requests.get(
             f"{self.base_url}/v2/transactions",
