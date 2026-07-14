@@ -223,10 +223,24 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
     match name:
         case "sincronizar_banco":
-            pluggy = PluggyService()
-            mensagem, _ = await pluggy.sync_user_transactions(user_phone, args.get("account_id"))
-            # A função de ingestão já retorna a mensagem final formatada.
-            return {"mensagem": mensagem}
+                    account_id = args.get("account_id")
+                    
+                    # Validação: Se não enviaram o ID, interrompe aqui
+                    if not account_id:
+                        return {"mensagem": "❌ Você precisa informar o ID da conta. Ex: `sincronizar 8eb1ed...`"}
+        
+                    # Log para debug
+                    logger.info(f"Executando sync direto para a conta: {account_id}")
+        
+                    pluggy = PluggyService()
+                    try:
+                        # O segredo: chamar o serviço de transações diretamente, 
+                        # ignorando qualquer lógica de listagem de itens.
+                        mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id)
+                        return {"mensagem": mensagem}
+                    except Exception as e:
+                        logger.error(f"Erro na sincronização: {e}")
+                        return {"mensagem": "❌ Falha ao sincronizar. Verifique se o ID está correto."}
 
         case "listar_gastos_detalhados":
             mes_arg = args.get("mes")
