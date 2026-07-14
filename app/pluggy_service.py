@@ -71,25 +71,24 @@ class PluggyService:
         # Aqui fazemos a segunda chamada (Transactions)
 
         params = {
-            "accountId": "8eb1ed47-ccd8-4018-8da3-63f1369aeb86",
-            "dateFrom": "2026-07-01",
-            "dateTo": "2026-07-14"
-        }
-        
-        print(f"DEBUG: Enviando headers: {self.headers}")
-        print(f"DEBUG: Enviando params: {params}")
-        
+                    "accountId": "8eb1ed47-ccd8-4018-8da3-63f1369aeb86",
+                    "dateFrom": "2026-07-01",
+                    "dateTo": "2026-07-14"
+                }
+                
         tx_resp = requests.get(
-            f"{self.base_url}/v2/transactions",
-            headers=self.headers,
-            params=params,
-            timeout=30
-        )
+                f"{self.base_url}/v2/transactions",
+                headers=self.headers,
+                params=params,
+                timeout=30
+        )                
+        # LOGS DE DIAGNÓSTICO (O que o Python realmente recebeu?)
+        print(f"DEBUG: Status Code: {tx_resp.status_code}")
+        print(f"DEBUG: Texto da Resposta: {tx_resp.text[:500]}") # Imprime os primeiros 500 caracteres
+                
+        tx_resp.raise_for_status()
+
         
-        # LOG DE DIAGNÓSTICO
-        print(f"DEBUG: URL Final montada: {tx_resp.url}")
-        print(f"DEBUG: Resposta Status: {tx_resp.status_code}")
-        print(f"DEBUG: Resposta JSON: {tx_resp.json()}")
 #        params = {
 #            "accountId": account_id,
 #           "dateFrom": "2026-07-01", # Ajuste conforme necessário
@@ -122,7 +121,8 @@ class PluggyService:
         else:
             print(f"DEBUG: Encontradas {len(data['results'])} transações.")        
 
-        transactions = data.get("results", [])        
+        transactions = data.get("results", []) 
+        print(f"DEBUG: Quantidade de transações encontradas: {len(transactions)}")               
         resumo, rows = await self._process_transactions(user_phone, transactions)
         return resumo, rows
 
