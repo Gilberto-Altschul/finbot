@@ -120,3 +120,13 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
+    async def listar_itens(self):
+        resp = requests.get(
+            f"{self.base_url}/v2/items",
+            headers=self.headers,
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+
