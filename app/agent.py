@@ -197,15 +197,20 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     if msg_norm.startswith("sincronizar"):
         parts = msg_norm.split()
         if len(parts) == 1:
-            return {
-                "tool": "direct_reply",
-                "args": {
-                    "mensagem": (
-                        "🔑 Para sincronizar, preciso saber qual conta usar.\n\n"
-                        "Digite: *sincronizar <account_id>*"
-                    )
+            # Nenhum accountId → listar contas
+            contas = pluggy_service.listar_contas(settings.default_item_id)
+            if not contas:
+                return {
+                    "tool": "direct_reply",
+                    "args": {"mensagem": "❌ Não encontrei contas vinculadas ao seu item no Open Finance."}
                 }
-            }
+    
+            msg = "📂 *Contas disponíveis para sincronizar:*\n\n"
+            for c in contas:
+                msg += f"• {c['name']} — ID: {c['id']}\n"
+    
+            msg += "\nDigite: *sincronizar <account_id>* para escolher."
+            return {"tool": "direct_reply", "args": {"mensagem": msg}}
         else:
             account_id = parts[1]
             return {"tool": "sincronizar_banco", "args": {"account_id": account_id}}
