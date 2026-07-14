@@ -1,5 +1,6 @@
 import requests
-import json      
+import json   
+import base64  
 import logging
 from datetime import date
 import app.database as db
