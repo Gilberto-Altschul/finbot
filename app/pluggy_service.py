@@ -122,22 +122,29 @@ class PluggyService:
         return resp.json().get("results", [])
 
     API_KEY = os.getenv("PLUGGY_API_KEY")
-    async def listar_itens(self):
+    
+    async def listar_itens(account_id: str):
         url = "https://api.pluggy.ai/v2/transactions"
         headers = {
-            "X-API-KEY": self.API_KEY,
+            "X-API-KEY": API_KEY,
             "Content-Type": "application/json"
         }
     
-        resp = requests.get(url, headers=headers)
+        params = {
+            "accountId": account_id,
+            # você pode incluir filtros opcionais:
+            # "from": "2024-01-01",
+            # "to": "2024-12-31",
+            # "pageSize": 50
+        }
     
-        # Debug para verificar se está igual ao Insomnia
-        print("URL chamada:", url)
+        resp = requests.get(url, headers=headers, params=params)
+    
+        print("URL chamada:", resp.url)  # mostra a URL final com query string
         print("Headers usados:", headers)
         print("Status:", resp.status_code)
         print("Resposta:", resp.text)
     
         resp.raise_for_status()
         return resp.json()
-
 
