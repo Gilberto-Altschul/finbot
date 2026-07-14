@@ -66,7 +66,7 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-async def verificar_status_sincronizacao(self, account_id: str):
+    async def verificar_status_sincronizacao(self, account_id: str):
         """Consulta o Pluggy para saber se a conta terminou de processar."""
         response = requests.get(
             f"{self.base_url}/accounts/{account_id}", 
@@ -75,7 +75,7 @@ async def verificar_status_sincronizacao(self, account_id: str):
         data = response.json()
         return data.get("syncStatus")
 
-async def sync_user_transactions(self, user_phone: str, account_id: str):
+    async def sync_user_transactions(self, user_phone: str, account_id: str):
         # O método de autenticação (Auth) acontece no __init__ (primeira chamada)
         # Aqui fazemos a segunda chamada (Transactions)
         status = await self.verificar_status_sincronizacao(account_id)
