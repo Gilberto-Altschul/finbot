@@ -116,12 +116,14 @@ class PluggyService:
         return resumo, rows
     
     async def listar_itens(self):
-        url = "https://api.pluggy.ai/v2/items"
-        headers = {"X-API-KEY": self.API_KEY}
-        resp = requests.get(url, headers=headers)
+        resp = requests.get(
+            f"{self.base_url}/v2/items",
+            headers=self.headers,
+            timeout=30
+        )
         resp.raise_for_status()
-        return resp.json()["results"]
-
+        return resp.json().get("results", [])
+    
     async def listar_contas(self, item_id: str):
         url = f"https://api.pluggy.ai/v2/accounts?itemId={item_id}"
         headers = {"X-API-KEY": self.API_KEY}
