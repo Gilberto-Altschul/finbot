@@ -52,8 +52,8 @@ class PluggyService:
 
         params = {
             "accountId": account_id,
-            "dateFrom": inicio_mes,
-            "dateTo": hoje.isoformat()
+            "dateFrom": inicio_mes
+#            "dateTo": hoje.isoformat()
         }
 
         tx_resp = requests.get(
