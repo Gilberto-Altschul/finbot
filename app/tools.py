@@ -3,7 +3,8 @@
 # Recursos Executáveis do FinBot — Versão Unificada e Homologada em Produção
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
-
+import json      
+import base64   
 import re
 import logging
 import unicodedata

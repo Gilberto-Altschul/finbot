@@ -64,30 +64,26 @@ class PluggyService:
         return resp.json().get("results", [])
 
     async def sync_user_transactions(self, user_phone: str, account_id: str):
-        hoje = date.today()
-        inicio_mes = hoje.replace(day=1).isoformat()
-
+        # O método de autenticação (Auth) acontece no __init__ (primeira chamada)
+        # Aqui fazemos a segunda chamada (Transactions)
+        
         params = {
             "accountId": account_id,
-            "dateFrom": inicio_mes,
-            "dateTo": hoje.isoformat()
+            "dateFrom": "2026-07-01", # Ajuste conforme necessário
+            "dateTo": date.today().isoformat()
         }
-
+    
         tx_resp = requests.get(
             f"{self.base_url}/v2/transactions",
             headers=self.headers,
             params=params,
             timeout=30
         )
-
-        logger.info(f"Pluggy request URL: {tx_resp.url}")  # <-- mostra a URL final já montada, com querystring
-        logger.info(f"Pluggy response status: {tx_resp.status_code}")
-        logger.info(f"Pluggy response body: {tx_resp.text[:2000]}")  # cuidado com PII em produção, mas ok pra debu
         
-        tx_resp.raise_for_status()
-
+        tx_resp.raise_for_status() # Isso disparará erro se o token expirar ou for inválido
+        
         data = tx_resp.json()
-        transactions = data.get("results", [])
+        transactions = data.get("results", [])        
         resumo, rows = await self._process_transactions(user_phone, transactions)
         return resumo, rows
 

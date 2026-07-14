@@ -218,25 +218,12 @@ async def _classify(message: str, user_phone: str) -> dict | None:
 
         elif len(parts) == 2:
                     id_val = parts[1]
-        
-                    # 1. Tenta listar contas (assumindo que seja um itemId)
-                    contas = await pluggy_service.listar_contas(id_val)
                     
-                    if contas:
-                        msg = f"📂 *Contas do item {id_val}:*\n\n"
-                        for c in contas:
-                            msg += f"• {c['name']} ({c['type']}) — Account ID: {c['id']}\n"
-                        msg += "\nDigite: *sincronizar <account_id>* para escolher."
-                        return {"tool": "direct_reply", "args": {"mensagem": msg}}
-            
-                    # 2. Se não retornou contas, assume que é um Account ID e sincroniza
-                    # Aqui garantimos que id_val é uma string limpa
-                    else:
-                        return {
-                            "tool": "sincronizar_banco", 
-                            "args": {"account_id": str(id_val)}
-                        }
-
+                    # ATALHO: Removemos qualquer 'await listar_contas' ou 'listar_itens'
+                    # Enviamos o ID diretamente para a ferramenta
+                    logger.info(f"Sincronização direta disparada para: {id_val}")
+                    return {"tool": "sincronizar_banco", "args": {"account_id": id_val}}
+    
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
         m_pag = re.search(r"pag (\d+)", msg_norm)
