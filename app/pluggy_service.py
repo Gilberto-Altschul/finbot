@@ -109,3 +109,14 @@ class PluggyService:
     
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
+    
+    async def listar_contas(self, item_id: str):
+        resp = requests.get(
+            f"{self.base_url}/v2/accounts",
+            headers=self.headers,
+            params={"itemId": item_id},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+

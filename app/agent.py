@@ -16,6 +16,11 @@ from app.categorizer import categorizar_gasto_hibrido
 import app.tools as tool_registry
 from app.llm import call_llm
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
+from app.pluggy_service import PluggyService
+from app.config import get_settings
+
+settings = get_settings()
+pluggy_service = PluggyService()
 
 logger = logging.getLogger(__name__)
 
