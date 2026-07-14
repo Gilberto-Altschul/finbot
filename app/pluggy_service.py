@@ -37,6 +37,8 @@ class PluggyService:
                     logger.info("--- DEBUG JWT PLUGGY ---")
                     logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
                     logger.info("------------------------")
+                    logger.info(f"Pluggy api_key completo: {api_key}")
+                    
             except Exception as e:
                 logger.error(f"Erro ao decodificar JWT para debug: {e}")
         # --- FIM DO LOG DE DEBUG ---
@@ -76,70 +78,33 @@ class PluggyService:
         return data.get("syncStatus")
 
     async def sync_user_transactions(self, user_phone: str, account_id: str):
-        # O método de autenticação (Auth) acontece no __init__ (primeira chamada)
-        # Aqui fazemos a segunda chamada (Transactions)
+        # 1. Verifica status
         status = await self.verificar_status_sincronizacao(account_id)
         
+        # Se não estiver UPDATED, retornamos um aviso ao usuário
         if status != "UPDATED":
-            # Retorna uma mensagem de aviso em vez de tentar buscar dados vazios
-            return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", []
-        
+            return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
+
+        # 2. SE ESTIVER UPDATED: Busca as transações
         params = {
-                    "accountId": "8eb1ed47-ccd8-4018-8da3-63f1369aeb86",
-                    "dateFrom": "2026-07-01",
-                    "dateTo": "2026-07-14"
-                }
-                
+            "accountId": account_id,
+            "dateFrom": "2026-07-01",
+            "dateTo": date.today().isoformat()
+        }
+        
         tx_resp = requests.get(
-                f"{self.base_url}/v2/transactions",
-                headers=self.headers,
-                params=params,
-                timeout=30
-        )                
-        # LOGS DE DIAGNÓSTICO (O que o Python realmente recebeu?)
-        print(f"DEBUG: Status Code: {tx_resp.status_code}")
-        print(f"DEBUG: Texto da Resposta: {tx_resp.text[:500]}") # Imprime os primeiros 500 caracteres
-                
+            f"{self.base_url}/v2/transactions",
+            headers=self.headers,
+            params=params,
+            timeout=30
+        )
         tx_resp.raise_for_status()
-
         
-#        params = {
-#            "accountId": account_id,
-#           "dateFrom": "2026-07-01", # Ajuste conforme necessário
-#           "dateTo": date.today().isoformat()
-#      }
+        transactions = tx_resp.json().get("results", [])
+        
+        # 3. Processa e insere no banco
+        return await self._process_transactions(user_phone, transactions)
     
-#       status = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers).json()
-#        print(f"DEBUG: Status atual da conta: {status.get('syncStatus')}")    
-
-#        print("DEBUG: Aguardando 15 segundos para sincronização do Pluggy...")
-#        time.sleep(15)
-
-#        tx_resp = requests.get(
-#           f"{self.base_url}/v2/transactions",
-#           headers=self.headers,
-#           params=params,
-#            timeout=30
-#        )
-        
-        data = tx_resp.json()
-
-#        # LOG COMPLETO PARA DIAGNÓSTICO 
-#        print(f"DEBUG TOTAL: Status Code: {tx_resp.status_code}")
-#        print(f"DEBUG TOTAL: Dados brutos recebidos: {data}")
-#        print(f"DEBUG: URL chamada: {tx_resp.url}")
-
-
-        if not data.get("results"):
-            print(f"DEBUG: Resposta vazia. Payload completo: {data}")
-        else:
-            print(f"DEBUG: Encontradas {len(data['results'])} transações.")        
-
-        transactions = data.get("results", []) 
-        print(f"DEBUG: Quantidade de transações encontradas: {len(transactions)}")               
-        resumo, rows = await self._process_transactions(user_phone, transactions)
-        return resumo, rows
-
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
     ) -> tuple[str, list[dict] | None]:
