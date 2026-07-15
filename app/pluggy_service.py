@@ -73,19 +73,22 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-    async def verificar_status_sincronizacao(self, account_id: str):
-        """Consulta o Pluggy para saber se a conta terminou de processar."""
+    async def verificar_status_sincronizacao(self, item_id: str):
+        """Consulta o Pluggy para saber se o item terminou de processar."""
         response = requests.get(
-            f"{self.base_url}/accounts/{account_id}", 
-            headers=self.headers
+            f"{self.base_url}/v2/items/{item_id}",
+            headers=self.headers,
+            timeout=30
         )
+        response.raise_for_status()
         data = response.json()
-        return data.get("syncStatus")
+        logger.info(f"Status do item {item_id}: {data.get('status')}")
+        return data.get("status")
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str):
-        # 1. Verifica status
-        status = await self.verificar_status_sincronizacao(account_id)
-        
+    async def sync_user_transactions(self, user_phone: str, account_id: str, item_id: str):
+        # 1. Verifica status do item (não da conta)
+        status = await self.verificar_status_sincronizacao(item_id)
+
         # Se não estiver UPDATED, retornamos um aviso ao usuário
         if status != "UPDATED":
             return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
