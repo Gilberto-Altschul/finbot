@@ -172,11 +172,11 @@ CATEGORIA_PLUGGY_PARA_PT = {
 
 class PluggyService:
     def __init__(self):
-        # 🔹 Autenticação via clientId/clientSecret
+        # Apenas inicialize as configurações aqui
+        pass
 
-        logger.info(f"[DEBUG] clientId len={len(settings.pluggy_client_id)} sha256={hashlib.sha256(settings.pluggy_client_id.encode()).hexdigest()}")
-        logger.info(f"[DEBUG] clientSecret len={len(settings.pluggy_client_secret)} sha256={hashlib.sha256(settings.pluggy_client_secret.encode()).hexdigest()}")
-
+    def _get_headers(self):
+        # Busca um token novo/válido sempre que precisar de headers
         auth_resp = requests.post(
             "https://api.pluggy.ai/auth",
             json={
@@ -187,38 +187,12 @@ class PluggyService:
         )
         auth_resp.raise_for_status()
         api_key = auth_resp.json()["apiKey"]
-
-# --- INÍCIO DO LOG DE DEBUG PARA JWT ---
-        if api_key and '.' in api_key:
-            try:
-                parts = api_key.split('.')
-                if len(parts) >= 2:
-                    payload = parts[1]
-                    # Adiciona padding para base64 válido
-                    payload += '=' * (-len(payload) % 4)
-                    decoded_payload = json.loads(base64.urlsafe_b64decode(payload))
-                    
-                    logger.info("--- DEBUG JWT PLUGGY ---")
-                    logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
-                    logger.info("------------------------")
-                    logger.info(f"Pluggy api_key completo: {api_key}")
-
-            except Exception as e:
-                logger.error(f"Erro ao decodificar JWT para debug: {e}")
-        # --- FIM DO LOG DE DEBUG ---
-
-        self.base_url = "https://api.pluggy.ai"
-        self.headers = {
-            "X-API-KEY": api_key,
-            "accept": "application/json"
-        }
+        return {"X-API-KEY": api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
-        resp = requests.get(
-            f"{self.base_url}/items",
-            headers=self.headers,
-            timeout=30
-        )
+        # Agora usamos headers dinâmicos
+        headers = self._get_headers()
+        resp = requests.get(f"{self.base_url}/items", headers=headers)
         resp.raise_for_status()
         return resp.json().get("results", [])
 
