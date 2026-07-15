@@ -7,6 +7,7 @@ import time
 from datetime import date
 import app.database as db
 from app.config import get_settings
+from app.categorizer import categorizar_gasto_hibrido
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -140,10 +141,22 @@ class PluggyService:
             raw_amount = float(tx["amount"])
             tipo = "income" if raw_amount > 0 else "expense"
 
+            # Categoria da Pluggy vem em inglês (ex: "Eating out") — mapeamos
+            # para a taxonomia em português do FinBot usando o mesmo classificador
+            # já usado no fluxo manual de categorização.
+            categoria_pluggy = tx.get("category")
+            try:
+                categoria_pt, _ = await categorizar_gasto_hibrido(user_phone, descricao)
+                if not categoria_pt or categoria_pt == "Perguntar":
+                    categoria_pt = "Outros"
+            except Exception as e:
+                logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
+                categoria_pt = "Outros"
+
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
-                "category": tx.get("category", "Outros"),
+                "category": categoria_pt,
                 "description": descricao,
                 "pluggy_transaction_id": tx.get("id"),
                 "transaction_type": tipo,
