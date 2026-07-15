@@ -172,11 +172,11 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None  # Token armazenado na memória
+        self._api_key = None  # Cache do token
 
-    def _ensure_authenticated(self):
-        """Garante que temos uma API KEY válida antes de realizar requisições."""
-        # Se não temos um token válido, buscamos um novo
+    def _get_valid_headers(self):
+        """Garante que temos um token válido antes de qualquer requisição."""
+        # Se não temos token (ou se ele falhou), buscamos um novo
         if not self._api_key:
             logger.info("Token ausente ou expirado. Renovando autenticação com Pluggy...")
             auth_resp = requests.post(
@@ -193,24 +193,25 @@ class PluggyService:
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
+        """Lista os itens com renovação automática de token."""
         try:
-            # 1. Tenta listar com o token atual
-            headers = self._ensure_authenticated()
+            # Tenta a requisição com o token atual
+            headers = self._get_valid_headers()
             resp = requests.get(f"{self.base_url}/items", headers=headers)
             
-            # 2. Se o token expirou durante a execução, limpamos e forçamos a renovação
+            # Se receber 401, o token na memória expirou; limpa e força renovação
             if resp.status_code == 401:
                 logger.warning("Token expirado durante a chamada. Renovando...")
                 self._api_key = None
-                headers = self._ensure_authenticated()
+                headers = self._get_valid_headers()
                 resp = requests.get(f"{self.base_url}/items", headers=headers)
             
             resp.raise_for_status()
             return resp.json().get("results", [])
         except Exception as e:
             logger.error(f"Erro fatal na listagem de itens: {e}")
-            raise e             
-           
+            raise e
+                   
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
