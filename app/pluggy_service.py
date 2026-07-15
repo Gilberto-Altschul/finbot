@@ -213,13 +213,27 @@ class PluggyService:
             "accept": "application/json"
         }
 
-    async def listar_itens(self):
+    def _obter_token(self):
+        url = "https://api.pluggy.ai/auth"
+        payload = {
+            "clientId": settings.pluggy_client_id,
+            "clientSecret": settings.pluggy_client_secret
+        }
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        return response.json()["accessToken"]
 
-        headers = self._get_headers()
+    # E na função listar_itens, use o token:
+    def listar_itens(self):
+        token = self._obter_token() # Obtém um token fresco a cada chamada
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
         response = requests.get(f"{self.base_url}/items", headers=headers)
-        response.raise_for_status() # Isso dispara o 401 se falhar
+        response.raise_for_status()
         return response.json()
-
+    
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
@@ -334,10 +348,10 @@ class PluggyService:
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
     
-    async def _get_headers(self):
-            async # Esta lógica garante que a API-KEY correta seja sempre enviada
-            async return {
-                async "CLIENT-ID": settings.pluggy_client_id,
-                async "CLIENT-SECRET": settings.pluggy_client_secret,
-                async "Content-Type": "application/json"
-            async }    
+    def _get_headers(self):
+            # Esta lógica garante que a API-KEY correta seja sempre enviada
+            return {
+                "CLIENT-ID": settings.pluggy_client_id,
+                "CLIENT-SECRET": settings.pluggy_client_secret,
+                "Content-Type": "application/json"
+            }
