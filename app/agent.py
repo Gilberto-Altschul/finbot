@@ -221,7 +221,9 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             item_id = partes[1]
             account_id = partes[2]
             # Chamada para o novo método que filtra
-            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)    
+            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)
+
+        return {"tool": "direct_reply", "args": {"mensagem": reply}}
             
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:

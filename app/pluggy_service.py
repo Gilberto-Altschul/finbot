@@ -213,36 +213,15 @@ class PluggyService:
             "accept": "application/json"
         }
 
-    def _obter_token(self):
-        url = "https://api.pluggy.ai/auth"
-        payload = {
-            "clientId": settings.pluggy_client_id,
-            "clientSecret": settings.pluggy_client_secret
-        }
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        return response.json()["accessToken"]
+    async def listar_itens(self):
+        resp = requests.get(
+            f"{self.base_url}/items",
+            headers=self.headers,
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
 
-    # E na função listar_itens, use o token:
-# No app/pluggy_service.py
-    
-    def listar_itens(self):
-        # Usamos as mesmas chaves que você configurou e que já sabemos que funcionam
-        headers = {
-            "CLIENT-ID": settings.pluggy_client_id,
-            "CLIENT-SECRET": settings.pluggy_client_secret,
-            "Content-Type": "application/json"
-        }
-        
-        # Fazemos a requisição direta, sem inventar novos processos de auth
-        response = requests.get("https://api.pluggy.ai/items", headers=headers)
-        
-        # Se falhar, vamos ver exatamente o que a Pluggy respondeu
-        if response.status_code != 200:
-            logger.error(f"Erro na listagem: {response.status_code} - {response.text}")
-            response.raise_for_status()
-            
-        return response.json()    
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
@@ -356,11 +335,3 @@ class PluggyService:
 
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
-    
-    def _get_headers(self):
-            # Esta lógica garante que a API-KEY correta seja sempre enviada
-            return {
-                "CLIENT-ID": settings.pluggy_client_id,
-                "CLIENT-SECRET": settings.pluggy_client_secret,
-                "Content-Type": "application/json"
-            }
