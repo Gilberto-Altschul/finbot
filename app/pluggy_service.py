@@ -172,13 +172,11 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None  # Cache do token
+        self._api_key = None 
 
-    def _get_valid_headers(self):
-        """Garante que temos um token válido antes de qualquer requisição."""
-        # Se não temos token (ou se ele falhou), buscamos um novo
+    def _get_headers(self):
+        """Autenticação sob demanda: renova o token sempre que necessário."""
         if not self._api_key:
-            logger.info("Token ausente ou expirado. Renovando autenticação com Pluggy...")
             auth_resp = requests.post(
                 f"{self.base_url}/auth",
                 json={
@@ -189,27 +187,22 @@ class PluggyService:
             )
             auth_resp.raise_for_status()
             self._api_key = auth_resp.json()["apiKey"]
-        
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
-        """Lista os itens com renovação automática de token."""
+        """Lista os itens garantindo autenticação."""
         try:
-            # Tenta a requisição com o token atual
-            headers = self._get_valid_headers()
-            resp = requests.get(f"{self.base_url}/items", headers=headers)
+            resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
             
-            # Se receber 401, o token na memória expirou; limpa e força renovação
+            # Se der 401, limpa o token e força uma renovação na próxima chamada
             if resp.status_code == 401:
-                logger.warning("Token expirado durante a chamada. Renovando...")
                 self._api_key = None
-                headers = self._get_valid_headers()
-                resp = requests.get(f"{self.base_url}/items", headers=headers)
+                resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
             
             resp.raise_for_status()
             return resp.json().get("results", [])
         except Exception as e:
-            logger.error(f"Erro fatal na listagem de itens: {e}")
+            logger.error(f"Erro fatal ao listar itens: {e}")
             raise e
                    
     async def listar_contas(self, item_id: str):
@@ -338,3 +331,22 @@ class PluggyService:
         transactions = data.get("results", [])
         
         return await self._process_transactions(user_phone, transactions), None
+
+
+    async def listar_todas_as_contas(self):
+            """Busca todos os itens e suas contas vinculadas."""
+            items = await self.listar_itens() # Usa o listar_itens que já tem auth dinâmica
+            contas_disponiveis = []
+            
+            for item in items:
+                # Busca as contas deste item (banco) usando os headers dinâmicos
+                resp = requests.get(f"{self.base_url}/accounts?itemId={item['id']}", headers=self._get_headers())
+                resp.raise_for_status()
+                contas = resp.json().get("results", [])
+                
+                for c in contas:
+                    contas_disponiveis.append({
+                        "account_id": c["id"],
+                        "nome_exibicao": f"{item['connector']['name']} - {c['name']}"
+                    })
+            return contas_disponiveis        

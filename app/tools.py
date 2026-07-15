@@ -192,6 +192,11 @@ SCHEMAS: list[dict] = [
         "name": "tendencia_semanal",
         "description": "Retorna o comparativo de gastos diários dos últimos 7 dias.",
         "parameters": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "listar_bancos",
+        "description": "Lista todas as contas bancárias conectadas para o usuário escolher. Use quando o usuário pedir para 'listar contas'.",
+        "parameters": {"type": "object", "properties": {}}
     }
 ]
 
@@ -735,6 +740,11 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             return {
                 "mensagem": f"📅 *Fechamento do Mês Passado*\n\n💰 Receitas: R$ {_fmt_moeda(resumo['receitas'])}\n💸 Gastos Totais: R$ {_fmt_moeda(resumo['gastos'])}\n📉 Saldo: R$ {_fmt_moeda(resumo['saldo'])}"
             }
+        
+        case "listar_bancos":
+            pluggy = PluggyService()
+            contas = await pluggy.listar_todas_as_contas() # (Crie este método no seu serviço)
+            return {"mensagem": formatar_lista_contas(contas)}
 
         case "consultar_saldo":
             saldo = db.monthly_income_total(user_phone) - db.monthly_total(user_phone)
@@ -1019,3 +1029,24 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!"}
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
+
+# Função auxiliar para formatar a mensagem
+def formatar_lista_contas(contas):
+    if not contas:
+        return "⚠️ Nenhuma conta bancária encontrada."
+    
+    msg = "🏦 *Escolha a conta para sincronizar:*\n\n"
+    for idx, c in enumerate(contas):
+        msg += f"{idx + 1}. {c['nome_exibicao']}\n"
+    msg += "\nDigite o número da conta para sincronizar."
+    return msg
+
+# Handler para ser chamado pelo agent.py
+async def handler_listar_bancos(args, user_phone):
+    pluggy = PluggyService()
+    contas = await pluggy.listar_todas_as_contas()
+    
+    # Armazena temporariamente na sessão para o agent.py saber o que o usuário escolheu
+    _SESSAO_LISTAGEM[user_phone] = contas
+    
+    return formatar_lista_contas(contas)
