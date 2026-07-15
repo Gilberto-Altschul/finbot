@@ -17,7 +17,7 @@ class PluggyService:
 
         logger.info(f"[DEBUG] clientId len={len(settings.pluggy_client_id)} sha256={hashlib.sha256(settings.pluggy_client_id.encode()).hexdigest()}")
         logger.info(f"[DEBUG] clientSecret len={len(settings.pluggy_client_secret)} sha256={hashlib.sha256(settings.pluggy_client_secret.encode()).hexdigest()}")
-        
+
         auth_resp = requests.post(
             "https://api.pluggy.ai/auth",
             json={
@@ -103,8 +103,11 @@ class PluggyService:
             params=params,
             timeout=30
         )
+        logger.info(f"Pluggy request URL: {tx_resp.url}")
+        logger.info(f"Pluggy response status: {tx_resp.status_code}")
+        logger.info(f"Pluggy response body: {tx_resp.text[:2000]}")
         tx_resp.raise_for_status()
-        
+       
         transactions = tx_resp.json().get("results", [])
         
         # 3. Processa e insere no banco
