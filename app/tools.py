@@ -946,3 +946,16 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!"}
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
+
+async def handler_sincronizar_banco(args, user_phone):
+    account_id = args.get("account_id")
+    pluggy = PluggyService()
+    
+    # Chama a nova lógica de listagem segura
+    resumo, erro = await pluggy.listar_transacoes_prontas(user_phone, account_id)
+    
+    if erro:
+        # O bot responderá ao usuário exatamente o que o pluggy_service retornou (o aviso de espera)
+        return erro
+        
+    return resumo

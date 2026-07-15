@@ -245,36 +245,30 @@ class PluggyService:
         logger.info(f"Status do item {item_id}: {data.get('status')}")
         return data.get("status")
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str, item_id: str):
-        # 1. Verifica status do item (não da conta)
-        status = await self.verificar_status_sincronizacao(item_id)
-
-        # Se não estiver UPDATED, retornamos um aviso ao usuário
-        if status != "UPDATED":
-            return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
-
-        # 2. SE ESTIVER UPDATED: Busca as transações
-        params = {
-            "accountId": account_id,
-            "dateFrom": "2026-07-01",
-            "dateTo": date.today().isoformat()
-        }
-        
-        tx_resp = requests.get(
-            f"{self.base_url}/v2/transactions",
-            headers=self.headers,
-            params=params,
-            timeout=30
-        )
-        logger.info(f"Pluggy request URL: {tx_resp.url}")
-        logger.info(f"Pluggy response status: {tx_resp.status_code}")
-        logger.info(f"Pluggy response body: {tx_resp.text[:2000]}")
-        tx_resp.raise_for_status()
-       
-        transactions = tx_resp.json().get("results", [])
-        
-        # 3. Processa e insere no banco
-        return await self._process_transactions(user_phone, transactions)
+    async def sync_user_transactions(self, user_phone: str, account_id: str):
+            # 1. Consulta o status real no Pluggy (O segredo está aqui)
+            resp = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers)
+            acc_data = resp.json()
+            status = acc_data.get("syncStatus")
+    
+            # 2. SE NÃO ESTIVER UPDATED, NÃO FAZEMOS NADA (Para o bot não dizer "Nenhuma transação")
+            if status != "UPDATED":
+                return f"⚠️ A sincronização ainda está em andamento (Status: {status}). O banco ainda não liberou os dados. Tente novamente em 1 minuto.", None
+    
+            # 3. SE ESTIVER UPDATED, BUSCA OS DADOS
+            params = {
+                "accountId": account_id, 
+                "dateFrom": "2026-07-01", 
+                "dateTo": date.today().isoformat()
+            }
+            
+            tx_resp = requests.get(f"{self.base_url}/v2/transactions", headers=self.headers, params=params)
+            tx_resp.raise_for_status()
+            
+            transactions = tx_resp.json().get("results", [])
+            
+            # 4. Processa e insere no banco (seu código atual)
+            return await self._process_transactions(user_phone, transactions), None
     
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
@@ -335,3 +329,22 @@ class PluggyService:
 
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
+    
+    async def listar_transacoes_prontas(self, user_phone: str, account_id: str):
+        # 1. Consulta o status real no Pluggy
+        resp = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers)
+        acc_data = resp.json()
+        status = acc_data.get("syncStatus")
+
+        # 2. Se não estiver pronto, retorna uma mensagem de aviso para o Agente
+        if status != "UPDATED":
+            return None, f"⚠️ A sincronização ainda está em andamento (Status: {status}). Por favor, tente novamente em 1 minuto."
+
+        # 3. Se estiver UPDATED, prossegue com a busca (seu código atual de busca)
+        params = {"accountId": account_id, "dateFrom": "2026-07-01", "dateTo": date.today().isoformat()}
+        tx_resp = requests.get(f"{self.base_url}/v2/transactions", headers=self.headers, params=params)
+        
+        data = tx_resp.json()
+        transactions = data.get("results", [])
+        
+        return await self._process_transactions(user_phone, transactions), None
