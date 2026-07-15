@@ -210,18 +210,19 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     msg = re.sub(r"\[.*\]\s+.*:\s+", "", message).strip()
     msg_norm = _normalize(msg)
 
-    # No app/agent.py, dentro do seu processador de mensagens
+    # No app/agent.py, na lógica de comando 'sincronizar'
     if msg_norm.startswith("sincronizar"):
         partes = msg_norm.split()
         
         if len(partes) < 3:
-            reply = "⚠️ Formato incorreto! Use: `sincronizar [ITEM_ID] [ACCOUNT_ID]`"
+            # Força o usuário a fornecer os dois parâmetros
+            reply = "⚠️ Formato obrigatório: `sincronizar [ITEM_ID] [ACCOUNT_ID]`"
         else:
             item_id = partes[1]
             account_id = partes[2]
-            # Chamada para a nova função que criamos
-            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)
-    
+            # Chamada para o novo método que filtra
+            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)    
+            
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
         m_pag = re.search(r"pag (\d+)", msg_norm)

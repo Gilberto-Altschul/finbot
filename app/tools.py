@@ -952,21 +952,20 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
 async def sincronizar_banco_especifico(user_phone, item_id, account_id):
     try:
-        # 1. Baixa todas as transações da conexão
-        # Usando o método que já existe no seu serviço:
+        # Baixa transações usando o item_id (conexão total)
         transacoes = await pluggy_service.buscar_transacoes_por_item(item_id)
         
-        # 2. Filtra pelo account_id informado
-        transacoes_filtradas = [t for t in transacoes if t.get("accountId") == account_id]
+        # Filtra pelo account_id informado
+        filtradas = [t for t in transacoes if t.get("accountId") == account_id]
         
-        if not transacoes_filtradas:
-            return f"❌ Nenhuma transação encontrada para a conta `{account_id}`. Verifique se o ID está correto."
+        if not filtradas:
+            return f"❌ Nenhuma transação encontrada para a conta `{account_id}`."
             
-        # 3. Salva apenas o que foi filtrado
-        total_salvo = db.inserir_gastos_em_lote(transacoes_filtradas, user_phone)
+        # Salva apenas o que passou no filtro
+        inseridos = db.inserir_gastos_em_lote(filtradas, user_phone)
         
-        return f"✅ Sucesso! {total_salvo} transações da conta `{account_id}` sincronizadas."
+        return f"✅ Sucesso! {inseridos} transações sincronizadas da conta `{account_id}`."
         
     except Exception as e:
-        logger.error(f"Erro na sincronização específica: {e}")
-        return "❌ Ocorreu um erro ao sincronizar. Verifique se os IDs estão corretos."
+        logger.error(f"Erro na sincronização: {e}")
+        return "❌ Erro ao sincronizar. Verifique se os IDs estão corretos."
