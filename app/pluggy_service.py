@@ -12,6 +12,164 @@ from app.categorizer import categorizar_gasto_hibrido
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Mapa das categorias oficiais da Pluggy (docs.pluggy.ai/docs/transaction-categories)
+# para a taxonomia em português do FinBot (SISTEMA_CATEGORIAS em app/utils.py).
+# Cobre tanto os nomes de nível 1 (ex: "Housing") quanto os de nível 2/3
+# (ex: "Eating out"), já que a Pluggy pode retornar qualquer nível como `category`.
+# Categorias sem correspondência clara caem em "Outros" e acionam o classificador
+# por texto (categorizar_gasto_hibrido) como fallback.
+CATEGORIA_PLUGGY_PARA_PT = {
+    # Income
+    "Income": "Financeiro",
+    "Salary": "Financeiro",
+    "Retirement": "Financeiro",
+    "Entrepreneurial activities": "Empresa",
+    "Government aid": "Financeiro",
+    "Non-recurring income": "Financeiro",
+    # Loans and Financing
+    "Loans and Financing": "Financeiro",
+    "Late payment and overdraft costs": "Financeiro",
+    "Interests charged": "Financeiro",
+    "Loans": "Financeiro",
+    "Financing": "Financeiro",
+    "Real estate financing": "Moradia",
+    "Vehicle Financing": "Transporte",
+    "Student loan": "Educação",
+    # Investments
+    "Investments": "Financeiro",
+    "Automatic investment": "Financeiro",
+    "Fixed income": "Financeiro",
+    "Mutual funds": "Financeiro",
+    "Variable income": "Financeiro",
+    "Margin": "Financeiro",
+    "Proceeds interests and dividends": "Financeiro",
+    "Pension": "Financeiro",
+    # Same person transfer / Transfers
+    "Same person transfer": "Financeiro",
+    "Same person transfer - Cash": "Financeiro",
+    "Same person transfer - PIX": "Financeiro",
+    "Same person transfer - TED": "Financeiro",
+    "Transfers": "Financeiro",
+    "Transfer": "Financeiro",
+    "Transfer - Bank slip (Boleto)": "Financeiro",
+    "Transfer - Cash": "Financeiro",
+    "Transfer - Check": "Financeiro",
+    "Transfer - DOC": "Financeiro",
+    "Transfer - Foreign exchange": "Financeiro",
+    "Transfer - Internal": "Financeiro",
+    "Transfer - PIX": "Financeiro",
+    "Transfer - TED": "Financeiro",
+    "Credit card payment": "Financeiro",
+    "Third-party transfers": "Financeiro",
+    "Bank slip": "Financeiro",
+    "Debt card": "Financeiro",
+    "DOC": "Financeiro",
+    "PIX": "Financeiro",
+    "TED": "Financeiro",
+    # Legal obligations
+    "Legal obligations": "Financeiro",
+    "Blocked balances": "Financeiro",
+    "Alimony": "Família e Dependentes",
+    # Services
+    "Services": "Outros",
+    "Telecommunications": "Moradia",
+    "Internet": "Moradia",
+    "Mobile": "Moradia",
+    "TV": "Lazer",
+    "Education": "Educação",
+    "Online Courses": "Educação",
+    "University": "Educação",
+    "School": "Educação",
+    "Kindergarten": "Educação",
+    "Wellness and fitness": "Saúde",
+    "Gyms and fitness centers": "Saúde",
+    "Sports practice": "Lazer",
+    "Wellness": "Saúde",
+    "Tickets": "Lazer",
+    "Stadiums and arenas": "Lazer",
+    "Landmarks and museums": "Lazer",
+    "Cinema, theater and concerts": "Lazer",
+    # Shopping
+    "Shopping": "Outros",
+    "Online shopping": "Outros",
+    "Electronics": "Outros",
+    "Pet supplies and vet": "Pets",
+    "Clothing": "Vestuário e Beleza",
+    "Kids and toys": "Família e Dependentes",
+    "Bookstore": "Educação",
+    "Sports goods": "Lazer",
+    "Office Supplies": "Empresa",
+    "Cashback": "Financeiro",
+    # Digital services
+    "Digital services": "Lazer",
+    "Gaming": "Lazer",
+    "Video streaming": "Lazer",
+    "Music streaming": "Lazer",
+    # Groceries / Food and drinks
+    "Groceries": "Alimentação",
+    "Food and drinks": "Alimentação",
+    "Eating out": "Alimentação",
+    "Food delivery": "Alimentação",
+    # Travel
+    "Travel": "Lazer",
+    "Airport and airlines": "Lazer",
+    "Accommodation": "Lazer",
+    "Mileage programs": "Lazer",
+    "Bus tickets": "Transporte",
+    # Donations / Gambling
+    "Donations": "Outros",
+    "Gambling": "Lazer",
+    "Lottery": "Lazer",
+    "Online bet": "Lazer",
+    # Taxes
+    "Taxes": "Financeiro",
+    "Income taxes": "Financeiro",
+    "Taxes on investments": "Financeiro",
+    "Tax on financial operations": "Financeiro",
+    # Bank fees
+    "Bank fees": "Financeiro",
+    "Account fees": "Financeiro",
+    "Wire transfer fees and ATM fees": "Financeiro",
+    "Credit card fees": "Financeiro",
+    # Housing
+    "Housing": "Moradia",
+    "Rent": "Moradia",
+    "Houseware": "Moradia",
+    "Urban land and building tax": "Moradia",
+    "Utilities": "Moradia",
+    "Water": "Moradia",
+    "Electricity": "Moradia",
+    "Gas": "Moradia",
+    # Healthcare
+    "Healthcare": "Saúde",
+    "Dentist": "Saúde",
+    "Pharmacy": "Saúde",
+    "Optometry": "Saúde",
+    "Hospital clinics and labs": "Saúde",
+    # Transportation
+    "Transportation": "Transporte",
+    "Taxi and ride-hailing": "Transporte",
+    "Public transportation": "Transporte",
+    "Car rental": "Transporte",
+    "Bicycle": "Transporte",
+    "Automotive": "Transporte",
+    "Gas stations": "Transporte",
+    "Parking": "Transporte",
+    "Tolls and in-vehicle payment": "Transporte",
+    "Vehicle ownership taxes and fees": "Transporte",
+    "Vehicle maintenance": "Transporte",
+    "Traffic tickets": "Transporte",
+    # Insurance
+    "Insurance": "Financeiro",
+    "Life insurance": "Financeiro",
+    "Home Insurance": "Moradia",
+    "Health insurance": "Saúde",
+    "Vehicle insurance": "Transporte",
+    # Leisure / Other
+    "Leisure": "Lazer",
+    "Other": "Outros",
+}
+
 class PluggyService:
     def __init__(self):
         # 🔹 Autenticação via clientId/clientSecret
@@ -141,17 +299,20 @@ class PluggyService:
             raw_amount = float(tx["amount"])
             tipo = "income" if raw_amount > 0 else "expense"
 
-            # Categoria da Pluggy vem em inglês (ex: "Eating out") — mapeamos
-            # para a taxonomia em português do FinBot usando o mesmo classificador
-            # já usado no fluxo manual de categorização.
+            # 1ª tentativa: mapa estático a partir da categoria oficial da Pluggy
+            # (sem custo, sem chamada de LLM). Só cai no classificador por texto
+            # quando a Pluggy não retornou categoria ou ela não está mapeada.
             categoria_pluggy = tx.get("category")
-            try:
-                categoria_pt, _ = await categorizar_gasto_hibrido(user_phone, descricao)
-                if not categoria_pt or categoria_pt == "Perguntar":
+            categoria_pt = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
+
+            if categoria_pt is None:
+                try:
+                    categoria_pt, _ = await categorizar_gasto_hibrido(user_phone, descricao)
+                    if not categoria_pt or categoria_pt == "Perguntar":
+                        categoria_pt = "Outros"
+                except Exception as e:
+                    logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
                     categoria_pt = "Outros"
-            except Exception as e:
-                logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
-                categoria_pt = "Outros"
 
             row = {
                 "user_phone": user_phone,
