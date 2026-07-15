@@ -192,9 +192,26 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     return _format_output(result, tool_name, user_phone)
 
 async def _classify(message: str, user_phone: str) -> dict | None:
+# Se o usuário digitou um número e existe uma sessão ativa
+    if user_phone in tool_registry._SESSAO_LISTAGEM and msg_norm.isdigit():
+        idx = int(msg_norm) - 1
+        opcoes = tool_registry._SESSAO_LISTAGEM[user_phone]
+        
+        if 0 <= idx < len(opcoes):
+            account_id = opcoes[idx]["account_id"]
+            # Limpa a sessão
+            del tool_registry._SESSAO_LISTAGEM[user_phone]
+            # Executa a sincronização diretamente
+            return await tool_registry.execute("sincronizar_banco", {"account_id": account_id}, user_phone)
+        else:
+            return "⚠️ Opção inválida. Digite apenas o número da lista."
+
     # Remove timestamps e metadados de mensagens coladas do WhatsApp (ex: [6:09 PM] Gilberto:)
     msg = re.sub(r"\[.*\]\s+.*:\s+", "", message).strip()
     msg_norm = _normalize(msg)
+
+    if msg_norm == "listar bancos" or msg_norm == "meus bancos":
+        reply = await tool_registry.listar_meus_bancos_disponiveis(user_phone)
 
     # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
     # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"

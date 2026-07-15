@@ -946,3 +946,14 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!"}
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
+
+async def listar_meus_bancos_disponiveis(user_phone):
+    itens = await pluggy_service.listar_itens()
+    if not itens:
+        return "Nenhuma conta vinculada encontrada."
+    
+    lista = "🏦 *Seus bancos conectados:*\n\n"
+    for i, item in enumerate(itens):
+        lista += f"{i+1}. {item['name']} (ID: `{item['id']}`)\n"
+    lista += "\nPara sincronizar, digite: `sincronizar <ID>`"
+    return lista
