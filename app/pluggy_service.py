@@ -215,16 +215,10 @@ class PluggyService:
 
     async def listar_itens(self):
 
-        token = self.get_access_token() # Este método deve renovar se expirado
-        
-        headers = {
-            "X-API-KEY": settings.pluggy_client_secret, 
-            "Authorization": f"Bearer {token}", # Ou o formato correto da API
-            "Content-Type": "application/json"
-        }
-        resp = requests.get(f"{self.base_url}/items", headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        headers = self._get_headers()
+        response = requests.get(f"{self.base_url}/items", headers=headers)
+        response.raise_for_status() # Isso dispara o 401 se falhar
+        return response.json()
 
     async def listar_contas(self, item_id: str):
         resp = requests.get(
@@ -339,3 +333,11 @@ class PluggyService:
 
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
+    
+    async def _get_headers(self):
+            async # Esta lógica garante que a API-KEY correta seja sempre enviada
+            async return {
+                async "CLIENT-ID": settings.pluggy_client_id,
+                async "CLIENT-SECRET": settings.pluggy_client_secret,
+                async "Content-Type": "application/json"
+            async }    
