@@ -19,6 +19,9 @@ from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app.config import get_settings
 
+# Instancie o serviço para que a variável 'pluggy_service' exista
+pluggy_service = PluggyService()
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
