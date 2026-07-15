@@ -214,6 +214,9 @@ class PluggyService:
         }
 
     async def listar_itens(self):
+
+        logger.info(f"Tentando autenticar com Client ID: {settings.pluggy_client_id[:5]}...") 
+
         resp = requests.get(
             f"{self.base_url}/items",
             headers=self.headers,
