@@ -173,10 +173,10 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None
+        self._api_key = None # Token armazenado aqui
 
-    def _get_headers(self):
-        # 2. Gera um token novo se não existir ou se precisar renovar
+    def _ensure_authenticated(self):
+        """Renova o token apenas se necessário ou se estiver expirado."""
         if not self._api_key:
             auth_resp = requests.post(
                 f"{self.base_url}/auth",
@@ -188,13 +188,18 @@ class PluggyService:
             )
             auth_resp.raise_for_status()
             self._api_key = auth_resp.json()["apiKey"]
-        
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
-    
+
     async def listar_itens(self):
-        # Agora usamos headers dinâmicos
-        headers = self._get_headers()
+        # Sempre obtém headers com token válido antes da chamada
+        headers = self._ensure_authenticated()
         resp = requests.get(f"{self.base_url}/items", headers=headers)
+        
+        # Se mesmo assim der 401, o token pode ter sido revogado ou a key é inválida
+        if resp.status_code == 401:
+            self._api_key = None # Força renovação na próxima tentativa
+            resp.raise_for_status()
+            
         resp.raise_for_status()
         return resp.json().get("results", [])
 
