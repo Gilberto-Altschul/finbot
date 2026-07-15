@@ -308,7 +308,18 @@ class PluggyService:
                 logger.warning(f"Transação descartada por falta de campos obrigatórios: {tx}")
                 continue
 
-            raw_amount = float(tx["amount"])
+            # Compras em moeda estrangeira (ex: cartão usado no exterior/assinatura
+            # em USD): a Pluggy já devolve o valor convertido pra moeda da conta
+            # (normalmente BRL, já com o câmbio/IOF aplicado pelo emissor) em
+            # amountInAccountCurrency. Sem isso, o valor ficaria gravado em dólar.
+            moeda = tx.get("currencyCode", "BRL")
+            if moeda != "BRL" and tx.get("amountInAccountCurrency") is not None:
+                raw_amount = float(tx["amountInAccountCurrency"])
+                logger.info(f"Conversão de moeda: {tx['amount']} {moeda} -> {raw_amount} BRL ({descricao})")
+            else:
+                if moeda != "BRL":
+                    logger.warning(f"Transação em {moeda} sem amountInAccountCurrency — gravando valor bruto sem conversão: {tx}")
+                raw_amount = float(tx["amount"])
             tipo = "income" if raw_amount > 0 else "expense"
 
             # 1ª tentativa: mapa estático a partir da categoria oficial da Pluggy
