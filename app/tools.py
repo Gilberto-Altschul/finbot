@@ -17,8 +17,10 @@ from app.billing import fatura_vencimento, fatura_label, parcelas
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
 from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 def _fmt_moeda(v: float) -> str: return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 def _fmt_inteiro(v: float) -> str: return f"{round(v):,}".replace(",", ".")
@@ -225,12 +227,13 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
     match name:
         case "sincronizar_banco":
                     account_id = args.get("account_id")
-                    
+                    item_id = settings.default_item_id
+
                     # Instancia o serviço (isso dispara o Auth)
                     pluggy = PluggyService() 
                     
                     # Dispara o Transactions
-                    mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id)
+                    mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id, item_id)
                     return {"mensagem": mensagem}
     
         case "listar_gastos_detalhados":
