@@ -172,23 +172,25 @@ CATEGORIA_PLUGGY_PARA_PT = {
 
 class PluggyService:
     def __init__(self):
-        # Apenas inicialize as configurações aqui
-        pass
+        self.base_url = "https://api.pluggy.ai"
+        self._api_key = None
 
     def _get_headers(self):
-        # Busca um token novo/válido sempre que precisar de headers
-        auth_resp = requests.post(
-            "https://api.pluggy.ai/auth",
-            json={
-                "clientId": settings.pluggy_client_id,
-                "clientSecret": settings.pluggy_client_secret
-            },
-            timeout=30
-        )
-        auth_resp.raise_for_status()
-        api_key = auth_resp.json()["apiKey"]
-        return {"X-API-KEY": api_key, "Content-Type": "application/json"}
-
+        # 2. Gera um token novo se não existir ou se precisar renovar
+        if not self._api_key:
+            auth_resp = requests.post(
+                f"{self.base_url}/auth",
+                json={
+                    "clientId": settings.pluggy_client_id,
+                    "clientSecret": settings.pluggy_client_secret
+                },
+                timeout=30
+            )
+            auth_resp.raise_for_status()
+            self._api_key = auth_resp.json()["apiKey"]
+        
+        return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
+    
     async def listar_itens(self):
         # Agora usamos headers dinâmicos
         headers = self._get_headers()
