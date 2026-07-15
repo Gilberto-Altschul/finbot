@@ -172,11 +172,12 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None 
+        self._api_key = None  # Cache do token
 
     def _get_headers(self):
-        """Autenticação sob demanda: renova o token sempre que necessário."""
+        """Garante a autenticação antes de qualquer chamada."""
         if not self._api_key:
+            logger.info("Token ausente ou expirado. Renovando autenticação com Pluggy...")
             auth_resp = requests.post(
                 f"{self.base_url}/auth",
                 json={
@@ -190,21 +191,22 @@ class PluggyService:
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
-        """Lista os itens garantindo autenticação."""
         try:
-            resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
+            headers = self._get_headers()
+            resp = requests.get(f"{self.base_url}/items", headers=headers)
             
-            # Se der 401, limpa o token e força uma renovação na próxima chamada
+            # Se der 401, o token na memória pode ter expirado; limpa e força renovação
             if resp.status_code == 401:
+                logger.warning("Token expirado durante a requisição. Renovando...")
                 self._api_key = None
                 resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
             
             resp.raise_for_status()
             return resp.json().get("results", [])
         except Exception as e:
-            logger.error(f"Erro fatal ao listar itens: {e}")
+            logger.error(f"Erro ao listar itens: {e}")
             raise e
-                   
+                           
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",

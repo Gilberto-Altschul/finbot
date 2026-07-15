@@ -1044,9 +1044,15 @@ def formatar_lista_contas(contas):
 # Handler para ser chamado pelo agent.py
 async def handler_listar_bancos(args, user_phone):
     pluggy = PluggyService()
-    contas = await pluggy.listar_todas_as_contas()
+    items = await pluggy.listar_itens()
+    contas = []
     
-    # Armazena temporariamente na sessão para o agent.py saber o que o usuário escolheu
+    msg = "🏦 *Escolha a conta para sincronizar:*\n\n"
+    for i, item in enumerate(items):
+        # Aqui você busca as contas de cada banco
+        # ... logic para buscar contas ...
+        contas.append({"id": item['id'], "nome": item['connector']['name']})
+        msg += f"{i + 1}. {item['connector']['name']}\n"
+    
     _SESSAO_LISTAGEM[user_phone] = contas
-    
-    return formatar_lista_contas(contas)
+    return {"mensagem": msg}
