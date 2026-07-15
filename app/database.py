@@ -561,6 +561,34 @@ def get_user_item_id(user_phone: str) -> str | None:
         logger.error(f"Erro em get_user_item_id: {e}")
         return None
 
+def get_pluggy_conta_padrao(user_phone: str) -> dict | None:
+    """Recupera a conta (account_id/item_id) selecionada como padrão para sincronização."""
+    try:
+        res = get_db().table("finbot_user_connections") \
+            .select("pluggy_account_id, pluggy_item_id") \
+            .ilike("user_phone", _q(user_phone)).limit(1).execute()
+        if not res.data or not res.data[0].get("pluggy_account_id"):
+            return None
+        row = res.data[0]
+        return {"account_id": row["pluggy_account_id"], "item_id": row.get("pluggy_item_id")}
+    except Exception as e:
+        logger.error(f"Erro em get_pluggy_conta_padrao: {e}")
+        return None
+
+def save_pluggy_conta_padrao(user_phone: str, account_id: str, item_id: str) -> None:
+    """Salva a conta escolhida pelo usuário (via 'listar contas' + 'selecionar_conta') como padrão."""
+    try:
+        _get_or_create_user_connection(user_phone)
+        row = {
+            "user_phone": _s(user_phone),
+            "pluggy_account_id": account_id,
+            "pluggy_item_id": item_id,
+        }
+        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+    except Exception as e:
+        logger.error(f"Erro ao salvar conta padrão Pluggy de {user_phone}: {e}")
+        raise e
+
 def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descricao: str, pluggy_id: str, tipo: str = "expense", data_tx: str | None = None, payment_method: str = "debito") -> bool:
     """Registra um gasto vindo da Pluggy se o ID ainda não existir."""
     try:
