@@ -169,44 +169,59 @@ CATEGORIA_PLUGGY_PARA_PT = {
     "Leisure": "Lazer",
     "Other": "Outros",
 }
+
 class PluggyService:
     def __init__(self):
-        self.base_url = "https://api.pluggy.ai"
-        self._api_key = None  # Cache do token
+        # 🔹 Autenticação via clientId/clientSecret
 
-    def _get_headers(self):
-        """Garante a autenticação antes de qualquer chamada."""
-        if not self._api_key:
-            logger.info("Token ausente ou expirado. Renovando autenticação com Pluggy...")
-            auth_resp = requests.post(
-                f"{self.base_url}/auth",
-                json={
-                    "clientId": settings.pluggy_client_id,
-                    "clientSecret": settings.pluggy_client_secret
-                },
-                timeout=30
-            )
-            auth_resp.raise_for_status()
-            self._api_key = auth_resp.json()["apiKey"]
-        return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
+        logger.info(f"[DEBUG] clientId len={len(settings.pluggy_client_id)} sha256={hashlib.sha256(settings.pluggy_client_id.encode()).hexdigest()}")
+        logger.info(f"[DEBUG] clientSecret len={len(settings.pluggy_client_secret)} sha256={hashlib.sha256(settings.pluggy_client_secret.encode()).hexdigest()}")
+
+        auth_resp = requests.post(
+            "https://api.pluggy.ai/auth",
+            json={
+                "clientId": settings.pluggy_client_id,
+                "clientSecret": settings.pluggy_client_secret
+            },
+            timeout=30
+        )
+        auth_resp.raise_for_status()
+        api_key = auth_resp.json()["apiKey"]
+
+# --- INÍCIO DO LOG DE DEBUG PARA JWT ---
+        if api_key and '.' in api_key:
+            try:
+                parts = api_key.split('.')
+                if len(parts) >= 2:
+                    payload = parts[1]
+                    # Adiciona padding para base64 válido
+                    payload += '=' * (-len(payload) % 4)
+                    decoded_payload = json.loads(base64.urlsafe_b64decode(payload))
+                    
+                    logger.info("--- DEBUG JWT PLUGGY ---")
+                    logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
+                    logger.info("------------------------")
+                    logger.info(f"Pluggy api_key completo: {api_key}")
+
+            except Exception as e:
+                logger.error(f"Erro ao decodificar JWT para debug: {e}")
+        # --- FIM DO LOG DE DEBUG ---
+
+        self.base_url = "https://api.pluggy.ai"
+        self.headers = {
+            "X-API-KEY": api_key,
+            "accept": "application/json"
+        }
 
     async def listar_itens(self):
-        try:
-            headers = self._get_headers()
-            resp = requests.get(f"{self.base_url}/items", headers=headers)
-            
-            # Se der 401, o token na memória pode ter expirado; limpa e força renovação
-            if resp.status_code == 401:
-                logger.warning("Token expirado durante a requisição. Renovando...")
-                self._api_key = None
-                resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
-            
-            resp.raise_for_status()
-            return resp.json().get("results", [])
-        except Exception as e:
-            logger.error(f"Erro ao listar itens: {e}")
-            raise e
-                           
+        resp = requests.get(
+            f"{self.base_url}/items",
+            headers=self.headers,
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
@@ -230,30 +245,36 @@ class PluggyService:
         logger.info(f"Status do item {item_id}: {data.get('status')}")
         return data.get("status")
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str):
-            # 1. Consulta o status real no Pluggy (O segredo está aqui)
-            resp = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers)
-            acc_data = resp.json()
-            status = acc_data.get("syncStatus")
-    
-            # 2. SE NÃO ESTIVER UPDATED, NÃO FAZEMOS NADA (Para o bot não dizer "Nenhuma transação")
-            if status != "UPDATED":
-                return f"⚠️ A sincronização ainda está em andamento (Status: {status}). O banco ainda não liberou os dados. Tente novamente em 1 minuto.", None
-    
-            # 3. SE ESTIVER UPDATED, BUSCA OS DADOS
-            params = {
-                "accountId": account_id, 
-                "dateFrom": "2026-07-01", 
-                "dateTo": date.today().isoformat()
-            }
-            
-            tx_resp = requests.get(f"{self.base_url}/v2/transactions", headers=self.headers, params=params)
-            tx_resp.raise_for_status()
-            
-            transactions = tx_resp.json().get("results", [])
-            
-            # 4. Processa e insere no banco (seu código atual)
-            return await self._process_transactions(user_phone, transactions), None
+    async def sync_user_transactions(self, user_phone: str, account_id: str, item_id: str):
+        # 1. Verifica status do item (não da conta)
+        status = await self.verificar_status_sincronizacao(item_id)
+
+        # Se não estiver UPDATED, retornamos um aviso ao usuário
+        if status != "UPDATED":
+            return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
+
+        # 2. SE ESTIVER UPDATED: Busca as transações
+        params = {
+            "accountId": account_id,
+            "dateFrom": "2026-07-01",
+            "dateTo": date.today().isoformat()
+        }
+        
+        tx_resp = requests.get(
+            f"{self.base_url}/v2/transactions",
+            headers=self.headers,
+            params=params,
+            timeout=30
+        )
+        logger.info(f"Pluggy request URL: {tx_resp.url}")
+        logger.info(f"Pluggy response status: {tx_resp.status_code}")
+        logger.info(f"Pluggy response body: {tx_resp.text[:2000]}")
+        tx_resp.raise_for_status()
+       
+        transactions = tx_resp.json().get("results", [])
+        
+        # 3. Processa e insere no banco
+        return await self._process_transactions(user_phone, transactions)
     
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict]
@@ -314,41 +335,3 @@ class PluggyService:
 
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         return resumo, rows
-    
-    async def listar_transacoes_prontas(self, user_phone: str, account_id: str):
-        # 1. Consulta o status real no Pluggy
-        resp = requests.get(f"{self.base_url}/accounts/{account_id}", headers=self.headers)
-        acc_data = resp.json()
-        status = acc_data.get("syncStatus")
-
-        # 2. Se não estiver pronto, retorna uma mensagem de aviso para o Agente
-        if status != "UPDATED":
-            return None, f"⚠️ A sincronização ainda está em andamento (Status: {status}). Por favor, tente novamente em 1 minuto."
-
-        # 3. Se estiver UPDATED, prossegue com a busca (seu código atual de busca)
-        params = {"accountId": account_id, "dateFrom": "2026-07-01", "dateTo": date.today().isoformat()}
-        tx_resp = requests.get(f"{self.base_url}/v2/transactions", headers=self.headers, params=params)
-        
-        data = tx_resp.json()
-        transactions = data.get("results", [])
-        
-        return await self._process_transactions(user_phone, transactions), None
-
-
-    async def listar_todas_as_contas(self):
-            """Busca todos os itens e suas contas vinculadas."""
-            items = await self.listar_itens() # Usa o listar_itens que já tem auth dinâmica
-            contas_disponiveis = []
-            
-            for item in items:
-                # Busca as contas deste item (banco) usando os headers dinâmicos
-                resp = requests.get(f"{self.base_url}/accounts?itemId={item['id']}", headers=self._get_headers())
-                resp.raise_for_status()
-                contas = resp.json().get("results", [])
-                
-                for c in contas:
-                    contas_disponiveis.append({
-                        "account_id": c["id"],
-                        "nome_exibicao": f"{item['connector']['name']} - {c['name']}"
-                    })
-            return contas_disponiveis        

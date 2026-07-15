@@ -28,37 +28,16 @@ def _fmt_inteiro(v: float) -> str: return f"{round(v):,}".replace(",", ".")
 # Variável global para manter o estado da listagem por usuário (IDs das transações exibidas)
 _SESSAO_LISTAGEM = {}
 
-# Sessão em memória: última listagem de contas exibida por usuário (índice -> account_id/item_id).
-# É só o mapeamento temporário pra resolver "selecionar 2" — a conta padrão em si
-# é persistida no banco (finbot_user_connections) via db.save_pluggy_conta_padrao.
-_SESSAO_CONTAS = {}
-
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
 SCHEMAS: list[dict] = [
-    {
-        "name": "listar_contas_bancarias",
-        "description": "Lista os itens (bancos conectados) e as contas disponíveis via Open Finance (Pluggy), numerados para seleção. Use para 'listar contas', 'quais bancos estão conectados' ou 'ver minhas contas'.",
-        "parameters": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "selecionar_conta",
-        "description": "Define qual conta bancária (dentre as listadas por listar_contas_bancarias) será usada como padrão para sincronizações futuras. Use quando o usuário responder com o número da conta escolhida.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "indice": {"type": "integer", "description": "Número da conta na lista exibida por listar_contas_bancarias (ex: 1, 2, 3)"}
-            },
-            "required": ["indice"]
-        }
-    },
     {
         "name": "sincronizar_banco",
         "description": "Busca transações bancárias automáticas via Open Finance (Pluggy). Use para 'sincronizar', 'atualizar extrato' ou 'buscar transações'.",
         "parameters": {
             "type": "object",
             "properties": {
-                "account_id": {"type": "string", "description": "ID da conta específica para sincronizar. Se omitido, usa a conta padrão selecionada via 'selecionar_conta'."}
+                "account_id": {"type": "string", "description": "ID da conta específica para sincronizar. Se omitido, sincroniza a primeira encontrada."}
             }
         }
     },
@@ -192,11 +171,6 @@ SCHEMAS: list[dict] = [
         "name": "tendencia_semanal",
         "description": "Retorna o comparativo de gastos diários dos últimos 7 dias.",
         "parameters": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "listar_bancos",
-        "description": "Lista todas as contas bancárias conectadas para o usuário escolher. Use quando o usuário pedir para 'listar contas'.",
-        "parameters": {"type": "object", "properties": {}}
     }
 ]
 
@@ -251,61 +225,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
         return None
 
     match name:
-        case "listar_contas_bancarias":
-                    pluggy = PluggyService()
-                    itens = await pluggy.listar_itens()
-
-                    if not itens:
-                        return {"mensagem": "⚠️ Nenhum banco conectado ainda via Open Finance."}
-
-                    opcoes = []  # cada item: {"account_id", "item_id", "label"}
-                    for item in itens:
-                        item_id = item.get("id")
-                        contas = await pluggy.listar_contas(item_id)
-                        for conta in contas:
-                            opcoes.append({
-                                "account_id": conta.get("id"),
-                                "item_id": item_id,
-                                "nome_banco": conta.get("name") or item.get("connector", {}).get("name", "Banco"),
-                                "tipo": conta.get("subtype") or conta.get("type", ""),
-                                "saldo": conta.get("balance"),
-                            })
-
-                    if not opcoes:
-                        return {"mensagem": "⚠️ Encontrei bancos conectados, mas nenhuma conta disponível neles."}
-
-                    _SESSAO_CONTAS[user_phone] = opcoes
-
-                    msg = "🏦 *Contas disponíveis:*\n\n"
-                    for i, o in enumerate(opcoes, start=1):
-                        saldo_fmt = f"R$ {_fmt(o['saldo'])}" if o["saldo"] is not None else "saldo indisponível"
-                        msg += f"{i}️⃣ {o['nome_banco']} — {o['tipo']} | {saldo_fmt}\n"
-                    msg += "\n💡 Responda com o número da conta para defini-la como padrão (ex: *2*)."
-
-                    return {"mensagem": msg}
-
-        case "selecionar_conta":
-                    indice = int(args.get("indice", 0))
-                    opcoes = _SESSAO_CONTAS.get(user_phone, [])
-
-                    if not opcoes or indice < 1 or indice > len(opcoes):
-                        return {"mensagem": "⚠️ Não encontrei essa conta. Digite 'listar contas' novamente antes de selecionar."}
-
-                    escolha = opcoes[indice - 1]
-                    db.save_pluggy_conta_padrao(user_phone, escolha["account_id"], escolha["item_id"])
-
-                    return {"mensagem": f"✅ Conta padrão definida: *{escolha['nome_banco']} — {escolha['tipo']}*. Agora é só digitar 'sincronizar' que já uso essa conta."}
-
         case "sincronizar_banco":
                     account_id = args.get("account_id")
                     item_id = settings.default_item_id
-
-                    if not account_id:
-                        padrao = db.get_pluggy_conta_padrao(user_phone)
-                        if not padrao:
-                            return {"mensagem": "⚠️ Nenhuma conta selecionada ainda. Digite 'listar contas' para ver as opções e escolher uma."}
-                        account_id = padrao["account_id"]
-                        item_id = padrao["item_id"] or item_id
 
                     # Instancia o serviço (isso dispara o Auth)
                     pluggy = PluggyService() 
@@ -740,11 +662,6 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             return {
                 "mensagem": f"📅 *Fechamento do Mês Passado*\n\n💰 Receitas: R$ {_fmt_moeda(resumo['receitas'])}\n💸 Gastos Totais: R$ {_fmt_moeda(resumo['gastos'])}\n📉 Saldo: R$ {_fmt_moeda(resumo['saldo'])}"
             }
-        
-        case "listar_bancos":
-            pluggy = PluggyService()
-            contas = await pluggy.listar_todas_as_contas() # (Crie este método no seu serviço)
-            return {"mensagem": formatar_lista_contas(contas)}
 
         case "consultar_saldo":
             saldo = db.monthly_income_total(user_phone) - db.monthly_total(user_phone)
@@ -1029,30 +946,3 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!"}
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
-
-# Função auxiliar para formatar a mensagem
-def formatar_lista_contas(contas):
-    if not contas:
-        return "⚠️ Nenhuma conta bancária encontrada."
-    
-    msg = "🏦 *Escolha a conta para sincronizar:*\n\n"
-    for idx, c in enumerate(contas):
-        msg += f"{idx + 1}. {c['nome_exibicao']}\n"
-    msg += "\nDigite o número da conta para sincronizar."
-    return msg
-
-# Handler para ser chamado pelo agent.py
-async def handler_listar_bancos(args, user_phone):
-    pluggy = PluggyService()
-    items = await pluggy.listar_itens()
-    contas = []
-    
-    msg = "🏦 *Escolha a conta para sincronizar:*\n\n"
-    for i, item in enumerate(items):
-        # Aqui você busca as contas de cada banco
-        # ... logic para buscar contas ...
-        contas.append({"id": item['id'], "nome": item['connector']['name']})
-        msg += f"{i + 1}. {item['connector']['name']}\n"
-    
-    _SESSAO_LISTAGEM[user_phone] = contas
-    return {"mensagem": msg}
