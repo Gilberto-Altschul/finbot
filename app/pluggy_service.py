@@ -56,7 +56,7 @@ class PluggyService:
 
     async def listar_itens(self):
         resp = requests.get(
-            f"{self.base_url}/v2/items",
+            f"{self.base_url}/items",
             headers=self.headers,
             timeout=30
         )
@@ -65,7 +65,7 @@ class PluggyService:
 
     async def listar_contas(self, item_id: str):
         resp = requests.get(
-            f"{self.base_url}/v2/accounts",
+            f"{self.base_url}/accounts",
             headers=self.headers,
             params={"itemId": item_id},
             timeout=30
@@ -75,8 +75,9 @@ class PluggyService:
 
     async def verificar_status_sincronizacao(self, item_id: str):
         """Consulta o Pluggy para saber se o item terminou de processar."""
+        logger.info(f"[DEBUG] item_id recebido: {item_id!r}")
         response = requests.get(
-            f"{self.base_url}/v2/items/{item_id}",
+            f"{self.base_url}/items/{item_id}",
             headers=self.headers,
             timeout=30
         )
