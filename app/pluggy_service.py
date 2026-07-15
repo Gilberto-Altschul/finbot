@@ -4,7 +4,7 @@ import json
 import base64  
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 import app.database as db
 from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
@@ -254,9 +254,12 @@ class PluggyService:
             return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
 
         # 2. SE ESTIVER UPDATED: Busca as transações
+        # Janela de ~45 dias cobre um ciclo de fatura completo com folga.
+        # Combinado com o filtro de status abaixo, isso traz só a última
+        # fatura fechada (não parcelas futuras/fatura aberta).
         params = {
             "accountId": account_id,
-            "dateFrom": "2026-07-01",
+            "dateFrom": (date.today() - timedelta(days=45)).isoformat(),
             "dateTo": date.today().isoformat()
         }
         
@@ -288,8 +291,17 @@ class PluggyService:
             return "✅ Sincronização concluída. Nenhuma nova transação encontrada.", None
 
         rows = []
+        pendentes_ignoradas = 0
         for tx in transactions:
             logger.info(f"Transação recebida da Pluggy: {tx}")  # loga cada transação bruta
+
+            # Por ora, só trazemos a última fatura fechada (POSTED). Parcelas
+            # futuras/fatura aberta (PENDING) ficam de fora — revisitar quando
+            # decidirmos como exibir o parcelamento completo sem contar como
+            # gasto confirmado.
+            if tx.get("status") == "PENDING":
+                pendentes_ignoradas += 1
+                continue
 
             descricao = tx.get("description") or tx.get("title")
             if not tx.get("amount") or not descricao:
@@ -328,7 +340,7 @@ class PluggyService:
             rows.append(row)
 
         inseridos = db.inserir_gastos_em_lote(rows)
-        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
+        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas. {pendentes_ignoradas} pendentes (fatura aberta) ignoradas.")
 
         if inseridos == 0:
             return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
