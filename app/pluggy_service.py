@@ -173,11 +173,12 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None # Token armazenado aqui
+        self._api_key = None  # Cache do token
 
-    def _ensure_authenticated(self):
-        """Renova o token apenas se necessário ou se estiver expirado."""
+    def _get_headers(self):
+        """Retorna os headers com um token válido, renovando se necessário."""
         if not self._api_key:
+            logger.info("Token ausente. Autenticando na Pluggy...")
             auth_resp = requests.post(
                 f"{self.base_url}/auth",
                 json={
@@ -188,20 +189,25 @@ class PluggyService:
             )
             auth_resp.raise_for_status()
             self._api_key = auth_resp.json()["apiKey"]
+        
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
-        # Sempre obtém headers com token válido antes da chamada
-        headers = self._ensure_authenticated()
-        resp = requests.get(f"{self.base_url}/items", headers=headers)
-        
-        # Se mesmo assim der 401, o token pode ter sido revogado ou a key é inválida
-        if resp.status_code == 401:
-            self._api_key = None # Força renovação na próxima tentativa
-            resp.raise_for_status()
+        # Sempre chamamos _get_headers() antes da requisição
+        try:
+            resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
             
-        resp.raise_for_status()
-        return resp.json().get("results", [])
+            # Se o token expirou no meio do caminho, limpa e tenta de novo
+            if resp.status_code == 401:
+                logger.warning("Token expirado. Renovando...")
+                self._api_key = None
+                resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
+            
+            resp.raise_for_status()
+            return resp.json().get("results", [])
+        except Exception as e:
+            logger.error(f"Erro ao listar itens: {e}")
+            raise e
 
     async def listar_contas(self, item_id: str):
         resp = requests.get(
