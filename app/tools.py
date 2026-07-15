@@ -950,13 +950,23 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
 
-async def listar_meus_bancos_disponiveis(user_phone):
-    itens = await pluggy_service.listar_itens()
-    if not itens:
-        return "Nenhuma conta vinculada encontrada."
-    
-    lista = "🏦 *Seus bancos conectados:*\n\n"
-    for i, item in enumerate(itens):
-        lista += f"{i+1}. {item['name']} (ID: `{item['id']}`)\n"
-    lista += "\nPara sincronizar, digite: `sincronizar <ID>`"
-    return lista
+async def sincronizar_banco_especifico(user_phone, item_id, account_id):
+    try:
+        # 1. Baixa todas as transações da conexão
+        # Usando o método que já existe no seu serviço:
+        transacoes = await pluggy_service.buscar_transacoes_por_item(item_id)
+        
+        # 2. Filtra pelo account_id informado
+        transacoes_filtradas = [t for t in transacoes if t.get("accountId") == account_id]
+        
+        if not transacoes_filtradas:
+            return f"❌ Nenhuma transação encontrada para a conta `{account_id}`. Verifique se o ID está correto."
+            
+        # 3. Salva apenas o que foi filtrado
+        total_salvo = db.inserir_gastos_em_lote(transacoes_filtradas, user_phone)
+        
+        return f"✅ Sucesso! {total_salvo} transações da conta `{account_id}` sincronizadas."
+        
+    except Exception as e:
+        logger.error(f"Erro na sincronização específica: {e}")
+        return "❌ Ocorreu um erro ao sincronizar. Verifique se os IDs estão corretos."

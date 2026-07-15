@@ -210,36 +210,17 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     msg = re.sub(r"\[.*\]\s+.*:\s+", "", message).strip()
     msg_norm = _normalize(msg)
 
-    if msg_norm == "listar bancos" or msg_norm == "meus bancos":
-        reply = await tool_registry.listar_meus_bancos_disponiveis(user_phone)
-
-    # 1. COMANDOS DO SISTEMA (Prioridade Máxima para evitar que regex de gastos capture comandos)
-    # 🔹 Solicita o accountId se o usuário digitar apenas "sincronizar"
+    # No app/agent.py, dentro do seu processador de mensagens
     if msg_norm.startswith("sincronizar"):
-        parts = msg_norm.split()
-        if len(parts) == 1:
-            # Nenhum ID → listar itens primeiro
-            itens = await pluggy_service.listar_itens()
-            if not itens:
-                return {
-                    "tool": "direct_reply",
-                    "args": {"mensagem": "❌ Não encontrei nenhum item vinculado ao seu Open Finance."}
-                }
-
-            msg = "📂 *Itens disponíveis:*\n\n"
-            for it in itens:
-                msg += f"• {it['institution']['name']} — Item ID: {it['id']}\n"
-
-            msg += "\nDigite: *sincronizar <item_id>* para ver as contas desse item."
-            return {"tool": "direct_reply", "args": {"mensagem": msg}}
-
-        elif len(parts) == 2:
-                    id_val = parts[1]
-                    
-                    # ATALHO: Removemos qualquer 'await listar_contas' ou 'listar_itens'
-                    # Enviamos o ID diretamente para a ferramenta
-                    logger.info(f"Sincronização direta disparada para: {id_val}")
-                    return {"tool": "sincronizar_banco", "args": {"account_id": id_val}}
+        partes = msg_norm.split()
+        
+        if len(partes) < 3:
+            reply = "⚠️ Formato incorreto! Use: `sincronizar [ITEM_ID] [ACCOUNT_ID]`"
+        else:
+            item_id = partes[1]
+            account_id = partes[2]
+            # Chamada para a nova função que criamos
+            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)
     
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
