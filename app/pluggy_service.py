@@ -215,15 +215,16 @@ class PluggyService:
 
     async def listar_itens(self):
 
-        logger.info(f"Tentando autenticar com Client ID: {settings.pluggy_client_id[:5]}...") 
-
-        resp = requests.get(
-            f"{self.base_url}/items",
-            headers=self.headers,
-            timeout=30
-        )
+        token = self.get_access_token() # Este método deve renovar se expirado
+        
+        headers = {
+            "X-API-KEY": settings.pluggy_client_secret, 
+            "Authorization": f"Bearer {token}", # Ou o formato correto da API
+            "Content-Type": "application/json"
+        }
+        resp = requests.get(f"{self.base_url}/items", headers=headers)
         resp.raise_for_status()
-        return resp.json().get("results", [])
+        return resp.json()
 
     async def listar_contas(self, item_id: str):
         resp = requests.get(
