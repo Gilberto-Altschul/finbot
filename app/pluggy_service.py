@@ -172,12 +172,12 @@ CATEGORIA_PLUGGY_PARA_PT = {
 class PluggyService:
     def __init__(self):
         self.base_url = "https://api.pluggy.ai"
-        self._api_key = None 
+        self._api_key = None  # Cache interno do token
 
-    def _get_headers(self):
-        """Garante que temos uma API KEY válida antes de qualquer requisição."""
+    def _ensure_authenticated(self):
+        """Renova o token apenas se necessário ou se ele for nulo."""
         if not self._api_key:
-            logger.info("Token expirado ou ausente. Renovando autenticação com Pluggy...")
+            logger.info("Token ausente ou expirado. Renovando autenticação Pluggy...")
             auth_resp = requests.post(
                 f"{self.base_url}/auth",
                 json={
@@ -188,26 +188,28 @@ class PluggyService:
             )
             auth_resp.raise_for_status()
             self._api_key = auth_resp.json()["apiKey"]
-        
         return {"X-API-KEY": self._api_key, "Content-Type": "application/json"}
 
     async def listar_itens(self):
         """Lista os itens (conexões) com autenticação dinâmica."""
         try:
-            # Tenta a requisição com o token atual
-            resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
+            # Tenta a requisição
+            headers = self._ensure_authenticated()
+            resp = requests.get(f"{self.base_url}/items", headers=headers)
             
-            # Se for 401, limpa o token e tenta uma vez mais
+            # Se der 401, o token na memória pode ter expirado; limpa e tenta de novo
             if resp.status_code == 401:
+                logger.warning("Token expirado durante a requisição. Renovando...")
                 self._api_key = None
-                resp = requests.get(f"{self.base_url}/items", headers=self._get_headers())
+                headers = self._ensure_authenticated()
+                resp = requests.get(f"{self.base_url}/items", headers=headers)
             
             resp.raise_for_status()
             return resp.json().get("results", [])
         except Exception as e:
-            logger.error(f"Erro fatal na listagem de itens: {e}")
+            logger.error(f"Erro ao listar itens: {e}")
             raise e
-        
+                
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
