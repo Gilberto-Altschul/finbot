@@ -192,6 +192,7 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     return _format_output(result, tool_name, user_phone)
 
 async def _classify(message: str, user_phone: str) -> dict | None:
+    msg_norm = _normalize(user_message)
 # Se o usuário digitou um número e existe uma sessão ativa
     if user_phone in tool_registry._SESSAO_LISTAGEM and msg_norm.isdigit():
         idx = int(msg_norm) - 1
