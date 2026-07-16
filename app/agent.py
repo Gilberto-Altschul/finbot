@@ -234,6 +234,49 @@ async def _classify(message: str, user_phone: str) -> dict | None:
         except (ValueError, IndexError):
             pass
 
+    # 0. DEFINIR LIMITE — PRIORIDADE ABSOLUTA (Fast Path para evitar alucinações da IA)
+    if "limite" in msg_norm and (any(x in msg_norm for x in ["definir", "estipular", "setar", "atualizar", "mudar", "alterar", "novo", "para", "pra"]) or re.search(r"\d", msg_norm)):
+        # Regex aprimorada: captura sequências numéricas completas com suporte a padrão BR
+        val_match = re.search(r"(\d+(?:[.,]\d+)*)", msg_norm)
+        if val_match:
+            try:
+                raw_val = val_match.group(1)
+                # Inteligência de parsing para 3.970,00 ou 3970,00 ou 3970
+                if "." in raw_val and "," in raw_val:
+                    # Formato 1.234,56
+                    raw_val = raw_val.replace(".", "").replace(",", ".")
+                elif "," in raw_val:
+                    # Formato 1234,56
+                    raw_val = raw_val.replace(",", ".")
+                elif "." in raw_val:
+                    # Caso ambíguo: 1.000 ou 1000.00?
+                    # Se houver apenas um ponto e não houver exatamente 2 casas decimais depois, assume milhar
+                    parts = raw_val.split(".")
+                    if len(parts[-1]) != 2:
+                        raw_val = raw_val.replace(".", "")
+                
+                valor_limit = float(raw_val)
+                
+                cat_final = "Outros"
+                for c in SISTEMA_CATEGORIAS:
+                    c_norm = _normalize(c)
+                    # Melhora a detecção para categorias com nomes longos (ex: família detecta Família e Dependentes)
+                    if c_norm in msg_norm or any(part in msg_norm and len(part) > 3 for part in c_norm.split()):
+                        cat_final = c
+                        break
+                
+                # Identifica o mês de referência
+                mes_ref = date.today().strftime("%Y-%m")
+                for m_nome, m_num in _MESES_MAP.items():
+                    if m_nome in msg_norm:
+                        mes_ref = f"{date.today().year}-{m_num}"
+                        break
+                
+                logger.info(f"Fast Path Limite detectado: {cat_final} | {valor_limit} | {mes_ref}")
+                return {"tool": "definir_limite", "args": {"categoria": cat_final, "valor": valor_limit, "mes": mes_ref}}
+            except Exception as e:
+                logger.error(f"Erro no parsing de limite: {e}")
+
     # 2. Gasto Manual (Fast Path) - Detecta 'cafe 1' ou 'Almoço 35.50'
     m = _EXPENSE_RE.match(msg)
     if m:
@@ -284,49 +327,6 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 except: pass
             if method == "credito" and parc > 1: args["parcelas"] = parc
             return {"tool": "registrar_gasto", "args": args}
-
-    # 0. DEFINIR LIMITE — PRIORIDADE ABSOLUTA (Fast Path para evitar alucinações da IA)
-    if "limite" in msg_norm and (any(x in msg_norm for x in ["definir", "estipular", "setar", "atualizar", "mudar", "alterar", "novo", "para", "pra"]) or re.search(r"\d", msg_norm)):
-        # Regex aprimorada: captura sequências numéricas completas com suporte a padrão BR
-        val_match = re.search(r"(\d+(?:[.,]\d+)*)", msg_norm)
-        if val_match:
-            try:
-                raw_val = val_match.group(1)
-                # Inteligência de parsing para 3.970,00 ou 3970,00 ou 3970
-                if "." in raw_val and "," in raw_val:
-                    # Formato 1.234,56
-                    raw_val = raw_val.replace(".", "").replace(",", ".")
-                elif "," in raw_val:
-                    # Formato 1234,56
-                    raw_val = raw_val.replace(",", ".")
-                elif "." in raw_val:
-                    # Caso ambíguo: 1.000 ou 1000.00?
-                    # Se houver apenas um ponto e não houver exatamente 2 casas decimais depois, assume milhar
-                    parts = raw_val.split(".")
-                    if len(parts[-1]) != 2:
-                        raw_val = raw_val.replace(".", "")
-                
-                valor_limit = float(raw_val)
-                
-                cat_final = "Outros"
-                for c in SISTEMA_CATEGORIAS:
-                    c_norm = _normalize(c)
-                    # Melhora a detecção para categorias com nomes longos (ex: família detecta Família e Dependentes)
-                    if c_norm in msg_norm or any(part in msg_norm and len(part) > 3 for part in c_norm.split()):
-                        cat_final = c
-                        break
-                
-                # Identifica o mês de referência
-                mes_ref = date.today().strftime("%Y-%m")
-                for m_nome, m_num in _MESES_MAP.items():
-                    if m_nome in msg_norm:
-                        mes_ref = f"{date.today().year}-{m_num}"
-                        break
-                
-                logger.info(f"Fast Path Limite detectado: {cat_final} | {valor_limit} | {mes_ref}")
-                return {"tool": "definir_limite", "args": {"categoria": cat_final, "valor": valor_limit, "mes": mes_ref}}
-            except Exception as e:
-                logger.error(f"Erro no parsing de limite: {e}")
 
     # 0.5 INTENÇÕES COMPLEXAS: Se o usuário quer comparar, analisar ou saber motivos, ignora Fast Path e vai para LLM
     if any(k in msg_norm for k in ["compara", "diferenca", "analise", "evolucao", "porque", "por que", "dias", "primeiros", "ultimos", "quando", "que dia", "zerado", "vazio", "errado"]):
