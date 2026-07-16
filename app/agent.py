@@ -192,20 +192,11 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     return _format_output(result, tool_name, user_phone)
 
 async def _classify(message: str, user_phone: str) -> dict | None:
-    # 1. Normaliza a mensagem recebida como argumento
-    msg_norm = _normalize(message) 
-
-    # Sessão de listagem (ex: escolhendo conta)
-    if user_phone in tool_registry._SESSAO_LISTAGEM and msg_norm.isdigit():
-        idx = int(msg_norm) - 1
-        opcoes = tool_registry._SESSAO_LISTAGEM[user_phone]
-        
-        if 0 <= idx < len(opcoes):
-            account_id = opcoes[idx]["account_id"]
-            del tool_registry._SESSAO_LISTAGEM[user_phone]
-            return await tool_registry.execute("sincronizar_banco", {"account_id": account_id}, user_phone)
-        else:
-            return {"tool": "direct_reply", "args": {"mensagem": "⚠️ Opção inválida."}}    # No app/agent.py, na lógica de comando 'sincronizar'
+    # 1. Primeiro, limpa e define a variável 'msg' que o resto do código espera
+    msg = re.sub(r"\[.*\]\s+.*:\s+", "", message).strip()
+    
+    # 2. Depois, cria a versão normalizada
+    msg_norm = _normalize(msg)
         
     if msg_norm.startswith("sincronizar"):
         partes = msg_norm.split()
