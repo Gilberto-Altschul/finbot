@@ -27,7 +27,7 @@ _HEALTH_FORCE_TERMS = [
 
 # Termos que forçam a categoria Transporte para Seguro Automóvel
 _AUTO_FORCE_TERMS = [
-    "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
+    "seguro carro", "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
 ]
 
 # Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
