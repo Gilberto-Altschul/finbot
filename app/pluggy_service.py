@@ -1,7 +1,5 @@
 import requests
-import hashlib
 import json   
-import base64  
 import logging
 import time
 from datetime import date, timedelta
@@ -174,9 +172,6 @@ class PluggyService:
     def __init__(self):
         # 🔹 Autenticação via clientId/clientSecret
 
-        logger.info(f"[DEBUG] clientId len={len(settings.pluggy_client_id)} sha256={hashlib.sha256(settings.pluggy_client_id.encode()).hexdigest()}")
-        logger.info(f"[DEBUG] clientSecret len={len(settings.pluggy_client_secret)} sha256={hashlib.sha256(settings.pluggy_client_secret.encode()).hexdigest()}")
-
         auth_resp = requests.post(
             "https://api.pluggy.ai/auth",
             json={
@@ -198,11 +193,6 @@ class PluggyService:
                     payload += '=' * (-len(payload) % 4)
                     decoded_payload = json.loads(base64.urlsafe_b64decode(payload))
                     
-                    logger.info("--- DEBUG JWT PLUGGY ---")
-                    logger.info(f"Payload decodificado: {json.dumps(decoded_payload, indent=2)}")
-                    logger.info("------------------------")
-                    logger.info(f"Pluggy api_key completo: {api_key}")
-
             except Exception as e:
                 logger.error(f"Erro ao decodificar JWT para debug: {e}")
         # --- FIM DO LOG DE DEBUG ---
@@ -322,25 +312,36 @@ class PluggyService:
                 raw_amount = float(tx["amount"])
             tipo = "income" if raw_amount > 0 else "expense"
 
-            # 1ª tentativa: mapa estático a partir da categoria oficial da Pluggy
-            # (sem custo, sem chamada de LLM). Só cai no classificador por texto
-            # quando a Pluggy não retornou categoria ou ela não está mapeada.
+            # Categorização sempre passa por categorizar_gasto_hibrido, que já resolve
+            # subcategoria (camadas de merchant learning global, keywords e LLM) e
+            # deriva a categoria a partir dela — categoria nunca é um campo independente.
+            # O mapa estático CATEGORIA_PLUGGY_PARA_PT (categoria da Pluggy) é usado só
+            # como DICA/fallback quando as camadas 1-2 não encontram nada, evitando
+            # que a subcategoria seja perdida como acontecia antes (categoria_pt, _ = ...).
             categoria_pluggy = tx.get("category")
-            categoria_pt = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
+            categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
 
-            if categoria_pt is None:
-                try:
-                    categoria_pt, _ = await categorizar_gasto_hibrido(user_phone, descricao)
-                    if not categoria_pt or categoria_pt == "Perguntar":
-                        categoria_pt = "Outros"
-                except Exception as e:
-                    logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
-                    categoria_pt = "Outros"
+            subcategoria_pt = None
+            try:
+                fallback = (categoria_dica, "Outros") if categoria_dica else None
+                categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
+                    user_phone, descricao, fallback=fallback
+                )
+                if not categoria_pt or categoria_pt == "Perguntar":
+                    categoria_pt = categoria_dica or "Outros"
+                    subcategoria_pt = None
+            except Exception as e:
+                logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
+                categoria_pt = categoria_dica or "Outros"
+                subcategoria_pt = None
+
+            subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
 
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
                 "category": categoria_pt,
+                "subcategory": subcategoria_pt,
                 "description": descricao,
                 "pluggy_transaction_id": tx.get("id"),
                 "transaction_type": tipo,
@@ -348,6 +349,8 @@ class PluggyService:
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
                 "billing_date": (tx.get("creditCardDate") or tx.get("date") or tx.get("transactionDate", ""))[:10],
             }
+            if subcategory_id:
+                row["subcategory_id"] = subcategory_id
             rows.append(row)
 
         inseridos = db.inserir_gastos_em_lote(rows)

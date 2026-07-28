@@ -422,30 +422,64 @@ def get_category_emojis() -> dict[str, str]:
         return {}
 
 def get_user_merchant_mapping(user_phone: str, merchant: str) -> dict | None:
-    """Busca se já existe um mapeamento de categoria/subcategoria para este estabelecimento."""
+    """
+    Busca se já existe um mapeamento de subcategoria para este estabelecimento.
+    GLOBAL a partir da migração de categorização: não filtra mais por user_phone
+    (finbot_merchant_mappings.merchant_name agora é UNIQUE globalmente), então uma
+    correção feita por qualquer usuário passa a valer para todos.
+    `user_phone` é mantido no parâmetro por compatibilidade de assinatura, mas não
+    é mais usado no filtro.
+    """
     try:
         m_norm = _normalize(merchant)
         res = get_db().table("finbot_merchant_mappings") \
-            .select("category, subcategory") \
-            .ilike("user_phone", _q(user_phone)) \
+            .select("subcategory_id, finbot_subcategories(name, category_id, finbot_categories(name))") \
             .eq("merchant_name", m_norm) \
             .limit(1).execute()
-        
-        if res.data:
+
+        if res.data and res.data[0].get("subcategory_id"):
+            sub = res.data[0]["finbot_subcategories"]
             return {
-                "category_name": res.data[0]["category"],
-                "subcategory_name": res.data[0]["subcategory"]
+                "subcategory_id": res.data[0]["subcategory_id"],
+                "subcategory_name": sub["name"],
+                "category_name": sub["finbot_categories"]["name"],
             }
         return None
     except Exception as e:
         logger.error(f"Erro em get_user_merchant_mapping: {e}")
         return None
 
+def get_subcategory_id_by_name(subcategory_name: str) -> int | None:
+    """Resolve o id de uma subcategoria pelo nome exato (deve bater com finbot_subcategories.name)."""
+    try:
+        res = get_db().table("finbot_subcategories").select("id").eq("name", subcategory_name).limit(1).execute()
+        return res.data[0]["id"] if res.data else None
+    except Exception as e:
+        logger.error(f"Erro em get_subcategory_id_by_name: {e}")
+        return None
+
 def save_user_merchant_mapping(user_phone: str, merchant: str, category: str, subcategory: str) -> None:
+    """
+    Salva o aprendizado de merchant -> subcategoria de forma GLOBAL.
+    on_conflict usa apenas merchant_name (constraint única global criada na migração) —
+    antes usava (user_phone, merchant_name), o que nunca dava match porque user_phone
+    é criptografado de forma não-determinística (mesmo telefone gera string cifrada
+    diferente a cada chamada), causando inserção duplicada em vez de update.
+    """
     try:
         m_norm = _normalize(merchant)
-        row = {"user_phone": _s(user_phone), "merchant_name": m_norm, "category": category, "subcategory": subcategory}
-        get_db().table("finbot_merchant_mappings").upsert(row, on_conflict="user_phone,merchant_name").execute()
+        subcategory_id = get_subcategory_id_by_name(subcategory)
+        row = {
+            "user_phone": _s(user_phone),  # mantido só como metadado/auditoria de quem ensinou
+            "merchant_name": m_norm,
+            "category": category,        # legado, mantido durante a transição
+            "subcategory": subcategory,  # legado, mantido durante a transição
+        }
+        if subcategory_id:
+            row["subcategory_id"] = subcategory_id
+        else:
+            logger.warning(f"Subcategoria '{subcategory}' não encontrada em finbot_subcategories — salvando sem subcategory_id (revisar taxonomia).")
+        get_db().table("finbot_merchant_mappings").upsert(row, on_conflict="merchant_name").execute()
     except Exception as e:
         logger.error(f"Erro ao salvar mapeamento do estabelecimento: {e}")
 

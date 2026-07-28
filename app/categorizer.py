@@ -41,29 +41,59 @@ _FAMILY_FORCE_TERMS = [
     "apoio familiar", "apoio", "mesada", "pensao", "ajuda familiar", "familiares", "dependentes"
 ]
 
-SYSTEM_CATEGORIZER = """
+def _montar_taxonomia_prompt() -> str:
+    """
+    Monta a lista de categorias/subcategorias permitidas DINAMICAMENTE a partir de
+    finbot_subcategories, em vez de uma lista hardcoded no prompt.
+    Isso elimina a divergência entre o que a LLM "acha" que existe e o que
+    realmente está cadastrado no banco (causa raiz de boa parte do desalinhamento
+    de taxonomia encontrado na migração de categorização).
+    Resultado é cacheado em memória do processo; chame _invalidar_cache_taxonomia()
+    se a taxonomia mudar em runtime (ex: novo INSERT em finbot_subcategories).
+    """
+    try:
+        res = get_db().table("finbot_subcategories") \
+            .select("name, finbot_categories(name)") \
+            .order("name").execute()
+        por_categoria: dict[str, list[str]] = {}
+        for row in (res.data or []):
+            cat = row["finbot_categories"]["name"]
+            por_categoria.setdefault(cat, []).append(row["name"])
+        linhas = [f"- {cat}: {', '.join(subs)}" for cat, subs in sorted(por_categoria.items())]
+        return "\n".join(linhas)
+    except Exception as e:
+        logger.error(f"Erro ao montar taxonomia dinâmica para o prompt: {e}")
+        return "- Outros: Outros"  # fallback mínimo, não deve travar a categorização
+
+
+_taxonomia_cache: str | None = None
+
+def _get_taxonomia_prompt_cached() -> str:
+    global _taxonomia_cache
+    if _taxonomia_cache is None:
+        _taxonomia_cache = _montar_taxonomia_prompt()
+    return _taxonomia_cache
+
+
+def _invalidar_cache_taxonomia() -> None:
+    global _taxonomia_cache
+    _taxonomia_cache = None
+
+
+def _system_categorizer() -> str:
+    return f"""
 Você é o motor de classificação interna do FinBot. Sua única tarefa é ler a descrição de um gasto e mapeá-lo para uma SUBCATEGORIA e CATEGORIA válidas do sistema.
 
-SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA:
-- Moradia: Aluguel/Financiamento, Condomínio, Energia, Água e Saneamento, Gás, Internet e TV, Celular, Empregada/Diarista, Manutenção Residencial, Reforma, Mobília, Seguro Residencial
-- Alimentação: Mercado, Feira e Hortifruti, Delivery, Restaurante, Padaria e Café, Bar e Petisco
-- Transporte: Aplicativo, Combustível, Transporte Público, Estacionamento, Manutenção Veículo, Oficina, Financiamento Veículo, Passagem Aérea
-- Saúde: Plano de Saúde, Farmácia, Consulta e Exame, Academia e Esportes, Terapia, Nutrição
-- Lazer: Streaming, Cinema e Shows, Viagem, Bar e Balada, Hobbies e Jogos, Restaurante Social
-- Vestuário e Beleza: Roupas, Calçados, Beleza e Cabelo, Cosméticos, Presentes
-- Educação: Escola e Faculdade, Curso Online, Material Escolar, Idiomas
-- Financeiro: Empréstimo e Parcela, Seguro, Investimento, Imposto, Tarifa Bancária, Apostas
-- Pets: Ração e Petisco, Veterinário, Petshop e Banho, Plano Pet
-- Família e Dependentes: Mesada, Pensão, Apoio Familiar, Presente Familiar, Emergência Familiar, Empréstimo Pessoal
-- Empresa: MEI, Impostos PJ, Escritório, Marketing, Pró-labore, Ferramentas
+SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA (lista oficial, vinda do banco de dados — não invente nomes fora desta lista):
+{_get_taxonomia_prompt_cached()}
 
-ATENÇÃO: NUNCA use a categoria 'Pessoal'. Se o gasto parecer de uso pessoal, use 'Lazer' ou 'Vestuário e Beleza' conforme o contexto.
+ATENÇÃO: NUNCA use a categoria 'Pessoal' ou 'Outros' se houver uma opção melhor na lista acima.
 
 IMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', você DEVE retornar obrigatoriamente:
-{"categoria": "Perguntar", "subcategoria": "Perguntar"}
+{{"categoria": "Perguntar", "subcategoria": "Perguntar"}}
 
-Responda EXCLUSIVAMENTE com um JSON no formato estrito:
-{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria"}
+Responda EXCLUSIVAMENTE com um JSON no formato estrito, usando exatamente os nomes da lista acima:
+{{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria"}}
 """
 
 async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: tuple[str, str] | None = None) -> tuple[str, str]:
@@ -89,12 +119,17 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
     # Camada -1.2: Proteção Hardcoded para Seguro Automóvel (Vai para Transporte)
     if any(_normalize(term) in desc_norm for term in _AUTO_FORCE_TERMS):
         logger.info(f"Camada -1.2 (Auto Priority) detectada: '{descricao}'. Categorizando como Transporte.")
-        return "Transporte", "Seguro Automóvel"
+        return "Transporte", "Seguro Auto"
 
     # Camada -1.3: Proteção Hardcoded para Vestuário e Beleza
     if any(_normalize(term) in desc_norm for term in _CLOTHING_FORCE_TERMS):
         logger.info(f"Camada -1.3 (Clothing Priority) detectada: '{descricao}'. Categorizando como Vestuário e Beleza.")
-        sub = "Beleza e Cabelo" if any(x in desc_norm for x in ["manicure", "salao", "barbearia", "estetica", "beleza"]) else "Roupas"
+        if "manicure" in desc_norm or "pedicure" in desc_norm or "unha" in desc_norm:
+            sub = "Manicure"
+        elif any(x in desc_norm for x in ["salao", "barbearia", "barba", "cabelo", "estetica", "beleza"]):
+            sub = "Cabeleireiro"
+        else:
+            sub = "Roupa"
         return "Vestuário e Beleza", sub
 
     # Camada 0: Bloqueio de Ambiguidade (Prioridade Absoluta)
@@ -142,7 +177,7 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
     logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao}")
     try:
         response = await call_llm(
-            system=SYSTEM_CATEGORIZER,
+            system=_system_categorizer(),
             history=[],
             message=f"Classifique a descrição: '{descricao}'",
             tools=[]
