@@ -5,7 +5,7 @@ import hmac
 from cryptography.fernet import Fernet
 from app.config import get_settings
 
-SISTEMA_CATEGORIAS = ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes"]
+SISTEMA_CATEGORIAS = ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Receitas"]
 
 def _fmt(value: float) -> str:
     """Formata valores para o padrão R$ 0,00"""

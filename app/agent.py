@@ -26,7 +26,35 @@ logger = logging.getLogger(__name__)
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM = """
+def _montar_taxonomia_agent() -> str:
+    """
+    Monta o bloco 'CATEGORIAS E SUBCATEGORIAS' dinamicamente a partir de
+    finbot_subcategories, em vez de uma lista hardcoded no prompt do agente.
+    Mesma lógica usada em app/categorizer.py — evita que o agente principal
+    (quem conversa no WhatsApp) tenha uma visão diferente da taxonomia real
+    do banco.
+    """
+    try:
+        res = db.get_db().table("finbot_subcategories") \
+            .select("name, finbot_categories(name)") \
+            .order("name").execute()
+        por_categoria: dict[str, list[str]] = {}
+        for row in (res.data or []):
+            cat = row["finbot_categories"]["name"]
+            por_categoria.setdefault(cat, []).append(row["name"])
+        return "\n".join(f"- {cat}: {', '.join(subs)}" for cat, subs in sorted(por_categoria.items()))
+    except Exception as e:
+        logger.error(f"Erro ao montar taxonomia dinâmica do agente: {e}")
+        return "- Outros: Outros"
+
+
+_system_cache: str | None = None
+
+def _build_system() -> str:
+    global _system_cache
+    if _system_cache is not None:
+        return _system_cache
+    _system_cache = f"""
 Você é o FinBot, um assistente financeiro pessoal via WhatsApp.
 Seu objetivo: ajudar o usuário a registrar gastos, receitas (incomes) e entender sua vida financeira.
 
@@ -43,19 +71,15 @@ REGRAS IMPORTANTES:
 - QUANDO / DATAS: Se o usuário perguntar quando algo foi pago ou o dia de um gasto, use 'listar_categoria' (se souber a categoria) ou 'listar_gastos_detalhados' para encontrar a data exata nos dados retornados.
 - SAÚDE vs FINANCEIRO: Planos de Saúde ou Convênios DEVEM ser registrados na categoria 'Saúde'. A categoria 'Financeiro' é para taxas e seguros de bens (vida/casa). Seguros de automóvel pertencem à categoria 'Transporte'.
 
-CATEGORIAS E SUBCATEGORIAS:
-- Moradia: Aluguel, Condomínio, Contas, Celular, Faxina, Manutenção Residencial, Utensílios
-- Alimentação: Delivery, Mercado, Restaurante, Padaria, Lanche, Café
-- Transporte: Aplicativo, Combustível, Estacionamento, Ônibus, Metrô, Oficina, Manutenção Veículo, Seguro Automóvel
-- Saúde: Farmácia, Academia, Médico, Dentista, Suplemento, Exame, Plano de Saúde, Convênio
-- Lazer: Streaming, Cinema, Show, Viagem, Bar, Balada, Presente
-- Vestuário e Beleza: Roupa, Calçado, Cabelo, Barbearia, Manicure, Estética
-- Educação: Curso, Livro, Faculdade, Software
-- Financeiro: Seguro (Vida/Residencial), Tarifa, Anuidade, Imposto, Taxa
-- Pets: Ração, Veterinário, Petshop, Banho, Tosa
-- Família e Dependentes: Mesada, Pensão, Apoio Familiar, Presente Familiar, Emergência Familiar, Empréstimo Pessoal
-- Empresa: MEI, Impostos PJ, Escritório, Marketing, Pró-labore, Ferramentas
+CATEGORIAS E SUBCATEGORIAS (lista oficial, vinda do banco de dados):
+{_montar_taxonomia_agent()}
 """
+    return _system_cache
+
+
+def _invalidar_cache_system() -> None:
+    global _system_cache
+    _system_cache = None
 
 ONBOARDING_MSG = (
     "👋 Olá! Sou o *FinBot*, seu assistente de controle financeiro.\n\n"
@@ -421,7 +445,7 @@ async def run(user_phone: str, user_message: str) -> str:
     db.save_message(user_phone, "user", user_message)
 
     try:
-        response = await call_llm(system=SYSTEM, history=history, message=user_message, tools=tool_registry.SCHEMAS)
+        response = await call_llm(system=_build_system(), history=history, message=user_message, tools=tool_registry.SCHEMAS)
         if response["type"] == "tool_call":
             tool_results = []
             for call in response["tool_calls"]:
@@ -466,7 +490,7 @@ async def run(user_phone: str, user_message: str) -> str:
                     logger.info("Sintetizando resultados analíticos via LLM...")
                     prompt_sintese = f"O usuário solicitou uma análise ou continuação de comparação. Dados brutos retornados: {json.dumps([tr['data'] for tr in tool_results], ensure_ascii=False)}. Formule uma resposta humana, direta e comparativa com base nesses dados e no histórico da conversa."
                     resposta_ia = await call_llm(
-                        system=SYSTEM,
+                        system=_build_system(),
                         history=history + [{"role": "user", "content": user_message}],
                         message=prompt_sintese,
                         tools=[]
