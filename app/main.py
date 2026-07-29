@@ -11,7 +11,7 @@ import time
 import httpx
 from pypdf import PdfReader, PdfWriter
 
-from fastapi import FastAPI, Form, BackgroundTasks, Response
+from fastapi import FastAPI, Form, BackgroundTasks, Request, Response
 from twilio.rest import Client
 
 import app.agent as agent
@@ -251,3 +251,17 @@ async def webhook(
     logger.info(f"Incoming message from {user_phone}: {user_message}")
     background_tasks.add_task(_process, user_phone, user_message)
     return Response(content="<Response/>", media_type="text/xml")
+
+@app.post("/webhook/pluggy")
+async def webhook_pluggy(request: Request):
+    """Recebe eventos e notificações da plataforma Pluggy."""
+    try:
+        payload = await request.json()
+        logger.info(f"Webhook da Pluggy recebido: {payload.get('event', 'evento desconhecido')}")
+        
+        # Aqui você adiciona a lógica para tratar os dados enviados pela Pluggy
+        
+        return {"status": "success"}
+    except Exception as exc:
+        logger.error(f"Erro ao processar webhook da Pluggy: {exc}")
+        return {"status": "error", "message": str(exc)}
