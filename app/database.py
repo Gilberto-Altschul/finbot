@@ -12,7 +12,7 @@ from calendar import monthrange
 
 from supabase import create_client, Client
 from app.config import get_settings
-from app.utils import _normalize, criptografar_telefone, get_lookup_prefix
+from app.utils import _normalize, criptografar_telefone, get_lookup_prefix, descriptografar_telefone
 
 logger = logging.getLogger(__name__)
 
@@ -423,26 +423,28 @@ def get_category_emojis() -> dict[str, str]:
 
 def get_user_merchant_mapping(user_phone: str, merchant: str) -> dict | None:
     """
-    Busca se já existe um mapeamento de subcategoria para este estabelecimento.
-    GLOBAL a partir da migração de categorização: não filtra mais por user_phone
-    (finbot_merchant_mappings.merchant_name agora é UNIQUE globalmente), então uma
-    correção feita por qualquer usuário passa a valer para todos.
-    `user_phone` é mantido no parâmetro por compatibilidade de assinatura, mas não
-    é mais usado no filtro.
+    Busca se já existe uma CATEGORIA aprendida para este estabelecimento.
+    GLOBAL: não filtra mais por user_phone (merchant_name é UNIQUE globalmente).
+    Retorna apenas a categoria conhecida — a subcategoria continua sendo resolvida
+    a cada transação (keyword/LLM), pois o mesmo estabelecimento pode vender em
+    mais de uma subcategoria da mesma categoria (ex: financiadora, hipermercado,
+    loja de departamento). subcategory_id retornado é só uma ÚLTIMA DICA, não
+    autoritativo — quem chama decide se usa ou refina.
+    `user_phone` mantido na assinatura por compatibilidade, não usado no filtro.
     """
     try:
         m_norm = _normalize(merchant)
         res = get_db().table("finbot_merchant_mappings") \
-            .select("subcategory_id, finbot_subcategories(name, category_id, finbot_categories(name))") \
+            .select("category_id, subcategory_id, finbot_categories(name)") \
             .eq("merchant_name", m_norm) \
             .limit(1).execute()
 
-        if res.data and res.data[0].get("subcategory_id"):
-            sub = res.data[0]["finbot_subcategories"]
+        if res.data and res.data[0].get("category_id"):
+            row = res.data[0]
             return {
-                "subcategory_id": res.data[0]["subcategory_id"],
-                "subcategory_name": sub["name"],
-                "category_name": sub["finbot_categories"]["name"],
+                "category_id": row["category_id"],
+                "category_name": row["finbot_categories"]["name"],
+                "subcategory_id_hint": row.get("subcategory_id"),  # não autoritativo
             }
         return None
     except Exception as e:
@@ -458,27 +460,38 @@ def get_subcategory_id_by_name(subcategory_name: str) -> int | None:
         logger.error(f"Erro em get_subcategory_id_by_name: {e}")
         return None
 
+def get_category_id_by_name(category_name: str) -> int | None:
+    """Resolve o id de uma categoria pelo nome exato."""
+    try:
+        res = get_db().table("finbot_categories").select("id").eq("name", category_name).limit(1).execute()
+        return res.data[0]["id"] if res.data else None
+    except Exception as e:
+        logger.error(f"Erro em get_category_id_by_name: {e}")
+        return None
+
 def save_user_merchant_mapping(user_phone: str, merchant: str, category: str, subcategory: str) -> None:
     """
-    Salva o aprendizado de merchant -> subcategoria de forma GLOBAL.
-    on_conflict usa apenas merchant_name (constraint única global criada na migração) —
-    antes usava (user_phone, merchant_name), o que nunca dava match porque user_phone
-    é criptografado de forma não-determinística (mesmo telefone gera string cifrada
-    diferente a cada chamada), causando inserção duplicada em vez de update.
+    Salva o aprendizado de merchant -> CATEGORIA (autoritativo) de forma GLOBAL.
+    subcategory_id é salvo só como última dica (não é mais a chave do aprendizado),
+    porque o mesmo estabelecimento pode ter subcategorias diferentes entre compras.
+    on_conflict usa apenas merchant_name (constraint única global).
     """
     try:
         m_norm = _normalize(merchant)
-        subcategory_id = get_subcategory_id_by_name(subcategory)
+        category_id = get_category_id_by_name(category)
+        subcategory_id = get_subcategory_id_by_name(subcategory) if subcategory else None
         row = {
-            "user_phone": _s(user_phone),  # mantido só como metadado/auditoria de quem ensinou
+            "user_phone": _s(user_phone),  # metadado/auditoria de quem ensinou
             "merchant_name": m_norm,
             "category": category,        # legado, mantido durante a transição
             "subcategory": subcategory,  # legado, mantido durante a transição
         }
-        if subcategory_id:
-            row["subcategory_id"] = subcategory_id
+        if category_id:
+            row["category_id"] = category_id
         else:
-            logger.warning(f"Subcategoria '{subcategory}' não encontrada em finbot_subcategories — salvando sem subcategory_id (revisar taxonomia).")
+            logger.warning(f"Categoria '{category}' não encontrada em finbot_categories — salvando sem category_id.")
+        if subcategory_id:
+            row["subcategory_id"] = subcategory_id  # só dica, não autoritativo
         get_db().table("finbot_merchant_mappings").upsert(row, on_conflict="merchant_name").execute()
     except Exception as e:
         logger.error(f"Erro ao salvar mapeamento do estabelecimento: {e}")
@@ -593,6 +606,28 @@ def get_user_item_id(user_phone: str) -> str | None:
         return res.data[0]["pluggy_item_id"] if res.data else None
     except Exception as e:
         logger.error(f"Erro em get_user_item_id: {e}")
+        return None
+
+def get_user_by_pluggy_item_id(item_id: str) -> dict | None:
+    """
+    Busca reversa: dado um itemId da Pluggy (recebido no webhook), encontra o
+    user_phone e account_id correspondentes. pluggy_item_id é gravado em texto
+    puro (não criptografado), então a busca é direta.
+    """
+    try:
+        res = get_db().table("finbot_user_connections") \
+            .select("user_phone, pluggy_account_id, pluggy_item_id") \
+            .eq("pluggy_item_id", item_id).limit(1).execute()
+        if not res.data:
+            return None
+        row = res.data[0]
+        return {
+            "user_phone": descriptografar_telefone(row["user_phone"]),
+            "account_id": row.get("pluggy_account_id"),
+            "item_id": row["pluggy_item_id"],
+        }
+    except Exception as e:
+        logger.error(f"Erro em get_user_by_pluggy_item_id: {e}")
         return None
 
 def get_pluggy_conta_padrao(user_phone: str) -> dict | None:

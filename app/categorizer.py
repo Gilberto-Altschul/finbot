@@ -27,7 +27,7 @@ _HEALTH_FORCE_TERMS = [
 
 # Termos que forçam a categoria Transporte para Seguro Automóvel
 _AUTO_FORCE_TERMS = [
-    "seguro carro", "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
+    "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
 ]
 
 # Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
@@ -41,23 +41,21 @@ _FAMILY_FORCE_TERMS = [
     "apoio familiar", "apoio", "mesada", "pensao", "ajuda familiar", "familiares", "dependentes"
 ]
 
-def _montar_taxonomia_prompt() -> str:
+def _montar_taxonomia_prompt(categoria_restrita: str | None = None) -> str:
     """
     Monta a lista de categorias/subcategorias permitidas DINAMICAMENTE a partir de
-    finbot_subcategories, em vez de uma lista hardcoded no prompt.
-    Isso elimina a divergência entre o que a LLM "acha" que existe e o que
-    realmente está cadastrado no banco (causa raiz de boa parte do desalinhamento
-    de taxonomia encontrado na migração de categorização).
-    Resultado é cacheado em memória do processo; chame _invalidar_cache_taxonomia()
-    se a taxonomia mudar em runtime (ex: novo INSERT em finbot_subcategories).
+    finbot_subcategories. Se categoria_restrita for informada, lista só as
+    subcategorias daquela categoria (usado quando o merchant já tem categoria
+    conhecida via aprendizado — reduz o universo de opções e melhora a precisão).
     """
     try:
-        res = get_db().table("finbot_subcategories") \
-            .select("name, finbot_categories(name)") \
-            .order("name").execute()
+        query = db.get_db().table("finbot_subcategories").select("name, finbot_categories(name)")
+        res = query.order("name").execute()
         por_categoria: dict[str, list[str]] = {}
         for row in (res.data or []):
             cat = row["finbot_categories"]["name"]
+            if categoria_restrita and cat != categoria_restrita:
+                continue
             por_categoria.setdefault(cat, []).append(row["name"])
         linhas = [f"- {cat}: {', '.join(subs)}" for cat, subs in sorted(por_categoria.items())]
         return "\n".join(linhas)
@@ -66,30 +64,35 @@ def _montar_taxonomia_prompt() -> str:
         return "- Outros: Outros"  # fallback mínimo, não deve travar a categorização
 
 
-_taxonomia_cache: str | None = None
+_taxonomia_cache: dict[str | None, str] = {}
 
-def _get_taxonomia_prompt_cached() -> str:
-    global _taxonomia_cache
-    if _taxonomia_cache is None:
-        _taxonomia_cache = _montar_taxonomia_prompt()
-    return _taxonomia_cache
+def _get_taxonomia_prompt_cached(categoria_restrita: str | None = None) -> str:
+    if categoria_restrita not in _taxonomia_cache:
+        _taxonomia_cache[categoria_restrita] = _montar_taxonomia_prompt(categoria_restrita)
+    return _taxonomia_cache[categoria_restrita]
 
 
 def _invalidar_cache_taxonomia() -> None:
     global _taxonomia_cache
-    _taxonomia_cache = None
+    _taxonomia_cache = {}
 
 
-def _system_categorizer() -> str:
+def _system_categorizer(categoria_restrita: str | None = None) -> str:
+    if categoria_restrita:
+        instrucao_categoria = f'A categoria já é conhecida: "{categoria_restrita}". Retorne SEMPRE essa categoria — sua única tarefa aqui é escolher a subcategoria mais adequada dentro dela.'
+    else:
+        instrucao_categoria = "Escolha a categoria E a subcategoria mais adequadas."
     return f"""
 Você é o motor de classificação interna do FinBot. Sua única tarefa é ler a descrição de um gasto e mapeá-lo para uma SUBCATEGORIA e CATEGORIA válidas do sistema.
 
+{instrucao_categoria}
+
 SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA (lista oficial, vinda do banco de dados — não invente nomes fora desta lista):
-{_get_taxonomia_prompt_cached()}
+{_get_taxonomia_prompt_cached(categoria_restrita)}
 
 ATENÇÃO: NUNCA use a categoria 'Pessoal' ou 'Outros' se houver uma opção melhor na lista acima.
 
-IMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', você DEVE retornar obrigatoriamente:
+IMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', e a categoria NÃO for conhecida previamente, você DEVE retornar obrigatoriamente:
 {{"categoria": "Perguntar", "subcategoria": "Perguntar"}}
 
 Responda EXCLUSIVAMENTE com um JSON no formato estrito, usando exatamente os nomes da lista acima:
@@ -137,47 +140,57 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
         logger.info(f"Camada 0 (Ambiguidade) detectada: '{descricao}'. Forçando interrupção para pergunta.")
         return "Perguntar", "Perguntar"
     
-    # Camada 1: Tem regra personalizada do usuário para esse Merchant?
+    # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
+    # (Não fixa mais a subcategoria — o mesmo estabelecimento pode vender em
+    # mais de uma subcategoria da mesma categoria.)
     mapping = db.get_user_merchant_mapping(user_phone, desc_norm)
-    if mapping:
-        logger.info(f"Camada 1 (User Merchant) resolvida: {desc_norm} -> {mapping['category_name']}/{mapping['subcategory_name']}")
-        return mapping["category_name"], mapping["subcategory_name"]
+    categoria_conhecida = mapping["category_name"] if mapping else None
+    if categoria_conhecida:
+        logger.info(f"Camada 1 (User Merchant) — categoria conhecida: {desc_norm} -> {categoria_conhecida}")
 
-    # Camada 2: Alguma keyword global de subcategoria mapeia com o texto?
+    # Camada 2: Alguma keyword de subcategoria mapeia com o texto?
+    # Se a categoria já é conhecida (Camada 1), busca só dentro dela — mais rápido
+    # e mais preciso. Se não, busca em todas.
     try:
-        from app.database import get_db
-        res = get_db().table("finbot_subcategories").select("category_name, name, keywords").execute()
-        
-        # Ordenamos as subcategorias para priorizar Saúde e Transporte sobre Financeiro.
-        # Prioridade máxima para Família para evitar que keywords genéricas sejam capturadas por outras categorias.
+        query = db.get_db().table("finbot_subcategories").select("category_name, name, keywords")
+        if categoria_conhecida:
+            query = query.eq("category_name", categoria_conhecida)
+        res = query.execute()
+
         def get_priority(cat_name):
             cat_norm = _normalize(cat_name)
-            if "familia" in cat_norm or "dependente" in cat_norm or "apoio" in cat_norm: return -1 
+            if "familia" in cat_norm or "dependente" in cat_norm or "apoio" in cat_norm: return -1
             if cat_norm == "saude": return 0
             if cat_norm == "transporte": return 1
             return 5
 
         sorted_subs = sorted(res.data, key=lambda x: get_priority(x.get('category_name', '')))
-        
+
         for sub in sorted_subs:
             keywords = sub.get("keywords", [])
             if any(_normalize(kw) in desc_norm for kw in keywords) or _normalize(sub["name"]) in desc_norm:
-                logger.info(f"Camada 2 (Global Subcategory) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
+                logger.info(f"Camada 2 (Subcategory Keyword) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
                 db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])
                 return sub["category_name"], sub["name"]
     except Exception as e:
         logger.error(f"Erro na Camada 2 de categorização: {e}")
 
-    # Camada 2.5: Se já temos uma sugestão da extração inicial (PDF), usamos ela para economizar IA
+    # Camada 2.5: Sugestão da extração inicial (PDF/Gemini) — só é confiável se a
+    # subcategoria sugerida REALMENTE existir na taxonomia oficial (o extrator de
+    # PDF usa texto livre para subcategoria, então pode sugerir algo inventado).
     if fallback and fallback[0] != "Outros":
-        logger.info(f"Camada 2.5 (PDF Fallback) utilizada: {descricao} -> {fallback[0]}/{fallback[1]}")
-        return fallback[0], fallback[1]
+        fb_categoria, fb_subcategoria = fallback
+        if (not categoria_conhecida or fb_categoria == categoria_conhecida) and db.get_subcategory_id_by_name(fb_subcategoria):
+            logger.info(f"Camada 2.5 (PDF Fallback, validado) utilizada: {descricao} -> {fb_categoria}/{fb_subcategoria}")
+            return fb_categoria, fb_subcategoria
+        else:
+            logger.info(f"Camada 2.5 ignorada — fallback '{fb_categoria}/{fb_subcategoria}' não bate com a taxonomia oficial ou diverge da categoria já conhecida.")
 
-    # Camada 3: LLM acionada para decifrar o local inédito
-    logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao}")
+    # Camada 3: LLM decide a subcategoria — restrita à categoria já conhecida, se houver
+    logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao} (categoria conhecida: {categoria_conhecida})")
     try:
         response = await call_llm(
-            system=_system_categorizer(),
+            system=_system_categorizer(categoria_restrita=categoria_conhecida),
             history=[],
             message=f"Classifique a descrição: '{descricao}'",
             tools=[]
@@ -191,15 +204,15 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
         match = re.search(r'\{.*\}', content, re.DOTALL)
         if match:
             content = match.group(0)
-            
+
         data = json.loads(content)
-        cat = data.get("categoria", "Outros")
+        cat = categoria_conhecida or data.get("categoria", "Outros")
         sub = data.get("subcategoria", "Outros")
-        
+
         if cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"]:
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)
-            
+
         return cat, sub
     except Exception as e:
         logger.error(f"Erro na Camada 3 (LLM): {e}")
-        return "Outros", "Outros"
+        return (categoria_conhecida, "Outros") if categoria_conhecida else ("Outros", "Outros")
