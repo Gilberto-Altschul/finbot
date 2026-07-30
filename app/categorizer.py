@@ -77,11 +77,22 @@ def _invalidar_cache_taxonomia() -> None:
     _taxonomia_cache = {}
 
 
-def _system_categorizer(categoria_restrita: str | None = None) -> str:
+def _system_categorizer(categoria_restrita: str | None = None, permitir_perguntar: bool = True) -> str:
     if categoria_restrita:
         instrucao_categoria = f'A categoria já é conhecida: "{categoria_restrita}". Retorne SEMPRE essa categoria — sua única tarefa aqui é escolher a subcategoria mais adequada dentro dela.'
     else:
         instrucao_categoria = "Escolha a categoria E a subcategoria mais adequadas."
+
+    instrucao_ambiguidade = (
+        "\nIMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', "
+        'e a categoria NÃO for conhecida previamente, você DEVE retornar obrigatoriamente:\n'
+        '{"categoria": "Perguntar", "subcategoria": "Perguntar"}\n'
+        if permitir_perguntar else
+        "\nMesmo que a descrição pareça ambígua (ex: 'Restaurante', 'Bar', 'Café'), escolha a subcategoria MAIS PROVÁVEL "
+        "dentro da lista oficial — não há usuário disponível para confirmar agora, então uma estimativa razoável é "
+        "melhor do que não categorizar.\n"
+    )
+
     return f"""
 Você é o motor de classificação interna do FinBot. Sua única tarefa é ler a descrição de um gasto e mapeá-lo para uma SUBCATEGORIA e CATEGORIA válidas do sistema.
 
@@ -91,21 +102,24 @@ SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA (lista oficial, vinda do banco 
 {_get_taxonomia_prompt_cached(categoria_restrita)}
 
 ATENÇÃO: NUNCA use a categoria 'Pessoal' ou 'Outros' se houver uma opção melhor na lista acima.
-
-IMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', e a categoria NÃO for conhecida previamente, você DEVE retornar obrigatoriamente:
-{{"categoria": "Perguntar", "subcategoria": "Perguntar"}}
-
+{instrucao_ambiguidade}
 Responda EXCLUSIVAMENTE com um JSON no formato estrito, usando exatamente os nomes da lista acima:
 {{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria"}}
 """
 
-async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: tuple[str, str] | None = None) -> tuple[str, str]:
+async def categorizar_gasto_hibrido(
+    user_phone: str, descricao: str, fallback: tuple[str, str] | None = None,
+    permitir_melhor_esforco: bool = False,
+) -> tuple[str, str]:
     """
-    Fluxo de 4 Camadas para Precisão Máxima:
-    0. Filtro de Ambiguidade (Restaurante/Bar/etc) -> Força Pergunta
-    1. Regra do Usuário (Merchant personalizado já aprendido)
-    2. Keywords Globais populadas no Banco de Dados
-    3. LLM infere a Subcategoria -> Descobre a Categoria Mãe -> Salva Aprendizado
+    Fluxo de camadas para categorização.
+    permitir_melhor_esforco: quando True (ex: sincronização Pluggy, onde não há
+    como perguntar ao usuário em tempo real), termos ambíguos (Camada 0) não
+    travam mais em "Perguntar" — o fluxo continua tentando Camadas 1-3 para achar
+    a melhor subcategoria possível (ex: "Barri Cafeteria" bate na keyword de
+    "Café" mesmo sendo um termo listado como ambíguo). Quando False (fluxo de
+    chat/WhatsApp, onde o usuário está disponível), mantém o comportamento
+    original de interromper e pedir confirmação humana.
     """
     desc_norm = _normalize(descricao)
 
@@ -135,18 +149,33 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
             sub = "Roupa"
         return "Vestuário e Beleza", sub
 
-    # Camada 0: Bloqueio de Ambiguidade (Prioridade Absoluta)
-    if any(_normalize(term) in desc_norm for term in _AMBIGUOUS_TERMS):
+    # Camada 0: Bloqueio de Ambiguidade — só interrompe se houver um usuário
+    # disponível para responder. Em modo melhor-esforço, ignora e segue tentando
+    # resolver pelas camadas seguintes (o keyword-match da Camada 2 já cobre boa
+    # parte desses casos, ex: "Cafeteria" bate na keyword "cafe" de Café).
+    # Remove padrões de "código de barras" (comuns em boletos) antes de checar
+    # ambiguidade, para "cod bar"/"codigo de barras" não disparar falso positivo
+    # no termo "bar" (ex: "VIVO-SP TELESP CELULAR-COD BAR" não é um bar).
+    desc_norm_sem_ruido = re.sub(r"\bcod(igo)?\s*bar(ra)?[a-z]*\b", "", desc_norm)
+    ambiguo = any(_normalize(term) in desc_norm_sem_ruido for term in _AMBIGUOUS_TERMS)
+    if ambiguo and not permitir_melhor_esforco:
         logger.info(f"Camada 0 (Ambiguidade) detectada: '{descricao}'. Forçando interrupção para pergunta.")
         return "Perguntar", "Perguntar"
+    elif ambiguo:
+        logger.info(f"Camada 0 (Ambiguidade) detectada mas ignorada (modo melhor-esforço): '{descricao}'.")
     
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
-    # (Não fixa mais a subcategoria — o mesmo estabelecimento pode vender em
-    # mais de uma subcategoria da mesma categoria.)
+    # Se além da categoria já existe uma subcategoria-dica de uma resolução
+    # anterior EXATA desse mesmo merchant, usa ela direto — evita chamar
+    # keyword/LLM de novo para o mesmo estabelecimento que já foi resolvido.
+    # Só recorre a Camada 2/3 na primeira vez que esse merchant aparece.
     mapping = db.get_user_merchant_mapping(user_phone, desc_norm)
     categoria_conhecida = mapping["category_name"] if mapping else None
     if categoria_conhecida:
         logger.info(f"Camada 1 (User Merchant) — categoria conhecida: {desc_norm} -> {categoria_conhecida}")
+        if mapping.get("subcategory_name_hint"):
+            logger.info(f"Camada 1.5 (Subcategory Hint reutilizada): {desc_norm} -> {categoria_conhecida}/{mapping['subcategory_name_hint']}")
+            return categoria_conhecida, mapping["subcategory_name_hint"]
 
     # Camada 2: Alguma keyword de subcategoria mapeia com o texto?
     # Se a categoria já é conhecida (Camada 1), busca só dentro dela — mais rápido
@@ -190,7 +219,7 @@ async def categorizar_gasto_hibrido(user_phone: str, descricao: str, fallback: t
     logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao} (categoria conhecida: {categoria_conhecida})")
     try:
         response = await call_llm(
-            system=_system_categorizer(categoria_restrita=categoria_conhecida),
+            system=_system_categorizer(categoria_restrita=categoria_conhecida, permitir_perguntar=not permitir_melhor_esforco),
             history=[],
             message=f"Classifique a descrição: '{descricao}'",
             tools=[]

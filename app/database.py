@@ -435,16 +435,18 @@ def get_user_merchant_mapping(user_phone: str, merchant: str) -> dict | None:
     try:
         m_norm = _normalize(merchant)
         res = get_db().table("finbot_merchant_mappings") \
-            .select("category_id, subcategory_id, finbot_categories(name)") \
+            .select("category_id, subcategory_id, finbot_categories(name), finbot_subcategories(name)") \
             .eq("merchant_name", m_norm) \
             .limit(1).execute()
 
         if res.data and res.data[0].get("category_id"):
             row = res.data[0]
+            sub_hint = row.get("finbot_subcategories")
             return {
                 "category_id": row["category_id"],
                 "category_name": row["finbot_categories"]["name"],
-                "subcategory_id_hint": row.get("subcategory_id"),  # não autoritativo
+                "subcategory_id_hint": row.get("subcategory_id"),
+                "subcategory_name_hint": sub_hint["name"] if sub_hint else None,
             }
         return None
     except Exception as e:

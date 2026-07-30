@@ -1,3 +1,4 @@
+import asyncio
 import requests
 import json   
 import logging
@@ -282,13 +283,11 @@ class PluggyService:
 
         rows = []
         pendentes_ignoradas = 0
+        # ── Fase 1: prepara as transações válidas (rápido, sem I/O) ──────────
+        preparadas = []
         for tx in transactions:
-            logger.info(f"Transação recebida da Pluggy: {tx}")  # loga cada transação bruta
+            logger.info(f"Transação recebida da Pluggy: {tx}")
 
-            # Por ora, só trazemos a última fatura fechada (POSTED). Parcelas
-            # futuras/fatura aberta (PENDING) ficam de fora — revisitar quando
-            # decidirmos como exibir o parcelamento completo sem contar como
-            # gasto confirmado.
             if tx.get("status") == "PENDING":
                 pendentes_ignoradas += 1
                 continue
@@ -298,10 +297,6 @@ class PluggyService:
                 logger.warning(f"Transação descartada por falta de campos obrigatórios: {tx}")
                 continue
 
-            # Compras em moeda estrangeira (ex: cartão usado no exterior/assinatura
-            # em USD): a Pluggy já devolve o valor convertido pra moeda da conta
-            # (normalmente BRL, já com o câmbio/IOF aplicado pelo emissor) em
-            # amountInAccountCurrency. Sem isso, o valor ficaria gravado em dólar.
             moeda = tx.get("currencyCode", "BRL")
             if moeda != "BRL" and tx.get("amountInAccountCurrency") is not None:
                 raw_amount = float(tx["amountInAccountCurrency"])
@@ -312,31 +307,39 @@ class PluggyService:
                 raw_amount = float(tx["amount"])
             tipo = "income" if raw_amount > 0 else "expense"
 
-            # Categorização sempre passa por categorizar_gasto_hibrido, que já resolve
-            # subcategoria (camadas de merchant learning global, keywords e LLM) e
-            # deriva a categoria a partir dela — categoria nunca é um campo independente.
-            # O mapa estático CATEGORIA_PLUGGY_PARA_PT (categoria da Pluggy) é usado só
-            # como DICA/fallback quando as camadas 1-2 não encontram nada, evitando
-            # que a subcategoria seja perdida como acontecia antes (categoria_pt, _ = ...).
             categoria_pluggy = tx.get("category")
             categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
 
-            subcategoria_pt = None
-            try:
-                fallback = (categoria_dica, "Outros") if categoria_dica else None
-                categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
-                    user_phone, descricao, fallback=fallback
-                )
-                if not categoria_pt or categoria_pt == "Perguntar":
-                    categoria_pt = categoria_dica or "Outros"
-                    subcategoria_pt = None
-            except Exception as e:
-                logger.warning(f"Falha ao categorizar '{descricao}' (categoria Pluggy: {categoria_pluggy}): {e}")
-                categoria_pt = categoria_dica or "Outros"
-                subcategoria_pt = None
+            preparadas.append({
+                "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
+                "tipo": tipo, "categoria_dica": categoria_dica,
+            })
 
+        # ── Fase 2: categoriza em paralelo (limite de concorrência para não
+        # estourar rate limit da Gemini/Supabase) ────────────────────────────
+        semaforo = asyncio.Semaphore(8)
+
+        async def _categorizar_uma(item: dict) -> tuple[str, str | None]:
+            async with semaforo:
+                try:
+                    fallback = (item["categoria_dica"], "Outros") if item["categoria_dica"] else None
+                    categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
+                        user_phone, item["descricao"], fallback=fallback, permitir_melhor_esforco=True
+                    )
+                    if not categoria_pt or categoria_pt == "Perguntar":
+                        categoria_pt = item["categoria_dica"] or "Outros"
+                        subcategoria_pt = None
+                    return categoria_pt, subcategoria_pt
+                except Exception as e:
+                    logger.warning(f"Falha ao categorizar '{item['descricao']}' (categoria Pluggy: {item['tx'].get('category')}): {e}")
+                    return item["categoria_dica"] or "Outros", None
+
+        resultados = await asyncio.gather(*[_categorizar_uma(item) for item in preparadas])
+
+        # ── Fase 3: monta as linhas para inserção ────────────────────────────
+        for item, (categoria_pt, subcategoria_pt) in zip(preparadas, resultados):
+            tx, descricao, raw_amount, tipo = item["tx"], item["descricao"], item["raw_amount"], item["tipo"]
             subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
-
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
