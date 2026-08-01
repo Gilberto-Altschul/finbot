@@ -1023,16 +1023,21 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
         # Atualiza TODAS as transações com a mesma descrição para este usuário (Retroatividade)
         try:
-            db.get_db().table("finbot_expenses") \
+            update_res = db.get_db().table("finbot_expenses") \
                 .update(updates) \
-                .eq("user_phone", user_phone) \
+                .ilike("user_phone", db._q(user_phone)) \
                 .eq("description", descricao).execute()
+            linhas_afetadas = len(update_res.data) if update_res.data else 0
+            if linhas_afetadas == 0:
+                logger.warning(f"Ajuste retroativo não encontrou nenhuma linha para '{descricao}' (user_phone={user_phone}).")
         except Exception as e:
             logger.error(f"Erro na atualização retroativa: {e}")
             db.atualizar_transacao(tx_id, updates)
+            linhas_afetadas = 1  # ao menos a transação pontual foi ajustada
 
         # Salva o novo mapeamento no banco de dados (Aprendizado futuro)
         db.save_user_merchant_mapping(user_phone, descricao, nova_cat, nova_sub)
-        return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!"}
+        sufixo = f" ({linhas_afetadas} lançamento(s) atualizados)" if linhas_afetadas != 1 else ""
+        return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!{sufixo}"}
         
     return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
