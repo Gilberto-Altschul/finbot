@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import requests
 import json   
 import logging
@@ -402,6 +401,14 @@ class PluggyService:
                 logger.warning(f"Transação descartada por falta de campos obrigatórios: {tx}")
                 continue
 
+            # Pagamento da própria fatura não é gasto real nem receita —
+            # é só o registro administrativo de quitação, frequentemente
+            # duplicado (boleto + confirmação de recebimento pelo mesmo valor).
+            desc_lower_check = descricao.lower()
+            if any(p in desc_lower_check for p in ["pagamento de fatura", "pagamento recebido", "pagto fatura", "pag fatura"]):
+                logger.info(f"Ignorando pagamento de fatura (não é gasto real): {descricao}")
+                continue
+
             moeda = tx.get("currencyCode", "BRL")
             if moeda != "BRL" and tx.get("amountInAccountCurrency") is not None:
                 raw_amount = float(tx["amountInAccountCurrency"])
@@ -410,7 +417,15 @@ class PluggyService:
                 if moeda != "BRL":
                     logger.warning(f"Transação em {moeda} sem amountInAccountCurrency — gravando valor bruto sem conversão: {tx}")
                 raw_amount = float(tx["amount"])
-            tipo = "income" if raw_amount > 0 else "expense"
+            tipo_pluggy = (tx.get("type") or "").upper()
+            if tipo_pluggy == "DEBIT":
+                tipo = "expense"
+            elif tipo_pluggy == "CREDIT":
+                tipo = "income"
+            else:
+                # Fallback só se a Pluggy não informar o tipo — aí sim usa o sinal
+                logger.warning(f"Transação sem campo 'type' da Pluggy, inferindo por sinal: {descricao}")
+                tipo = "income" if raw_amount > 0 else "expense"
 
             categoria_pluggy = tx.get("category")
             categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
