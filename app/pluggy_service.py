@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import requests
 import json   
 import logging
@@ -192,6 +193,36 @@ class PluggyService:
             logger.warning(f"Não foi possível obter balanceCloseDate real da Pluggy: {e}")
             return None
 
+    async def listar_faturas(self, account_id: str) -> list[dict]:
+        """Busca as faturas (Bills) de uma conta de cartão de crédito na Pluggy."""
+        resp = requests.get(
+            f"{self.base_url}/bills",
+            headers=self.headers,
+            params={"accountId": account_id},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    async def obter_ultima_fatura_fechada_id(self, account_id: str) -> str | None:
+        """
+        Identifica o billId da última fatura JÁ FECHADA (billClosingDate
+        preenchido, ou dueDate mais recente que já passou). Retorna None se
+        a instituição não suportar a entidade Bills (nem toda instituição
+        Direct suporta — só Regulado é obrigatório).
+        """
+        try:
+            faturas = await self.listar_faturas(account_id)
+            if not faturas:
+                return None
+            fechadas = [f for f in faturas if f.get("billClosingDate")]
+            candidatas = fechadas or faturas
+            candidatas.sort(key=lambda f: f.get("billClosingDate") or f.get("dueDate") or "", reverse=True)
+            return candidatas[0]["id"] if candidatas else None
+        except Exception as e:
+            logger.warning(f"Não foi possível obter Bills da Pluggy (instituição pode não suportar): {e}")
+            return None
+
     @staticmethod
     def _fatura_ja_fechou(purchase_date: date, dia_corte: int) -> bool:
         """
@@ -320,11 +351,14 @@ class PluggyService:
 
         rows = []
         pendentes_ignoradas = 0
-        # Busca dia de corte do usuário — prioriza o valor REAL vindo da Pluggy
-        # (creditData.balanceCloseDate); só cai no configurado manualmente se
-        # a Pluggy não retornar esse dado.
+        # Busca a última fatura FECHADA via Bills API (critério exato, quando suportado)
+        bill_id_fatura_fechada = await self.obter_ultima_fatura_fechada_id(account_id) if account_id else None
+        if bill_id_fatura_fechada:
+            logger.info(f"Última fatura fechada identificada via Bills API: billId={bill_id_fatura_fechada}")
+
+        # Fallback: dia de corte real da Pluggy, ou configurado manualmente
         dia_corte_real = None
-        if item_id and account_id:
+        if not bill_id_fatura_fechada and item_id and account_id:
             dia_corte_real = await self.obter_dia_corte_real(item_id, account_id)
 
         if dia_corte_real:
@@ -332,7 +366,7 @@ class PluggyService:
             logger.info(f"Usando dia de corte REAL da Pluggy: {dia_corte}")
         else:
             dia_corte, _dia_vencimento = db.get_card_settings(user_phone)
-            logger.info(f"Pluggy não retornou balanceCloseDate — usando dia de corte configurado: {dia_corte}")
+            logger.info(f"Usando dia de corte configurado: {dia_corte}")
 
         # ── Fase 1: prepara as transações válidas (rápido, sem I/O) ──────────
         preparadas = []
@@ -340,10 +374,15 @@ class PluggyService:
             logger.info(f"Transação recebida da Pluggy: {tx}")
 
             payment_method_raw = (tx.get("paymentMethod") or "").upper()
-            eh_credito = bool(tx.get("creditCardMetadata")) or payment_method_raw not in ("", "OTHER", "PIX", "BOLETO", "TED", "DOC")
+            credit_card_metadata = tx.get("creditCardMetadata") or {}
+            eh_credito = bool(credit_card_metadata) or payment_method_raw not in ("", "OTHER", "PIX", "BOLETO", "TED", "DOC")
 
             purchase_date_str = (tx.get("date") or tx.get("transactionDate", ""))[:10]
-            if eh_credito and purchase_date_str:
+            if eh_credito and bill_id_fatura_fechada:
+                # Critério exato: só é "fechada" se o billId bater com a última
+                # fatura fechada identificada via Bills API.
+                is_forecast = credit_card_metadata.get("billId") != bill_id_fatura_fechada
+            elif eh_credito and purchase_date_str:
                 try:
                     purchase_date_obj = date.fromisoformat(purchase_date_str)
                     # Não confia no status da Pluggy (pode estar atrasado em relação
@@ -424,15 +463,12 @@ class PluggyService:
             rows.append(row)
 
         inseridos = db.inserir_gastos_em_lote(rows)
-        previstas = sum(1 for r in rows if r["is_forecast"])
-        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas ({previstas} previsão/fatura aberta).")
+        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
 
         if inseridos == 0:
             return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
 
-        confirmadas = inseridos - previstas
-        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados"
-        if previstas:
-            resumo += f" ({confirmadas} confirmados + {previstas} previstos da fatura ainda aberta, sujeitos a alteração)"
-        resumo += "."
+        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
+        if bill_id_fatura_fechada:
+            resumo += " (última fatura fechada)"
         return resumo, rows
