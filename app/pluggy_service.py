@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import app.database as db
 from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
+from app.billing import _add_months
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -170,6 +171,42 @@ CATEGORIA_PLUGGY_PARA_PT = {
 }
 
 class PluggyService:
+    async def obter_dia_corte_real(self, item_id: str, account_id: str) -> int | None:
+        """
+        Busca o dia de fechamento REAL da fatura direto da Pluggy
+        (creditData.balanceCloseDate), em vez de depender só do dia_corte
+        configurado manualmente no FinBot — que pode estar desatualizado ou
+        errado. Retorna None se a conta não for de crédito ou o campo não
+        vier preenchido (banco não suporta esse dado).
+        """
+        try:
+            contas = await self.listar_contas(item_id)
+            for conta in contas:
+                if conta.get("id") == account_id:
+                    credit_data = conta.get("creditData") or {}
+                    close_date_str = credit_data.get("balanceCloseDate")
+                    if close_date_str:
+                        return date.fromisoformat(close_date_str[:10]).day
+            return None
+        except Exception as e:
+            logger.warning(f"Não foi possível obter balanceCloseDate real da Pluggy: {e}")
+            return None
+
+    @staticmethod
+    def _fatura_ja_fechou(purchase_date: date, dia_corte: int) -> bool:
+        """
+        Calcula se a fatura que contém essa compra já fechou de verdade,
+        usando o dia de corte configurado — em vez de confiar no campo
+        `status` da Pluggy, que pode demorar dias para ser atualizado
+        depois que o banco já fechou a fatura de fato.
+        """
+        if purchase_date.day <= dia_corte:
+            corte = date(purchase_date.year, purchase_date.month, dia_corte)
+        else:
+            proximo_mes = _add_months(date(purchase_date.year, purchase_date.month, 1), 1)
+            corte = date(proximo_mes.year, proximo_mes.month, dia_corte)
+        return date.today() > corte
+
     def __init__(self):
         # 🔹 Autenticação via clientId/clientSecret
 
@@ -268,10 +305,10 @@ class PluggyService:
         transactions = tx_resp.json().get("results", [])
         
         # 3. Processa e insere no banco
-        return await self._process_transactions(user_phone, transactions)
-    
+        return await self._process_transactions(user_phone, transactions, item_id=item_id, account_id=account_id)
+
     async def _process_transactions(
-        self, user_phone: str, transactions: list[dict]
+        self, user_phone: str, transactions: list[dict], item_id: str | None = None, account_id: str | None = None
     ) -> tuple[str, list[dict] | None]:
         """
         Converte transações da Pluggy para o formato padrão e insere em lote no banco,
@@ -283,14 +320,43 @@ class PluggyService:
 
         rows = []
         pendentes_ignoradas = 0
+        # Busca dia de corte do usuário — prioriza o valor REAL vindo da Pluggy
+        # (creditData.balanceCloseDate); só cai no configurado manualmente se
+        # a Pluggy não retornar esse dado.
+        dia_corte_real = None
+        if item_id and account_id:
+            dia_corte_real = await self.obter_dia_corte_real(item_id, account_id)
+
+        if dia_corte_real:
+            dia_corte = dia_corte_real
+            logger.info(f"Usando dia de corte REAL da Pluggy: {dia_corte}")
+        else:
+            dia_corte, _dia_vencimento = db.get_card_settings(user_phone)
+            logger.info(f"Pluggy não retornou balanceCloseDate — usando dia de corte configurado: {dia_corte}")
+
         # ── Fase 1: prepara as transações válidas (rápido, sem I/O) ──────────
         preparadas = []
         for tx in transactions:
             logger.info(f"Transação recebida da Pluggy: {tx}")
 
-            if tx.get("status") == "PENDING":
-                pendentes_ignoradas += 1
-                continue
+            payment_method_raw = (tx.get("paymentMethod") or "").upper()
+            eh_credito = bool(tx.get("creditCardMetadata")) or payment_method_raw not in ("", "OTHER", "PIX", "BOLETO", "TED", "DOC")
+
+            purchase_date_str = (tx.get("date") or tx.get("transactionDate", ""))[:10]
+            if eh_credito and purchase_date_str:
+                try:
+                    purchase_date_obj = date.fromisoformat(purchase_date_str)
+                    # Não confia no status da Pluggy (pode estar atrasado em relação
+                    # ao fechamento real do banco) — calcula pelo dia de corte.
+                    is_forecast = not self._fatura_ja_fechou(purchase_date_obj, dia_corte)
+                except ValueError:
+                    is_forecast = tx.get("status") == "PENDING"
+            else:
+                # Débito/PIX/boleto não têm ciclo de fatura — mantém o status da Pluggy
+                is_forecast = tx.get("status") == "PENDING"
+
+            if is_forecast:
+                pendentes_ignoradas += 1  # mantém a contagem no log, agora não bloqueia mais
 
             descricao = tx.get("description") or tx.get("title")
             if not tx.get("amount") or not descricao:
@@ -312,7 +378,7 @@ class PluggyService:
 
             preparadas.append({
                 "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
-                "tipo": tipo, "categoria_dica": categoria_dica,
+                "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
             })
 
         # ── Fase 2: categoriza em paralelo (limite de concorrência para não
@@ -351,16 +417,22 @@ class PluggyService:
                 "payment_method": (tx.get("paymentMethod") or "debito").lower(),
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
                 "billing_date": (tx.get("creditCardDate") or tx.get("date") or tx.get("transactionDate", ""))[:10],
+                "is_forecast": item["is_forecast"],
             }
             if subcategory_id:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
 
         inseridos = db.inserir_gastos_em_lote(rows)
-        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas. {pendentes_ignoradas} pendentes (fatura aberta) ignoradas.")
+        previstas = sum(1 for r in rows if r["is_forecast"])
+        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas ({previstas} previsão/fatura aberta).")
 
         if inseridos == 0:
             return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
 
-        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
+        confirmadas = inseridos - previstas
+        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados"
+        if previstas:
+            resumo += f" ({confirmadas} confirmados + {previstas} previstos da fatura ainda aberta, sujeitos a alteração)"
+        resumo += "."
         return resumo, rows
