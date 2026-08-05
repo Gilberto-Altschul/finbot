@@ -19,7 +19,7 @@ IGNORAR_DESC = [
     'anuidade diferenciada', 'compra data descri',
     'parcela r$', 'saldo anterior', 'total despesas',
     'total de pagamentos', 'total de creditos', 'saldo desta fatura',
-    'compras parceladas', 'compra data', 'descricao', 'azul seguros',
+    'compras parceladas', 'compra data', 'descricao',
 ]
 
 IGNORAR_SECAO = [
@@ -31,7 +31,7 @@ IGNORAR_SECAO = [
 TX_RE = re.compile(
     r'(?:^|\s)'
     r'(\d{2}/\d{2})\s+'
-    r'([A-Z][A-Z0-9 \*\-\./]+?)\s+'
+    r'([A-Z0-9][A-Z0-9 \*\-\./]+?)\s+'
     r'(?:(\d{2}/\d{2})\s+)?'
     r'(-?[\d\.]+,\d{2})'
     r'(?:\s|$)'
@@ -91,7 +91,7 @@ def parse_from_pdfplumber(pdf) -> dict:
         logger.warning(f"[Santander Parser] Vencimento não detectado. Fallback: {billing_date}")
 
     transactions = []
-    seen = set()
+    secao_atual = None  # persiste entre colunas E entre páginas
 
     for page in pdf.pages:
         words = page.extract_words(x_tolerance=3, y_tolerance=3)
@@ -109,12 +109,38 @@ def parse_from_pdfplumber(pdf) -> dict:
             else:
                 right_by_y[y_key].append(w)
 
-        def process_column(col_dict):
+        def process_column(col_dict, secao_inicial):
+            """
+            Processa uma coluna de cima pra baixo, mantendo estado de seção.
+            IMPORTANTE: a coluna direita NÃO é paralela à esquerda — é uma
+            CONTINUAÇÃO da mesma lista (a esquerda enche a página e o texto
+            segue no topo da direita). Por isso a seção precisa ser passada
+            adiante entre as colunas, não redetectada do zero.
+            """
+            secao = secao_inicial
             col_txs = []
             for y in sorted(col_dict.keys()):
                 ws = sorted(col_dict[y], key=lambda w: w['x0'])
                 line = ' '.join(w['text'] for w in ws)
-                line_lower = line.lower()
+                line_lower = line.lower().strip()
+
+                if re.match(r'^despesas\s*$', line_lower):
+                    secao = 'despesas'
+                    continue
+                elif re.match(r'^parcelamentos\s*$', line_lower):
+                    secao = 'parcelamentos'
+                    continue
+                elif re.match(r'^pagamento e demais cr', line_lower):
+                    secao = 'pagamentos'
+                    continue
+                elif re.match(r'^(resumo da fatura|saldo total consolidado)', line_lower):
+                    secao = None
+                    continue
+
+                # Inclui Despesas + Parcelamentos; exclui Pagamentos/Créditos
+                # e qualquer seção fora da tabela de transações.
+                if secao not in ('despesas', 'parcelamentos'):
+                    continue
 
                 if any(ign in line_lower for ign in IGNORAR_SECAO + IGNORAR_DESC):
                     continue
@@ -156,11 +182,6 @@ def parse_from_pdfplumber(pdf) -> dict:
                     if len(desc) < 3:
                         continue
 
-                    key = (date_iso, desc[:25], f"{valor:.2f}", str(installment_of))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-
                     col_txs.append({
                         'date': date_iso,
                         'description': desc,
@@ -171,10 +192,12 @@ def parse_from_pdfplumber(pdf) -> dict:
                         'type': 'expense',
                         'billing_date': billing_date,
                     })
-            return col_txs
+            return col_txs, secao
 
-        transactions.extend(process_column(left_by_y))
-        transactions.extend(process_column(right_by_y))
+        txs_left, secao_atual = process_column(left_by_y, secao_atual)
+        txs_right, secao_atual = process_column(right_by_y, secao_atual)
+        transactions.extend(txs_left)
+        transactions.extend(txs_right)
 
     logger.info(f"[Santander Parser] Extraídas {len(transactions)} transações.")
     return {

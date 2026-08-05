@@ -8,6 +8,7 @@ import app.database as db
 from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
 from app.billing import _add_months
+from app.utils import _normalize
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -435,26 +436,48 @@ class PluggyService:
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
             })
 
-        # ── Fase 2: categoriza em paralelo (limite de concorrência para não
-        # estourar rate limit da Gemini/Supabase) ────────────────────────────
+        # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
+        # Merchants repetidos no mesmo lote (comum: assinaturas, mercado
+        # frequentado, etc.) categorizam só UMA vez cada, evitando chamadas
+        # redundantes à LLM/keyword quando duas ocorrências do mesmo merchant
+        # são processadas em paralelo antes da primeira salvar o aprendizado.
         semaforo = asyncio.Semaphore(8)
 
-        async def _categorizar_uma(item: dict) -> tuple[str, str | None]:
+        async def _categorizar_uma(descricao: str, categoria_dica: str | None) -> tuple[str, str | None]:
             async with semaforo:
                 try:
-                    fallback = (item["categoria_dica"], "Outros") if item["categoria_dica"] else None
+                    fallback = (categoria_dica, "Outros") if categoria_dica else None
                     categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
-                        user_phone, item["descricao"], fallback=fallback, permitir_melhor_esforco=True
+                        user_phone, descricao, fallback=fallback, permitir_melhor_esforco=True
                     )
                     if not categoria_pt or categoria_pt == "Perguntar":
-                        categoria_pt = item["categoria_dica"] or "Outros"
+                        categoria_pt = categoria_dica or "Outros"
                         subcategoria_pt = None
                     return categoria_pt, subcategoria_pt
                 except Exception as e:
-                    logger.warning(f"Falha ao categorizar '{item['descricao']}' (categoria Pluggy: {item['tx'].get('category')}): {e}")
-                    return item["categoria_dica"] or "Outros", None
+                    logger.warning(f"Falha ao categorizar '{descricao}': {e}")
+                    return categoria_dica or "Outros", None
 
-        resultados = await asyncio.gather(*[_categorizar_uma(item) for item in preparadas])
+        # Agrupa índices de `preparadas` por descrição normalizada
+        grupos: dict[str, list[int]] = {}
+        for idx, item in enumerate(preparadas):
+            chave = _normalize(item["descricao"])
+            grupos.setdefault(chave, []).append(idx)
+
+        # Uma tarefa por merchant ÚNICO (não por transação)
+        chaves_unicas = list(grupos.keys())
+        # categoria_dica: usa a do primeiro item de cada grupo (mesma descrição -> mesma dica Pluggy)
+        tarefas = [
+            _categorizar_uma(preparadas[grupos[chave][0]]["descricao"], preparadas[grupos[chave][0]]["categoria_dica"])
+            for chave in chaves_unicas
+        ]
+        resultados_unicos = await asyncio.gather(*tarefas)
+
+        # Propaga o resultado de cada merchant único para TODAS as suas ocorrências
+        resultados: list[tuple[str, str | None]] = [None] * len(preparadas)
+        for chave, resultado in zip(chaves_unicas, resultados_unicos):
+            for idx in grupos[chave]:
+                resultados[idx] = resultado
 
         # ── Fase 3: monta as linhas para inserção ────────────────────────────
         for item, (categoria_pt, subcategoria_pt) in zip(preparadas, resultados):
