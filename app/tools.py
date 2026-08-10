@@ -939,8 +939,8 @@ def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: 
 async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valor: str = None):
     # Suporte flexível para comandos curtos como 'acertar 4 racao'
     # Se a 'acao' não for um comando reservado e não houver um 'valor' separado,
-    # assumimos que a própria 'acao' é o novo nome da subcategoria (comportamento legado).
-    if acao.lower() not in ["excluir", "categoria", "subcategoria"] and not (valor and valor.strip()):
+    # assumimos que a própria 'acao' é o novo nome da subcategoria.
+    if acao and acao.lower() not in ["excluir", "categoria", "subcategoria", "valor"] and not (valor and valor.strip()):
         valor = acao
         acao = "subcategoria"
 
@@ -961,7 +961,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
     tx_atual = res_tx.data[0]
     descricao = tx_atual["description"]
     
-    # 2. Lógica de Ação
+    # 2. Lógica de Ação - Garante que 'acao' não é None antes de usar .lower()
     if acao.lower() == "excluir":
         db.excluir_transacao(tx_id)
         return {"mensagem": "✅ Lançamento excluído com sucesso."}
