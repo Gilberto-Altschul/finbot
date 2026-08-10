@@ -954,7 +954,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
     tx_id = sessao[indice - 1]
 
     # Busca dados atuais para atualizar aprendizado
-    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type").eq("id", tx_id).execute()
+    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory").eq("id", tx_id).execute()
     if not res_tx.data:
          return {"mensagem": "⚠️ Erro ao acessar os dados da transação."}
     
