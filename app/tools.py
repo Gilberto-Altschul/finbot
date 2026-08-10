@@ -954,7 +954,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
     tx_id = sessao[indice - 1]
 
     # Busca dados atuais para atualizar aprendizado
-    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory").eq("id", tx_id).execute()
+    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type").eq("id", tx_id).execute()
     if not res_tx.data:
          return {"mensagem": "⚠️ Erro ao acessar os dados da transação."}
     
@@ -1039,6 +1039,11 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         updates = {coluna: nova_sub if coluna == "subcategory" else nova_cat}
         if nova_cat != tx_atual["category"]:
             updates["category"] = nova_cat
+        
+        # Se a transação era uma receita e a nova categoria não é de receita,
+        # converte a transação para despesa.
+        if tx_atual.get("transaction_type") == "income" and nova_cat != "Receitas":
+            updates["transaction_type"] = "expense"
 
         # Atualiza TODAS as transações com a mesma descrição para este usuário (Retroatividade)
         try:
