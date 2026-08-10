@@ -686,7 +686,7 @@ def registrar_gasto_pluggy(user_phone: str, valor: float, categoria: str, descri
         return False
 # Adicionar ao final do app/database.py
 
-def obter_transacoes_paginadas(user_phone: str, mes: int, ano: int, categoria: str = None, pagina: int = 1, tamanho: int = 9, ordem: str = "DESC", dia_inicio: int = 1, dia_fim: int | None = None) -> list[dict]:
+def obter_transacoes_paginadas(user_phone: str, mes: int, ano: int, categoria: str = None, pagina: int = 1, tamanho: int = 9, ordem: str = "DESC", dia_inicio: int = 1, dia_fim: int | None = None, transaction_type: str | None = None) -> list[dict]:
     offset = (pagina - 1) * tamanho
     
     inicio_dt = date(ano, mes, max(1, dia_inicio))
@@ -699,6 +699,9 @@ def obter_transacoes_paginadas(user_phone: str, mes: int, ano: int, categoria: s
     
     if categoria:
         query = query.eq("category", categoria)
+
+    if transaction_type:
+        query = query.eq("transaction_type", transaction_type)
         
     is_desc = ordem.upper() == "DESC"
     res = query.order("purchase_date", desc=is_desc).range(offset, offset + tamanho - 1).execute()

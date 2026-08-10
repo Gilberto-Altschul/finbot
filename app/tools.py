@@ -893,7 +893,7 @@ async def sincronizar_banco_especifico(user_phone: str, item_id: str, account_id
 def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: str = None, pagina: int = 1, ordem: str = "DESC", dia_inicio: int = 1, dia_fim: int | None = None) -> dict:
     # Normalizamos o filtro de listagem para também respeitar o tipo (evita mostrar receitas no extrato de gastos se desejado, 
     # mas aqui mantemos a listagem ampla e apenas garantimos que os dados brutos cheguem à LLM)
-    transacoes_raw = db.obter_transacoes_paginadas(user_phone, mes, ano, categoria=categoria, pagina=pagina, ordem=ordem, dia_inicio=dia_inicio, dia_fim=dia_fim)
+    transacoes_raw = db.obter_transacoes_paginadas(user_phone, mes, ano, categoria=categoria, pagina=pagina, ordem=ordem, dia_inicio=dia_inicio, dia_fim=dia_fim, transaction_type=None)
     transacoes = transacoes_raw # Mantemos a flexibilidade na listagem
     
     if not transacoes:
@@ -912,8 +912,10 @@ def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: 
         sub = tx.get("subcategory", "Geral") # Pega a subcategoria ou padrão
         cat = tx.get("category", "Sem Categoria")
         valor = tx.get("amount", 0)
+        tipo_transacao = tx.get("transaction_type", "expense") # Assume expense se não especificado
         
         # Prioriza a data real da compra (evento) para exibição, caindo no created_at apenas se vazio
+        prefixo_tipo = "💰" if tipo_transacao == "income" else "💸"
         dt_raw = tx.get("purchase_date") or tx.get("created_at")
         dt_display = f"{dt_raw[8:10]}/{dt_raw[5:7]}"
 
@@ -925,8 +927,8 @@ def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: 
         # Se a parcela já estava no nome (legado), não repetimos
         desc_final = f"{clean_desc} {parc_info}".strip() if parc_info not in desc_raw else clean_desc
     
-        # Exibe: Índice | Data | Descrição | *Subcategoria* (Categoria) | Valor
-        msg += f"{i}️⃣ {dt_display} | {desc_final} | *{sub}* ({cat}) | R$ {_fmt(valor)}\n"
+        # Exibe: Índice | Emoji | Data | Descrição | *Subcategoria* (Categoria) | Valor
+        msg += f"{i}️⃣ {prefixo_tipo} {dt_display} | {desc_final} | *{sub}* ({cat}) | R$ {_fmt(valor)}\n"
 
     msg += f"\n---"
     msg += f"\nPágina {pagina} | Próxima: *Listar {mes} pág {pagina + 1}*"
