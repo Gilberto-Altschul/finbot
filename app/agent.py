@@ -249,14 +249,14 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     # Comando "Acertar" (Ex: "acertar 1 excluir")
     if msg_norm.startswith("acertar"):
         parts = msg_norm.split()
-        try:
-            if len(parts) >= 3:
-                return {
-                 "tool": "processar_comando_acerto", 
-                 "args": {"indice": int(parts[1]), "acao": parts[2], "valor": " ".join(parts[3:])}
-                }
-        except (ValueError, IndexError):
-            pass
+        if len(parts) >= 3:
+            try:
+                acao = parts[2].lower()
+                # Garante que 'valor' seja uma ação reconhecida
+                if acao in ["excluir", "categoria", "subcategoria", "valor"]:
+                    return {"tool": "processar_comando_acerto", "args": {"indice": int(parts[1]), "acao": acao, "valor": " ".join(parts[3:])}}
+            except (ValueError, IndexError):
+                pass # Deixa a LLM tratar se o fast-path falhar
 
     # 0. DEFINIR LIMITE — PRIORIDADE ABSOLUTA (Fast Path para evitar alucinações da IA)
     if "limite" in msg_norm and (any(x in msg_norm for x in ["definir", "estipular", "setar", "atualizar", "mudar", "alterar", "novo", "para", "pra"]) or re.search(r"\d", msg_norm)):

@@ -164,13 +164,13 @@ SCHEMAS: list[dict] = [
     },
     {
         "name": "processar_comando_acerto",
-        "description": "Exclui ou altera uma transação específica listada no extrato detalhado anterior. Use quando o usuário pedir para 'apagar o item 1' ou 'mudar categoria do gasto 2'.",
+        "description": "Exclui ou altera uma transação (categoria, subcategoria ou valor) listada no extrato detalhado anterior. Use para 'apagar o item 1', 'mudar categoria do gasto 2 para Lazer' ou 'acertar valor do 3 para 50,25'.",
         "parameters": {
             "type": "object",
             "properties": {
                 "indice": {"type": "integer", "description": "O número de ordem da transação na lista (ex: 1, 2, 3)"},
-                "acao": {"type": "string", "enum": ["excluir", "categoria"], "description": "Ação: 'excluir' para apagar ou 'categoria' para alterar"},
-                "valor": {"type": "string", "description": "Obrigatório apenas se acao for 'categoria'. Informe o novo nome da categoria."}
+                "acao": {"type": "string", "enum": ["excluir", "categoria", "subcategoria", "valor"], "description": "Ação a ser executada: 'excluir', 'categoria', 'subcategoria' ou 'valor'."},
+                "valor": {"type": "string", "description": "O novo valor para a ação. Ex: 'Lazer' para 'categoria', ou '50.25' para 'valor'."}
             },
             "required": ["indice", "acao"]
         }
@@ -939,7 +939,7 @@ def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: 
 async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valor: str = None):
     # Suporte flexível para comandos curtos como 'acertar 4 racao'
     # Se a 'acao' não for um comando reservado e não houver um 'valor' separado,
-    # assumimos que a própria 'acao' é o novo nome da subcategoria.
+    # assumimos que a própria 'acao' é o novo nome da subcategoria (comportamento legado).
     if acao.lower() not in ["excluir", "categoria", "subcategoria"] and not (valor and valor.strip()):
         valor = acao
         acao = "subcategoria"
@@ -965,6 +965,20 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
     if acao.lower() == "excluir":
         db.excluir_transacao(tx_id)
         return {"mensagem": "✅ Lançamento excluído com sucesso."}
+
+    if acao.lower() == "valor":
+        if not valor:
+            return {"mensagem": "⚠️ Faltou me dizer o novo valor. Ex: *acertar 1 valor 50,25*"}
+        try:
+            # Converte '50,25' ou '50.25' para float
+            novo_valor = float(valor.replace(",", "."))
+            if novo_valor <= 0:
+                return {"mensagem": "⚠️ O valor deve ser maior que zero."}
+            db.atualizar_transacao(tx_id, {"amount": novo_valor})
+            return {"mensagem": f"✅ Valor do lançamento ajustado para *R$ {_fmt(novo_valor)}*."}
+        except (ValueError, TypeError):
+            return {"mensagem": "⚠️ Valor inválido. Use apenas números (ex: 50,25)."}
+
     
     if acao.lower() in ["categoria", "subcategoria"]:
         coluna = "category" if acao.lower() == "categoria" else "subcategory"
@@ -1042,4 +1056,4 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         sufixo = f" ({linhas_afetadas} lançamento(s) atualizados)" if linhas_afetadas != 1 else ""
         return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}). Apliquei a correção em todos os lançamentos de '{descricao}' e aprendi para os próximos!{sufixo}"}
         
-    return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/subcategoria] [valor]'"}
+    return {"mensagem": "Comando não reconhecido. Use: 'Acertar [número] [excluir/categoria/valor] [novo_valor]'"}
