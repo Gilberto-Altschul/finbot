@@ -971,11 +971,18 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
             return {"mensagem": "⚠️ Faltou me dizer o novo valor. Ex: *acertar 1 valor 50,25*"}
         try:
             # Converte '50,25' ou '50.25' para float
+            # Converte '50,25' ou '-50.25' para float, aceitando valores negativos
             novo_valor = float(valor.replace(",", "."))
             if novo_valor <= 0:
                 return {"mensagem": "⚠️ O valor deve ser maior que zero."}
             db.atualizar_transacao(tx_id, {"amount": novo_valor})
             return {"mensagem": f"✅ Valor do lançamento ajustado para *R$ {_fmt(novo_valor)}*."}
+            updates = {
+                "amount": abs(novo_valor),
+                "transaction_type": "income" if novo_valor >= 0 else "expense"
+            }
+            db.atualizar_transacao(tx_id, updates)
+            return {"mensagem": f"✅ Valor do lançamento ajustado para *R$ {_fmt(abs(novo_valor))}*."}
         except (ValueError, TypeError):
             return {"mensagem": "⚠️ Valor inválido. Use apenas números (ex: 50,25)."}
 
