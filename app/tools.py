@@ -982,6 +982,9 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
     
     if acao.lower() in ["categoria", "subcategoria"]:
         coluna = "category" if acao.lower() == "categoria" else "subcategory"
+        if not valor or not valor.strip():
+            return {"mensagem": f"⚠️ Faltou me dizer o novo {coluna}. Ex: *acertar 1 {acao} Lazer*"}
+
         target_val = valor.strip()
         target_norm = _normalize(target_val)
         
