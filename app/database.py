@@ -704,7 +704,8 @@ def obter_transacoes_paginadas(user_phone: str, mes: int, ano: int, categoria: s
         query = query.eq("transaction_type", transaction_type)
         
     is_desc = ordem.upper() == "DESC"
-    res = query.order("purchase_date", desc=is_desc).range(offset, offset + tamanho - 1).execute()
+    # Ordena por data e, em caso de empate, pelo ID decrescente para garantir consistência
+    res = query.order("purchase_date", desc=is_desc).order("id", desc=True).range(offset, offset + tamanho - 1).execute()
     return res.data or []
 
 def atualizar_transacao(tx_id: str, updates: dict):
