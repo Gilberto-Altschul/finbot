@@ -955,6 +955,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
     # Busca dados atuais para atualizar aprendizado
     res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type").eq("id", tx_id).execute()
+    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type, purchase_date").eq("id", tx_id).execute()
     if not res_tx.data:
          return {"mensagem": "⚠️ Erro ao acessar os dados da transação."}
     
@@ -1041,11 +1042,22 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         updates = {coluna: nova_sub if coluna == "subcategory" else nova_cat}
         if nova_cat != tx_atual["category"]:
             updates["category"] = nova_cat
+
+        # CORREÇÃO: Busca e atualiza o subcategory_id para manter a consistência.
+        # Se a nova subcategoria não for encontrada (ex: "Geral"), define o ID como nulo.
+        novo_sub_id = db.get_subcategory_id_by_name(nova_sub)
+        updates["subcategory_id"] = novo_sub_id
+
         
         # Se a transação era uma receita e a nova categoria não é de receita,
         # converte a transação para despesa.
         if tx_atual.get("transaction_type") == "income" and nova_cat != "Receitas":
             updates["transaction_type"] = "expense"
+        
+        # Garante que a data de competência (billing_date) seja a mesma da compra,
+        # para que o lançamento não "suma" do extrato do mês ao ser recategorizado.
+        if tx_atual.get("purchase_date"):
+            updates["billing_date"] = tx_atual["purchase_date"]
 
         # Atualiza TODAS as transações com a mesma descrição para este usuário (Retroatividade)
         try:
