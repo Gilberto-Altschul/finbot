@@ -419,15 +419,18 @@ class PluggyService:
                 if moeda != "BRL":
                     logger.warning(f"Transação em {moeda} sem amountInAccountCurrency — gravando valor bruto sem conversão: {tx}")
                 raw_amount = float(tx["amount"])
+
             tipo_pluggy = (tx.get("type") or "").upper()
-            if tipo_pluggy == "DEBIT":
+            # Para transações que não são de crédito, o sinal do valor é mais confiável que o campo 'type'.
+            # Valores positivos são receitas (income), negativos são despesas (expense).
+            if not eh_credito:
+                tipo = "income" if raw_amount > 0 else "expense"
+            elif tipo_pluggy == "DEBIT":
                 tipo = "expense"
             elif tipo_pluggy == "CREDIT":
                 tipo = "income"
             else:
-                # Fallback só se a Pluggy não informar o tipo — aí sim usa o sinal
-                logger.warning(f"Transação sem campo 'type' da Pluggy, inferindo por sinal: {descricao}")
-                tipo = "income" if raw_amount > 0 else "expense"
+                tipo = "expense" # Assume despesa como padrão para crédito sem tipo
 
             categoria_pluggy = tx.get("category")
             categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
