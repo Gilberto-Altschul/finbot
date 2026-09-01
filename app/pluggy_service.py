@@ -479,6 +479,7 @@ class PluggyService:
                 "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
                 "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
+                "installment_number": credit_card_metadata.get("installmentNumber"),
             })
 
         # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
@@ -530,15 +531,23 @@ class PluggyService:
             subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
 
             # billing_date: prioriza creditCardDate quando a instituição preenche;
-            # senão calcula pelo dia de corte (necessário pra C6 Bank e outras que
-            # não populam esse campo — sem isso, cai no fallback antigo de usar a
-            # data de compra crua, jogando a transação pro mês errado).
+            # senão calcula pelo dia de corte — mas SÓ para a 1ª parcela (ou compra
+            # não parcelada), onde `date` é a data real da compra. A partir da 2ª
+            # parcela, a Pluggy já retorna `date` como a data de postagem na fatura
+            # (billPostDate), refletindo o mês de vencimento daquela parcela — somar
+            # o deslocamento do dia de corte de novo jogaria a parcela um mês além
+            # do vencimento real. Ver: docs.pluggy.ai/docs/credit-card-installments
             billing_date_calculada = tx.get("creditCardDate")
+            installment_number = item.get("installment_number")
             if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
                 try:
-                    billing_date_calculada = self._mes_vencimento_fatura(
-                        date.fromisoformat(item["purchase_date_str"]), dia_corte
-                    ).isoformat()
+                    data_ref = date.fromisoformat(item["purchase_date_str"])
+                    if installment_number and installment_number > 1:
+                        # `date` já é a data de postagem na fatura dessa parcela —
+                        # só normaliza pro primeiro dia do mês, sem deslocar de novo.
+                        billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
+                    else:
+                        billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
                 except ValueError:
                     pass
             billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
