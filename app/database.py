@@ -67,9 +67,19 @@ def is_new_user(user_phone: str) -> bool:
     return get_user_settings(user_phone) is None
 
 def get_card_settings(user_phone: str) -> tuple[int, int]:
-    cfg = get_user_settings(user_phone)
+    # Garante que o telefone tenha o prefixo correto antes de buscar
+    if not user_phone.startswith("whatsapp:"):
+        formatted_phone = f"whatsapp:{user_phone}"
+    else:
+        formatted_phone = user_phone
+
+    # Usa a função helper _q() que foi definida no topo do seu database.py
+    cfg = get_user_settings(formatted_phone)
+    
     if not cfg:
+        # Fallback caso realmente não exista configuração pro usuário
         return 5, 12
+        
     return int(cfg.get("cartao_dia_corte", 5)), int(cfg.get("cartao_dia_vencimento", 12))
 
 # ── Chat History ──────────────────────────────────────────────────────────────
