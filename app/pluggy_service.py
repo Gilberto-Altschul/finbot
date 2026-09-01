@@ -216,10 +216,29 @@ class PluggyService:
             faturas = await self.listar_faturas(account_id)
             if not faturas:
                 return None
+            logger.info(
+                "Faturas retornadas pela Pluggy para account %s: %s",
+                account_id,
+                [
+                    {
+                        "id": f.get("id"),
+                        "dueDate": f.get("dueDate"),
+                        "billClosingDate": f.get("billClosingDate"),
+                        "totalAmount": f.get("totalAmount"),
+                    }
+                    for f in faturas
+                ],
+            )
             fechadas = [f for f in faturas if f.get("billClosingDate")]
             candidatas = fechadas or faturas
             candidatas.sort(key=lambda f: f.get("billClosingDate") or f.get("dueDate") or "", reverse=True)
-            return candidatas[0]["id"] if candidatas else None
+            escolhida = candidatas[0] if candidatas else None
+            if escolhida:
+                logger.info(
+                    "Fatura escolhida como 'última fechada': id=%s dueDate=%s billClosingDate=%s",
+                    escolhida.get("id"), escolhida.get("dueDate"), escolhida.get("billClosingDate"),
+                )
+            return escolhida["id"] if escolhida else None
         except Exception as e:
             logger.warning(f"Não foi possível obter Bills da Pluggy (instituição pode não suportar): {e}")
             return None
@@ -238,6 +257,22 @@ class PluggyService:
             proximo_mes = _add_months(date(purchase_date.year, purchase_date.month, 1), 1)
             corte = date(proximo_mes.year, proximo_mes.month, dia_corte)
         return date.today() > corte
+
+    @staticmethod
+    def _mes_vencimento_fatura(purchase_date: date, dia_corte: int) -> date:
+        """
+        Primeiro dia do mês de vencimento da fatura que contém essa compra,
+        calculado pelo dia de corte — usado como billing_date quando a
+        instituição (ex: C6 Bank) não preenche creditCardMetadata.billId
+        nem creditCardDate de forma confiável. Mesma lógica de corte usada
+        em `_fatura_ja_fechou`, só que devolvendo o mês de vencimento em
+        vez de um booleano.
+        """
+        if purchase_date.day <= dia_corte:
+            mes_fechamento = date(purchase_date.year, purchase_date.month, 1)
+        else:
+            mes_fechamento = _add_months(date(purchase_date.year, purchase_date.month, 1), 1)
+        return _add_months(mes_fechamento, 1)
 
     def __init__(self):
         # 🔹 Autenticação via clientId/clientSecret
@@ -379,10 +414,15 @@ class PluggyService:
             eh_credito = bool(credit_card_metadata) or payment_method_raw not in ("", "OTHER", "PIX", "BOLETO", "TED", "DOC")
 
             purchase_date_str = (tx.get("date") or tx.get("transactionDate", ""))[:10]
-            if eh_credito and bill_id_fatura_fechada:
+            tx_bill_id = credit_card_metadata.get("billId")
+            if eh_credito and tx_bill_id and bill_id_fatura_fechada:
                 # Critério exato: só é "fechada" se o billId bater com a última
-                # fatura fechada identificada via Bills API.
-                is_forecast = credit_card_metadata.get("billId") != bill_id_fatura_fechada
+                # fatura fechada identificada via Bills API. Algumas instituições
+                # (ex: C6 Bank) não preenchem creditCardMetadata.billId — nesse
+                # caso tx_bill_id vem None e caímos no cálculo por dia de corte
+                # abaixo, em vez de comparar None contra um billId real (o que
+                # sempre dava is_forecast=True, incorretamente, pra essas instituições).
+                is_forecast = tx_bill_id != bill_id_fatura_fechada
             elif eh_credito and purchase_date_str:
                 try:
                     purchase_date_obj = date.fromisoformat(purchase_date_str)
@@ -438,6 +478,7 @@ class PluggyService:
             preparadas.append({
                 "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
+                "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
             })
 
         # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
@@ -487,6 +528,21 @@ class PluggyService:
         for item, (categoria_pt, subcategoria_pt) in zip(preparadas, resultados):
             tx, descricao, raw_amount, tipo = item["tx"], item["descricao"], item["raw_amount"], item["tipo"]
             subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
+
+            # billing_date: prioriza creditCardDate quando a instituição preenche;
+            # senão calcula pelo dia de corte (necessário pra C6 Bank e outras que
+            # não populam esse campo — sem isso, cai no fallback antigo de usar a
+            # data de compra crua, jogando a transação pro mês errado).
+            billing_date_calculada = tx.get("creditCardDate")
+            if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
+                try:
+                    billing_date_calculada = self._mes_vencimento_fatura(
+                        date.fromisoformat(item["purchase_date_str"]), dia_corte
+                    ).isoformat()
+                except ValueError:
+                    pass
+            billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
+
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
@@ -497,7 +553,7 @@ class PluggyService:
                 "transaction_type": tipo,
                 "payment_method": (tx.get("paymentMethod") or "debito").lower(),
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
-                "billing_date": (tx.get("creditCardDate") or tx.get("date") or tx.get("transactionDate", ""))[:10],
+                "billing_date": billing_date_calculada,
                 "is_forecast": item["is_forecast"],
             }
             if subcategory_id:
