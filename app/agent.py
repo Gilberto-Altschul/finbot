@@ -52,9 +52,10 @@ _system_cache: str | None = None
 
 def _build_system() -> str:
     global _system_cache
-    if _system_cache is not None:
-        return _system_cache
-    _system_cache = f"""
+    if _system_cache is None:
+        # Parte estática (taxonomia, regras) — montada uma única vez e cacheada,
+        # pois não muda entre chamadas e recalcular a taxonomia toda hora seria caro.
+        _system_cache = f"""
 Você é o FinBot, um assistente financeiro pessoal via WhatsApp.
 Seu objetivo: ajudar o usuário a registrar gastos, receitas (incomes) e entender sua vida financeira.
 
@@ -74,7 +75,22 @@ REGRAS IMPORTANTES:
 CATEGORIAS E SUBCATEGORIAS (lista oficial, vinda do banco de dados):
 {_montar_taxonomia_agent()}
 """
-    return _system_cache
+
+    # Parte dinâmica — recalculada A CADA chamada (não entra no cache acima),
+    # justamente para nunca ficar "presa" no dia em que o servidor subiu.
+    # BUG CORRIGIDO: sem isso, o modelo não tinha como saber o ano atual e
+    # chutava um ano do próprio treinamento (ex: perguntas como "compara maio
+    # e junho" viravam mes="2024-05"/"2024-06" em vez do ano real).
+    hoje = date.today()
+    contexto_data = (
+        f"DATA DE HOJE: {hoje.strftime('%d/%m/%Y')} (formato mês para as ferramentas: '{hoje.strftime('%Y-%m')}').\n"
+        f"Se o usuário não especificar o ano ao se referir a um mês (ex: \"maio\", \"compara maio e junho\"), "
+        f"assuma SEMPRE o ano corrente ({hoje.year}) — nunca um ano de anos anteriores — a menos que o "
+        f"usuário mencione o ano explicitamente ou o mês referido ainda não tenha ocorrido neste ano "
+        f"(nesse caso, use o ano anterior, {hoje.year - 1}).\n\n"
+    )
+
+    return contexto_data + _system_cache
 
 
 def _invalidar_cache_system() -> None:
