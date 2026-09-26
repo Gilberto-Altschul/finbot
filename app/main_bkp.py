@@ -51,89 +51,26 @@ processed_messages = deque(maxlen=1000)
 _twilio = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 
-# O WhatsApp/Twilio rejeita mensagens com mais de 1600 caracteres (erro 400
-# "exceeds the 1600 character limit"). Usamos uma margem de segurança abaixo
-# disso — sobra espaço pro indicador de página "(1/3)" que adicionamos quando
-# a mensagem precisa ser dividida em várias partes.
-WHATSAPP_MAX_CHARS = 1500
-
-
-def _dividir_mensagem(body: str, limite: int = WHATSAPP_MAX_CHARS) -> list[str]:
-    """Divide uma mensagem longa em pedaços que cabem no limite do WhatsApp,
-    tentando quebrar em fronteiras de parágrafo/linha (preserva formatação e
-    emojis de cabeçalho de seção) antes de recorrer a corte por palavra."""
-    if len(body) <= limite:
-        return [body]
-
-    partes: list[str] = []
-    atual = ""
-    # Primeiro tenta respeitar parágrafos (separados por linha em branco ou \n)
-    for linha in body.split("\n"):
-        candidato = f"{atual}\n{linha}" if atual else linha
-        if len(candidato) <= limite:
-            atual = candidato
-            continue
-
-        if atual:
-            partes.append(atual)
-            atual = ""
-
-        # A própria linha é maior que o limite — corta por palavra
-        if len(linha) > limite:
-            palavras = linha.split(" ")
-            pedaco = ""
-            for palavra in palavras:
-                cand = f"{pedaco} {palavra}" if pedaco else palavra
-                if len(cand) > limite:
-                    partes.append(pedaco)
-                    pedaco = palavra
-                else:
-                    pedaco = cand
-            atual = pedaco
-        else:
-            atual = linha
-
-    if atual:
-        partes.append(atual)
-
-    total = len(partes)
-    if total > 1:
-        return [f"{p}\n\n_(parte {i+1}/{total})_" for i, p in enumerate(partes)]
-    return partes
-
-
 def _send_whatsapp(to: str, body: str) -> None:
     if not body or not str(body).strip():
         logger.error(f"Erro: corpo de mensagem vazio para {to}. Abortando envio.")
         return
 
-    partes = _dividir_mensagem(body)
-    if len(partes) > 1:
-        logger.info(f"Mensagem para {to} excede {WHATSAPP_MAX_CHARS} chars ({len(body)} chars) — dividindo em {len(partes)} envios.")
-
-    for indice, parte in enumerate(partes):
-        enviado = False
-        for attempt in range(3):
-            try:
-                msg = _twilio.messages.create(
-                    from_=settings.twilio_whatsapp_number,
-                    to=to,
-                    body=parte,
-                )
-                logger.info(f"Message sent to {to} | SID: {msg.sid}" + (f" | parte {indice+1}/{len(partes)}" if len(partes) > 1 else ""))
-                enviado = True
-                break
-            except Exception as exc:
-                if attempt < 2:
-                    logger.warning(f"Retentativa de envio WhatsApp ({attempt+1}/3): {exc}")
-                    time.sleep(1)
-                    continue
-                logger.error(f"Falha definitiva ao enviar WhatsApp para {to}: {exc}")
-
-        # Pequena pausa entre partes (só se a parte anterior saiu) para reduzir
-        # o risco de o WhatsApp entregar/renderizar as mensagens fora de ordem.
-        if enviado and indice < len(partes) - 1:
-            time.sleep(0.4)
+    for attempt in range(3):
+        try:
+            msg = _twilio.messages.create(
+                from_=settings.twilio_whatsapp_number,
+                to=to,
+                body=body,
+            )
+            logger.info(f"Message sent to {to} | SID: {msg.sid}")
+            return
+        except Exception as exc:
+            if attempt < 2:
+                logger.warning(f"Retentativa de envio WhatsApp ({attempt+1}/3): {exc}")
+                time.sleep(1)
+                continue
+            logger.error(f"Falha definitiva ao enviar WhatsApp para {to}: {exc}")
 
 
 async def _process(user_phone: str, user_message: str) -> None:
