@@ -21,19 +21,10 @@ async def call_llm(
     history: list[dict[str, str]],
     message: str,
     tools: list[dict[str, Any]] | None = None,
-    tool_rounds: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Chama de forma assíncrona o modelo Gemini adaptando o histórico
     e blindando contra falhas de envio de esquemas de ferramentas.
-
-    tool_rounds (opcional): permite continuar um raciocínio em várias etapas.
-    Cada item é um dict {"calls": [...], "results": [...]} representando uma
-    rodada anterior de tool-calling já executada para ESTA MESMA mensagem do
-    usuário. Isso reconstitui o turno do modelo (as function_calls que ele
-    pediu) e o turno de resposta (os resultados reais), para que o modelo veja
-    o que já pediu e o que já recebeu antes de decidir o próximo passo —
-    incluindo pedir mais uma ferramenta, se precisar.
     """
     try:
         # Converte o histórico de conversação do banco para o formato de Contents aceito pelo SDK
@@ -51,32 +42,6 @@ async def call_llm(
         contents_payload.append(
             types.Content(role="user", parts=[types.Part.from_text(text=message)])
         )
-
-        # Reconstitui rodadas anteriores de tool-calling desta mesma pergunta,
-        # na ordem em que aconteceram, para dar continuidade ao raciocínio.
-        for rodada in (tool_rounds or []):
-            calls = rodada.get("calls", [])
-            resultados = rodada.get("results", [])
-            if not calls:
-                continue
-            contents_payload.append(
-                types.Content(
-                    role="model",
-                    parts=[
-                        types.Part.from_function_call(name=c["name"], args=c["args"])
-                        for c in calls
-                    ],
-                )
-            )
-            contents_payload.append(
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_function_response(name=c["name"], response=r if isinstance(r, dict) else {"resultado": r})
-                        for c, r in zip(calls, resultados)
-                    ],
-                )
-            )
 
         # Configura as instruções do sistema
         config = types.GenerateContentConfig(
@@ -131,12 +96,9 @@ async def call_llm(
         if not response:
             raise Exception("Todos os modelos de IA falharam ou estão sem cota disponível.")
 
-        # Verifica se o modelo decidiu acionar alguma ferramenta mapeada.
-        # IMPORTANTE: antes só pegávamos response.function_calls[0] — se o
-        # modelo pedisse várias tools de uma vez (ex: comparar dois meses,
-        # como o próprio system prompt instrui), a segunda em diante era
-        # descartada silenciosamente. Agora extraímos todas.
+        # Verifica se o modelo decidiu acionar alguma ferramenta mapeada
         if response.function_calls:
+            call = response.function_calls[0]
             return {
                 "type": "tool_call",
                 "tool_calls": [
@@ -144,7 +106,6 @@ async def call_llm(
                         "name": call.name,
                         "args": dict(call.args) if call.args else {}
                     }
-                    for call in response.function_calls
                 ]
             }
 

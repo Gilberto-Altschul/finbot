@@ -444,34 +444,27 @@ async def run(user_phone: str, user_message: str) -> str:
     history = db.get_history(user_phone)
     db.save_message(user_phone, "user", user_message)
 
-    async def _executar_call(call: dict) -> dict:
-        """Executa uma tool call aplicando as mesmas regras de normalização e
-        proteção (categorizador híbrido) usadas tanto na primeira rodada
-        quanto em rodadas adicionais do loop de raciocínio analítico."""
-        args_pt = dict(call["args"])
-        if "amount" in args_pt: args_pt["valor"] = args_pt.pop("amount")
-        if "category" in args_pt: args_pt["categoria"] = args_pt.pop("category")
-        if "description" in args_pt: args_pt["descricao"] = args_pt.pop("description")
-
-        if call["name"] == "registrar_gasto":
-            # Força o uso do categorizador híbrido para garantir que as regras de proteção
-            # (como Família e Saúde) prevaleçam sobre a intuição da LLM.
-            c, s = await categorizar_gasto_hibrido(user_phone, args_pt.get("descricao", user_message))
-            if c != "Perguntar":
-                if c not in SISTEMA_CATEGORIAS: c = "Outros"
-                args_pt["categoria"] = c
-                args_pt["subcategoria"] = s
-
-        call["args"] = args_pt  # mantém o args_pt normalizado também na rodada registrada p/ o histórico do modelo
-        return await tool_registry.execute(call["name"], args_pt, user_phone)
-
     try:
         response = await call_llm(system=_build_system(), history=history, message=user_message, tools=tool_registry.SCHEMAS)
         if response["type"] == "tool_call":
             tool_results = []
             for call in response["tool_calls"]:
                 try:
-                    result = await _executar_call(call)
+                    args_pt = dict(call["args"])
+                    if "amount" in args_pt: args_pt["valor"] = args_pt.pop("amount")
+                    if "category" in args_pt: args_pt["categoria"] = args_pt.pop("category")
+                    if "description" in args_pt: args_pt["descricao"] = args_pt.pop("description")
+                    
+                    if call["name"] == "registrar_gasto":
+                        # Força o uso do categorizador híbrido para garantir que as regras de proteção 
+                        # (como Família e Saúde) prevaleçam sobre a intuição da LLM.
+                        c, s = await categorizar_gasto_hibrido(user_phone, args_pt.get("descricao", user_message))
+                        if c != "Perguntar":
+                            if c not in SISTEMA_CATEGORIAS: c = "Outros"
+                            args_pt["categoria"] = c
+                            args_pt["subcategoria"] = s
+                        
+                    result = await tool_registry.execute(call["name"], args_pt, user_phone)
                     # Armazena os dados para síntese inteligente
                     tool_results.append({"name": call["name"], "data": result})
                 except Exception as exc:
@@ -493,54 +486,16 @@ async def run(user_phone: str, user_message: str) -> str:
             tem_diagnostico = any(tr["name"] == "diagnosticar_estouro" for tr in tool_results)
 
             if intent_analitica or tem_diagnostico:
-                MAX_RODADAS_ANALISE = 3  # limite de segurança: evita loop caro/infinito
                 try:
-                    logger.info("Iniciando loop de raciocínio analítico...")
-                    # Rodada 0 já aconteceu acima — registra ela para dar contexto ao modelo
-                    rodadas = [{
-                        "calls": response["tool_calls"],
-                        "results": [tr["data"] for tr in tool_results],
-                    }]
-                    reply = None
-
-                    for i in range(MAX_RODADAS_ANALISE):
-                        resposta_ia = await call_llm(
-                            system=_build_system(),
-                            history=history,
-                            message=user_message,
-                            tools=tool_registry.SCHEMAS,  # mantém tools disponíveis: o modelo pode pedir mais uma
-                            tool_rounds=rodadas,
-                        )
-
-                        if resposta_ia["type"] == "text":
-                            reply = resposta_ia["content"]
-                            break
-
-                        # O modelo decidiu que precisa de mais uma informação antes de responder
-                        logger.info(f"Rodada {i+1}: modelo pediu mais {len(resposta_ia['tool_calls'])} ferramenta(s) antes de responder.")
-                        novos_resultados = []
-                        for call in resposta_ia["tool_calls"]:
-                            try:
-                                r = await _executar_call(call)
-                            except Exception as exc:
-                                r = {"erro": str(exc)}
-                            novos_resultados.append(r)
-                            tool_results.append({"name": call["name"], "data": r})
-                        rodadas.append({"calls": resposta_ia["tool_calls"], "results": novos_resultados})
-
-                    if reply is None:
-                        # Estourou o limite de rodadas sem o modelo se decidir — força uma
-                        # síntese final só com o que já foi coletado, em vez de deixar o
-                        # usuário sem resposta.
-                        logger.warning("Loop analítico atingiu o limite de rodadas sem resposta final.")
-                        prompt_sintese = f"Dados coletados até agora: {json.dumps([tr['data'] for tr in tool_results], ensure_ascii=False)}. Responda da melhor forma possível com o que você já tem, sem pedir mais ferramentas."
-                        resposta_final = await call_llm(
-                            system=_build_system(),
-                            history=history + [{"role": "user", "content": user_message}],
-                            message=prompt_sintese,
-                            tools=[]
-                        )
-                        reply = resposta_final["content"]
+                    logger.info("Sintetizando resultados analíticos via LLM...")
+                    prompt_sintese = f"O usuário solicitou uma análise ou continuação de comparação. Dados brutos retornados: {json.dumps([tr['data'] for tr in tool_results], ensure_ascii=False)}. Formule uma resposta humana, direta e comparativa com base nesses dados e no histórico da conversa."
+                    resposta_ia = await call_llm(
+                        system=_build_system(),
+                        history=history + [{"role": "user", "content": user_message}],
+                        message=prompt_sintese,
+                        tools=[]
+                    )
+                    reply = resposta_ia["content"]
                 except Exception as e:
                     logger.error(f"Erro na síntese analítica: {e}")
                     reply = "\n\n".join([_format_output(tr["data"], tr["name"], user_phone) for tr in tool_results])
