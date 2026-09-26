@@ -96,16 +96,6 @@ SCHEMAS: list[dict] = [
         }
     },
     {
-        "name": "listar_receitas",
-        "description": "Lista as receitas/entradas de dinheiro (salário, freela, reembolso, investimento) recebidas em um determinado mês, com total e divisão por categoria. Use para 'quais foram minhas receitas', 'quanto recebi' ou 'mostre as receitas de agosto'.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM. Se omitido, usa o mês atual."}
-            }
-        }
-    },
-    {
         "name": "resumo_mensal",
         "description": "Retorna um resumo financeiro AGRUPADO (visão geral/totais por categoria). Use para 'resumo', 'saldo do mês' ou 'como foi meu mês'. NÃO use para listar compras individuais.",
         "parameters": {
@@ -366,67 +356,6 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
             db.save_expense(user_phone, valor, category=categoria, description=descricao, beneficiario=pagador, expense_date=expense_date, transaction_type="income", payment_method="dinheiro")
             return {"registrado": True, "valor": valor, "descricao": descricao, "total_receitas_mes": db.monthly_income_total(user_phone), "tipo": "receita"}
-
-        case "listar_receitas":
-            hoje = date.today()
-            parsed = _parse_month_year(args.get("mes"))
-            if parsed:
-                hoje = date(parsed[0], parsed[1], 1)
-
-            start_date = hoje.replace(day=1).isoformat()
-            ultimo_dia = monthrange(hoje.year, hoje.month)[1]
-            end_date = hoje.replace(day=ultimo_dia).isoformat()
-
-            try:
-                res = db.get_db().table("finbot_expenses") \
-                    .select("category, description, amount, purchase_date, billing_date") \
-                    .ilike("user_phone", db._q(user_phone)) \
-                    .ilike("transaction_type", "income") \
-                    .gte("billing_date", start_date) \
-                    .lte("billing_date", end_date) \
-                    .order("billing_date", desc=True) \
-                    .execute()
-
-                receitas_raw = res.data or []
-
-                if not receitas_raw:
-                    return {"mensagem": f"📭 Nenhuma receita registrada em {hoje.strftime('%m/%Y')}."}
-
-                total_receitas = sum(float(r["amount"]) for r in receitas_raw)
-
-                cat_agrupado: dict[str, float] = {}
-                for item in receitas_raw:
-                    cat = item.get("category") or "Outros"
-                    cat_agrupado[cat] = cat_agrupado.get(cat, 0.0) + float(item["amount"])
-
-                linhas_cat = []
-                for cat_nome, cat_valor in sorted(cat_agrupado.items(), key=lambda x: x[1], reverse=True):
-                    pct = round((cat_valor / total_receitas) * 100) if total_receitas > 0 else 0
-                    linhas_cat.append(f" • *{cat_nome}*: R$ {_fmt_moeda(cat_valor)} ({pct}%)")
-
-                linhas_recentes = []
-                for r in receitas_raw[:5]:
-                    dt_val = r.get("purchase_date") or r.get("billing_date")
-                    dt_fmt = f"{dt_val[8:10]}/{dt_val[5:7]}" if dt_val else "??"
-                    linhas_recentes.append(f" • {dt_fmt} | {r['description']}: R$ {_fmt_moeda(float(r['amount']))}")
-
-                msg = (
-                    f"💰 *Receitas de {hoje.strftime('%m/%Y')}*\n\n"
-                    f"📊 *Total recebido:* R$ {_fmt_moeda(total_receitas)}\n\n"
-                    f"🔍 *Por categoria:*\n" + "\n".join(linhas_cat)
-                )
-                if linhas_recentes:
-                    msg += "\n\n🧾 *Últimos lançamentos:*\n" + "\n".join(linhas_recentes)
-
-                return {
-                    "mensagem": msg,
-                    "total_receitas": total_receitas,
-                    "mes": hoje.strftime("%Y-%m"),
-                    "transacoes": receitas_raw,
-                }
-            except Exception as e:
-                logger.error(f"Erro ao listar receitas: {e}")
-                return {"mensagem": "⚠️ Tive um problema ao buscar suas receitas."}
 
         case "registrar_gasto":
             valor = float(args.get("valor", 0))
