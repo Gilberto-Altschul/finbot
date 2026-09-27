@@ -87,7 +87,7 @@ SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "valor": {"type": "number"},
-                "categoria": {"type": "string", "enum": ["Salário", "Investimento", "Presente", "Extra", "Reembolso"]},
+                "categoria": {"type": "string", "enum": ["Salário", "Freelance e Bônus", "Rendimento", "Reembolso", "Transferência Recebida"]},
                 "descricao": {"type": "string"},
                 "pagador": {"type": "string"},
                 "data": {"type": "string"}
@@ -354,7 +354,11 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
         case "registrar_receita":
             valor = float(args.get("valor") or args.get("amount") or 0)
-            categoria = args.get("categoria") or args.get("category")
+            # 'categoria' aqui é, na verdade, a SUBCATEGORIA da receita (Salário,
+            # Freelance e Bônus, Rendimento, Reembolso, Transferência Recebida).
+            # A categoria-pai é sempre fixa: "Receitas" — mesmo padrão hierárquico
+            # usado nas despesas (category=Alimentação / subcategory=Restaurante).
+            subcategoria_receita = args.get("categoria") or args.get("category") or "Outros"
             descricao = args["descricao"]
             pagador = args.get("pagador")
             data_raw = args.get("data")
@@ -364,8 +368,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 try: expense_date = datetime.strptime(data_raw, "%Y-%m-%d").date()
                 except: pass
 
-            db.save_expense(user_phone, valor, category=categoria, description=descricao, beneficiario=pagador, expense_date=expense_date, transaction_type="income", payment_method="dinheiro")
-            return {"registrado": True, "valor": valor, "descricao": descricao, "total_receitas_mes": db.monthly_income_total(user_phone), "tipo": "receita"}
+            db.save_expense(user_phone, valor, category="Receitas", subcategoria=subcategoria_receita, description=descricao, beneficiario=pagador, expense_date=expense_date, transaction_type="income", payment_method="dinheiro")
+            return {"registrado": True, "valor": valor, "descricao": descricao, "subcategoria": subcategoria_receita, "total_receitas_mes": db.monthly_income_total(user_phone), "tipo": "receita"}
 
         case "listar_receitas":
             hoje = date.today()
@@ -379,7 +383,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
             try:
                 res = db.get_db().table("finbot_expenses") \
-                    .select("category, description, amount, purchase_date, billing_date") \
+                    .select("category, subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
                     .ilike("transaction_type", "income") \
                     .gte("billing_date", start_date) \
@@ -394,9 +398,12 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
                 total_receitas = sum(float(r["amount"]) for r in receitas_raw)
 
+                # Agrupa por SUBCATEGORIA (Salário, Freelance e Bônus, etc.) —
+                # a categoria em si é sempre "Receitas" agora, então agrupar por
+                # ela não diria nada de útil.
                 cat_agrupado: dict[str, float] = {}
                 for item in receitas_raw:
-                    cat = item.get("category") or "Outros"
+                    cat = item.get("subcategory") or "Outros"
                     cat_agrupado[cat] = cat_agrupado.get(cat, 0.0) + float(item["amount"])
 
                 linhas_cat = []

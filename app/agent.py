@@ -109,6 +109,17 @@ _EXPENSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Taxonomia oficial das 5 subcategorias de Receita, com as keywords usadas
+# tanto na detecção automática de "isso é receita, não gasto" no fast-path
+# quanto como referência para reclassificar dados históricos.
+_RECEITA_KEYWORDS: dict[str, list[str]] = {
+    "Salário": ["salario", "salário", "folha", "pagamento recebido", "holerite"],
+    "Freelance e Bônus": ["freela", "comissao", "comissão", "bonus", "bônus", "honorario", "honorário", "premio", "prêmio"],
+    "Rendimento": ["dividendo", "cdb", "tesouro", "rendimento", "juros recebido"],
+    "Reembolso": ["estorno", "devolucao", "devolução", "reembolso"],
+    "Transferência Recebida": ["pix recebido", "ted recebida", "transferencia recebida", "transferência recebida"],
+}
+
 _KEYWORD_TOOLS = {
     # --- AUDITORIA E EXTRATOS ---
     "extrato": "listar_gastos_detalhados",
@@ -220,7 +231,7 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
             "🐾 *Pets:* Ração (Petz/Cobasi), Veterinário, Petshop, Plano Pet\n\n"
             "👨‍👩‍👧 *Família:* Mesada, Pensão, Apoio Familiar, Presente, Emergência\n\n"
             "💼 *Empresa:* MEI, Impostos PJ, Escritório, Marketing, Pró-labore\n\n"
-            "💰 *Receitas:* Salário, Freela, Rendimento, Reembolso"
+            "💰 *Receitas:* Salário, Freelance e Bônus, Rendimento, Reembolso, Transferência Recebida"
         )
 
     if tool_name == "direct_reply":
@@ -330,12 +341,15 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             parc = int(m.group("parcelas_pre") or m.group("parcelas_pos") or 1)
             data_raw = m.group("data")
             
-            # Identifica se é uma receita (income) em vez de gasto
-            if any(k in desc_norm for k in ["salario", "salário", "receita", "reembolso", "rendimento"]):
-                cat_receita = "Salário" if "salario" in desc_norm else "Extra"
-                if "reembolso" in desc_norm: cat_receita = "Reembolso"
-                if "rendimento" in desc_norm: cat_receita = "Investimento"
-                
+            # Identifica se é uma receita (income) em vez de gasto, usando a
+            # taxonomia oficial de subcategorias de Receita (5 buckets fixos).
+            cat_receita = None
+            for nome_subcat, palavras in _RECEITA_KEYWORDS.items():
+                if any(k in desc_norm for k in palavras):
+                    cat_receita = nome_subcat
+                    break
+
+            if cat_receita:
                 args_receita = {"valor": valor, "categoria": cat_receita, "descricao": desc_raw}
                 if data_raw:
                     try:
