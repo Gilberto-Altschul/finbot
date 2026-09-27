@@ -1112,7 +1112,11 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
                 for c in (res_all_cats.data or []):
                     if _normalize(c["name"]) == target_norm:
                         nova_cat = c["name"]
-                        nova_sub = "Geral"
+                        # Preserva a subcategoria já existente (ex: "Restaurante")
+                        # em vez de resetar pra "Geral" — o usuário só pediu pra
+                        # mudar a CATEGORIA-pai, a subcategoria continua válida.
+                        # Só cai pra "Geral" se realmente não havia nenhuma antes.
+                        nova_sub = tx_atual["subcategory"] or "Geral"
                         found_in_db = True
                         break
 
