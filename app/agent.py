@@ -417,9 +417,11 @@ async def _classify(message: str, user_phone: str) -> dict | None:
 
     # 3. Detecção de Mês por extenso (Evita chamadas desnecessárias à LLM)
     target_month = None
+    mes_encontrado = None
     for m_nome, m_num in _MESES_MAP.items():
         if m_nome in msg_norm:
             target_month = f"{date.today().year}-{m_num}"
+            mes_encontrado = m_nome
             break
 
     # 4. Roteamento de Ferramentas via Keywords
@@ -435,6 +437,25 @@ async def _classify(message: str, user_phone: str) -> dict | None:
 
                 for cat in SISTEMA_CATEGORIAS:
                     if _normalize(cat) in msg_norm:
+                        # Se sobrar bastante texto além da categoria, do mês e de
+                        # palavras de preenchimento comuns, o usuário provavelmente
+                        # está pedindo uma SUBCATEGORIA específica dentro da
+                        # categoria (ex: "gastos viagem em lazer", "detalha
+                        # streaming do lazer"). Nesse caso, não resolve no
+                        # fast-path — deixa cair no loop com LLM, que sabe
+                        # extrair categoria + subcategoria juntos via function
+                        # calling (veja o parâmetro 'subcategoria' de
+                        # listar_categoria em tools.py).
+                        resto = msg_norm.replace(_normalize(cat), " ")
+                        if mes_encontrado:
+                            resto = resto.replace(mes_encontrado, " ")
+                        for palavra in ["gastos", "gasto", "em", "de", "do", "da", "no", "na", "quanto", "quais", "foram", "mostra", "mostre", "listar", "lista", "ver", "me", "os", "as"]:
+                            resto = re.sub(rf"\b{palavra}\b", " ", resto)
+                        resto = resto.strip()
+
+                        if len(resto) > 3:
+                            return None
+
                         args["categoria"] = cat
                         return {"tool": tool_name, "args": args}
                 

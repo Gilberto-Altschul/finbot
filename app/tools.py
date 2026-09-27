@@ -119,11 +119,12 @@ SCHEMAS: list[dict] = [
     },
     {
         "name": "listar_categoria",
-        "description": "Lista detalhadamente os gastos de uma categoria específica (ex: Alimentação) em um determinado mês.",
+        "description": "Lista detalhadamente os gastos de uma categoria específica (ex: Alimentação) em um determinado mês. Se o usuário mencionar também uma subcategoria específica dentro dela (ex: 'gastos de viagem em lazer', 'detalha streaming em lazer'), passe também 'subcategoria' para ver só aquela subcategoria em detalhe (todas as transações, não só um resumo).",
         "parameters": {
             "type": "object",
             "properties": {
                 "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes"]},
+                "subcategoria": {"type": "string", "description": "Opcional. Nome da subcategoria dentro da categoria (ex: 'Viagem', 'Streaming', 'Restaurante') para detalhar só ela."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM."}
             },
             "required": ["categoria"]
@@ -533,6 +534,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
         case "listar_categoria":
             cat_target = args.get("categoria", "").strip()
+            subcat_target = (args.get("subcategoria") or "").strip()
 
             if not cat_target:
                 return {
@@ -549,26 +551,53 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             end_date = hoje.replace(day=ultimo_dia).isoformat()
 
             try:
-                res = db.get_db().table("finbot_expenses") \
+                query = db.get_db().table("finbot_expenses") \
                     .select("subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
                     .ilike("category", cat_target.strip()) \
                     .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
                     .gte("billing_date", start_date) \
-                    .lte("billing_date", end_date) \
-                    .order("billing_date", desc=True) \
-                    .execute()
+                    .lte("billing_date", end_date)
+
+                if subcat_target:
+                    query = query.ilike("subcategory", subcat_target)
+
+                res = query.order("billing_date", desc=True).execute()
 
                 gastos_raw = res.data or []
 
                 if not gastos_raw:
+                    alvo = f"*{cat_target} → {subcat_target}*" if subcat_target else f"*{cat_target}*"
                     return {
-                        "mensagem": f"📭 Nenhum gasto registrado em *{cat_target}* este mês!"
+                        "mensagem": f"📭 Nenhum gasto registrado em {alvo} este mês!"
                     }
 
                 mapa_emojis = db.get_category_emojis()
                 emoji_da_cat = mapa_emojis.get(cat_target, "📊")
                 total_da_cat = sum(float(g["amount"]) for g in gastos_raw)
+
+                # Quando o usuário pede uma subcategoria específica, o interesse é
+                # ver TODAS as transações dela, não um resumo agrupado por
+                # subcategoria (que aqui seria só uma linha, redundante).
+                if subcat_target:
+                    linhas_todas = []
+                    for g in gastos_raw:
+                        dt_val = g.get("purchase_date") or g.get("billing_date")
+                        dt_fmt = f"{dt_val[8:10]}/{dt_val[5:7]}" if dt_val else "??"
+                        linhas_todas.append(f" • {dt_fmt} | {g['description']}: R$ {_fmt_moeda(float(g['amount']))}")
+
+                    msg = (
+                        f"{emoji_da_cat} *{cat_target} → {subcat_target} ({hoje.strftime('%m/%Y')})*\n\n"
+                        f"💸 *Total:* R$ {_fmt_moeda(total_da_cat)} em {len(gastos_raw)} transaç{'ão' if len(gastos_raw) == 1 else 'ões'}\n\n"
+                        f"🧾 *Lançamentos:*\n" + "\n".join(linhas_todas)
+                    )
+                    return {
+                        "mensagem": msg,
+                        "total_da_cat": total_da_cat,
+                        "subcategoria": subcat_target,
+                        "mes": hoje.strftime("%Y-%m"),
+                        "transacoes": gastos_raw
+                    }
 
                 sub_agrupado = {}
 
