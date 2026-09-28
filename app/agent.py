@@ -252,20 +252,19 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     msg_norm = _normalize(msg)
         
     if msg_norm.startswith("sincronizar"):
-          partes = msg_norm.split()
+        partes = msg_norm.split()
         
-          if len(partes) < 3:
-              reply = "⚠️ Formato obrigatório: `sincronizar [ITEM_ID] [ACCOUNT_ID] [MÊS]`"
-          else:
-              item_id = partes[1]
-              account_id = partes[2]
-              mes_informado = partes[3] if len(partes) > 3 else None
-            
-              # Repassa o mês informado (ex: "outubro") para a função de sincronização
-              reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id, billing_month_input=mes_informado)
+        if len(partes) < 3:
+            # Força o usuário a fornecer os dois parâmetros
+            reply = "⚠️ Formato obrigatório: `sincronizar [ITEM_ID] [ACCOUNT_ID]`"
+        else:
+            item_id = partes[1]
+            account_id = partes[2]
+            # Chamada para o novo método que filtra
+            reply = await tool_registry.sincronizar_banco_especifico(user_phone, item_id, account_id)
 
-          return {"tool": "direct_reply", "args": {"mensagem": reply}}           
-    
+        return {"tool": "direct_reply", "args": {"mensagem": reply}}
+            
     # Paginação (Ex: "listar 5 pag 2")
     if "listar" in msg_norm and "pag" in msg_norm:
         m_pag = re.search(r"pag (\d+)", msg_norm)
@@ -275,6 +274,23 @@ async def _classify(message: str, user_phone: str) -> dict | None:
         mes = m_mes.group(1) if m_mes else str(date.today().month)
         
         return {"tool": "listar_gastos_detalhados", "args": {"mes": mes, "pagina": pagina}}
+
+    # Paginação da fatura (Ex: "fatura pag 2", "fatura pág 2", "fatura outubro pag 2")
+    # BUG CORRIGIDO: sem essa regra, "fatura pag 2" caía na regex de gasto manual
+    # (_EXPENSE_RE lá embaixo), que registrava um gasto fantasma de "fatura pag"
+    # no valor de R$ 2,00 — exatamente o comando que o próprio bot sugere no
+    # rodapé da fatura ("Digite fatura pág N para ver mais").
+    if "fatura" in msg_norm and "pag" in msg_norm:
+        m_pag = re.search(r"pag\w* (\d+)", msg_norm)
+        pagina = int(m_pag.group(1)) if m_pag else 1
+
+        args_fatura: dict = {"pagina": pagina}
+        for m_nome, m_num in _MESES_MAP.items():
+            if m_nome in msg_norm:
+                args_fatura["mes"] = f"{date.today().year}-{m_num}"
+                break
+
+        return {"tool": "consultar_fatura", "args": args_fatura}
 
     # Comando "Acertar" (Ex: "acertar 1 excluir")
     if msg_norm.startswith("acertar"):
