@@ -206,6 +206,16 @@ SCHEMAS: list[dict] = [
     }
 ]
 
+# Tools que ALTERAM configurações do usuário e só podem ser acionadas por um
+# comando explícito (fast-path determinístico), nunca por inferência do LLM.
+# Motivo: numa pergunta aberta como "como gastar 15 mil por mês", o modelo
+# interpretou como pedido de ação e sobrescreveu 8 limites de uma vez, sem
+# confirmação. Conselho/planejamento deve virar TEXTO, não escrita no banco.
+SOMENTE_DETERMINISTICAS: set[str] = {"definir_limite"}
+
+# Versão dos schemas que é exposta ao Gemini (function calling).
+LLM_SCHEMAS: list[dict] = [s for s in SCHEMAS if s["name"] not in SOMENTE_DETERMINISTICAS]
+
 async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
     logger.info(f"Executando handler nativo: {name} com args {args}")
 

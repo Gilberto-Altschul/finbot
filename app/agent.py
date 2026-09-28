@@ -69,6 +69,7 @@ REGRAS IMPORTANTES:
 - EXCEÇÃO CRÍTICA: Se o local for um Restaurante, Bar, Café ou Padaria, você NÃO PODE registrar direto. Pergunte: "Este gasto foi Alimentação (refeição comum) ou Lazer (saída social)?"
 - Sempre informe o total acumulado (da categoria para gastos ou total do mês para receitas) após um registro.
 - COMPARAÇÕES: Se o usuário solicitar uma comparação entre períodos (ex: "compara maio e junho"), você DEVE chamar as ferramentas (como resumo_mensal ou listar_gastos_detalhados) para *TODOS* os períodos mencionados *em uma única resposta contendo múltiplas chamadas de ferramentas*. Sempre passe o argumento 'mes' no formato 'YYYY-MM' e argumentos de dia (dia_inicio/dia_fim) APENAS como números inteiros. NUNCA pergunte se deve buscar os dados do segundo período; assuma que sim e proceda com a coleta de todas as informações necessárias para a comparação.
+- PLANEJAMENTO E CONSELHOS: Se o usuário pedir uma sugestão, plano ou distribuição de orçamento (ex: "como gastar 15 mil por mês", "me ajuda a montar um orçamento"), responda APENAS com texto, sugerindo uma divisão por categoria. NUNCA registre, altere ou exclua nada por conta própria nesses casos. Termine perguntando se ele quer aplicar a sugestão — ele aplica com o comando "limite <categoria> <valor>".
 - RESPOSTA DE COMPARAÇÕES/ANÁLISES (mensagem via WhatsApp, seja concisa): destaque só o total de cada período, a diferença (R$ e %) e, no máximo, as 2-3 categorias que mais mudaram. NÃO liste todas as categorias de ambos os períodos, nem transação por transação — o usuário pode pedir o detalhe de uma categoria específica depois, se quiser.
 - QUANDO / DATAS: Se o usuário perguntar quando algo foi pago ou o dia de um gasto, use 'listar_categoria' (se souber a categoria) ou 'listar_gastos_detalhados' para encontrar a data exata nos dados retornados.
 - SAÚDE vs FINANCEIRO: Planos de Saúde ou Convênios DEVEM ser registrados na categoria 'Saúde'. A categoria 'Financeiro' é para taxas e seguros de bens (vida/casa). Seguros de automóvel pertencem à categoria 'Transporte'.
@@ -500,6 +501,12 @@ async def run(user_phone: str, user_message: str) -> str:
         """Executa uma tool call aplicando as mesmas regras de normalização e
         proteção (categorizador híbrido) usadas tanto na primeira rodada
         quanto em rodadas adicionais do loop de raciocínio analítico."""
+        # Defesa em profundidade: tools restritas ao fast-path determinístico
+        # nunca executam a partir de uma decisão do LLM.
+        if call["name"] in tool_registry.SOMENTE_DETERMINISTICAS:
+            logger.warning(f"Tool restrita '{call['name']}' solicitada pelo LLM — bloqueada.")
+            return {"mensagem": "⚠️ Para alterar limites, use o comando direto: *limite <categoria> <valor>* (ex: limite lazer 500)."}
+
         args_pt = dict(call["args"])
         if "amount" in args_pt: args_pt["valor"] = args_pt.pop("amount")
         if "category" in args_pt: args_pt["categoria"] = args_pt.pop("category")
@@ -518,7 +525,7 @@ async def run(user_phone: str, user_message: str) -> str:
         return await tool_registry.execute(call["name"], args_pt, user_phone)
 
     try:
-        response = await call_llm(system=_build_system(), history=history, message=user_message, tools=tool_registry.SCHEMAS)
+        response = await call_llm(system=_build_system(), history=history, message=user_message, tools=tool_registry.LLM_SCHEMAS)
         if response["type"] == "tool_call":
             tool_results = []
             for call in response["tool_calls"]:
@@ -560,7 +567,7 @@ async def run(user_phone: str, user_message: str) -> str:
                             system=_build_system(),
                             history=history,
                             message=user_message,
-                            tools=tool_registry.SCHEMAS,  # mantém tools disponíveis: o modelo pode pedir mais uma
+                            tools=tool_registry.LLM_SCHEMAS,  # mantém tools disponíveis: o modelo pode pedir mais uma
                             tool_rounds=rodadas,
                         )
 
