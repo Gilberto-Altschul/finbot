@@ -342,19 +342,16 @@ class PluggyService:
 
     async def sync_user_transactions(
         self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None
-        ):
+    ):
+        # 1. Converte o mês informado (ex: "outubro" -> "2026-10-01") se houver
         billing_date_override = parse_mes_fatura(billing_month_input) if billing_month_input else None
-        # 1. Verifica status do item (não da conta)
-        status = await self.verificar_status_sincronizacao(item_id)
 
-        # Se não estiver UPDATED, retornamos um aviso ao usuário
+        # 2. Verifica status do item
+        status = await self.verificar_status_sincronizacao(item_id)
         if status != "UPDATED":
             return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
 
-        # 2. SE ESTIVER UPDATED: Busca as transações
-        # Janela de ~45 dias cobre um ciclo de fatura completo com folga.
-        # Combinado com o filtro de status abaixo, isso traz só a última
-        # fatura fechada (não parcelas futuras/fatura aberta).
+        # 3. Busca transações
         params = {
             "accountId": account_id,
             "dateFrom": (date.today() - timedelta(days=45)).isoformat(),
@@ -367,20 +364,21 @@ class PluggyService:
             params=params,
             timeout=30
         )
-        logger.info(f"Pluggy request URL: {tx_resp.url}")
-        logger.info(f"Pluggy response status: {tx_resp.status_code}")
-        logger.info(f"Pluggy response body: {tx_resp.text[:2000]}")
         tx_resp.raise_for_status()
-       
         transactions = tx_resp.json().get("results", [])
         
-        # 3. Processa e insere no banco
+        # 4. Repassa o billing_date_override para o processamento
         return await self._process_transactions(
             user_phone, transactions, item_id=item_id, account_id=account_id, billing_date_override=billing_date_override
         )
 
     async def _process_transactions(
-        self, user_phone: str, transactions: list[dict], item_id: str | None = None, account_id: str | None = None
+        self, 
+        user_phone: str, 
+        transactions: list[dict], 
+        item_id: str | None = None, 
+        account_id: str | None = None,
+        billing_date_override: str | None = None  # <--- Adicionar este parâmetro
     ) -> tuple[str, list[dict] | None]:
         """
         Converte transações da Pluggy para o formato padrão e insere em lote no banco,
@@ -537,27 +535,23 @@ class PluggyService:
             tx, descricao, raw_amount, tipo = item["tx"], item["descricao"], item["raw_amount"], item["tipo"]
             subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
 
-            # billing_date: prioriza creditCardDate quando a instituição preenche;
-            # senão calcula pelo dia de corte — mas SÓ para a 1ª parcela (ou compra
-            # não parcelada), onde `date` é a data real da compra. A partir da 2ª
-            # parcela, a Pluggy já retorna `date` como a data de postagem na fatura
-            # (billPostDate), refletindo o mês de vencimento daquela parcela — somar
-            # o deslocamento do dia de corte de novo jogaria a parcela um mês além
-            # do vencimento real. Ver: docs.pluggy.ai/docs/credit-card-installments
-            billing_date_calculada = tx.get("creditCardDate")
-            installment_number = item.get("installment_number")
-            if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
-                try:
-                    data_ref = date.fromisoformat(item["purchase_date_str"])
-                    if installment_number and installment_number > 1:
-                        # `date` já é a data de postagem na fatura dessa parcela —
-                        # só normaliza pro primeiro dia do mês, sem deslocar de novo.
-                        billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
-                    else:
-                        billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
-                except ValueError:
-                    pass
-            billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
+            # 💡 AQUI É ONDE O OVERRIDE É APLICADO:
+            if billing_date_override:
+                billing_date_calculada = billing_date_override
+            else:
+                # Lógica normal de cálculo por dia de corte caso nenhum mês tenha sido informado
+                billing_date_calculada = tx.get("creditCardDate")
+                installment_number = item.get("installment_number")
+                if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
+                    try:
+                        data_ref = date.fromisoformat(item["purchase_date_str"])
+                        if installment_number and installment_number > 1:
+                            billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
+                        else:
+                            billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
+                    except ValueError:
+                        pass
+                billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
 
             row = {
                 "user_phone": user_phone,
@@ -575,7 +569,7 @@ class PluggyService:
             if subcategory_id:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
-
+            
         inseridos = db.inserir_gastos_em_lote(rows)
         logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
 
