@@ -4,6 +4,7 @@ import base64
 import json   
 import logging
 import time
+import utils
 from datetime import date, timedelta
 import app.database as db
 from app.config import get_settings
@@ -340,7 +341,10 @@ class PluggyService:
         logger.info(f"Status do item {item_id}: {data.get('status')}")
         return data.get("status")
 
-    async def sync_user_transactions(self, user_phone: str, account_id: str, item_id: str):
+    async def sync_user_transactions(
+        self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None
+        ):
+        billing_date_override = utils.parse_mes_fatura(billing_month_input) if billing_month_input else None
         # 1. Verifica status do item (não da conta)
         status = await self.verificar_status_sincronizacao(item_id)
 
@@ -372,7 +376,9 @@ class PluggyService:
         transactions = tx_resp.json().get("results", [])
         
         # 3. Processa e insere no banco
-        return await self._process_transactions(user_phone, transactions, item_id=item_id, account_id=account_id)
+        return await self._process_transactions(
+            user_phone, transactions, item_id=item_id, account_id=account_id, billing_date_override=billing_date_override
+        )
 
     async def _process_transactions(
         self, user_phone: str, transactions: list[dict], item_id: str | None = None, account_id: str | None = None
