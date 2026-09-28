@@ -990,22 +990,18 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             return {"mensagem": "Ação executada com sucesso."}
 
 
-async def sincronizar_banco_especifico(user_phone: str, item_id: str, account_id: str) -> str:
+async def sincronizar_banco_especifico(user_phone: str, item_id: str, account_id: str, billing_month_input: str | int | None = None) -> str:
     """
-    Sincroniza informando item_id e account_id explicitamente (comando
-    'sincronizar [ITEM_ID] [ACCOUNT_ID]' tratado no agent.py). Também salva
-    a combinação como conta padrão do usuário, já que ele informou os dois IDs
-    manualmente — próximas sincronizações sem argumentos já usam esses valores.
+    Sincroniza informando item_id, account_id e opcionalmente o mês da fatura.
     """
     try:
         pluggy = PluggyService()
-        mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id, item_id)
+        mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id, item_id, billing_month_input=billing_month_input)
         db.save_pluggy_conta_padrao(user_phone, account_id, item_id)
         return mensagem
     except Exception as e:
         logger.error(f"Erro em sincronizar_banco_especifico: {e}")
         return "❌ Tive um problema técnico ao sincronizar com esses IDs. Confira se estão corretos e tente novamente."
-
 
 def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: str = None, pagina: int = 1, ordem: str = "DESC", dia_inicio: int = 1, dia_fim: int | None = None) -> dict:
     # Normalizamos o filtro de listagem para também respeitar o tipo (evita mostrar receitas no extrato de gastos se desejado, 
