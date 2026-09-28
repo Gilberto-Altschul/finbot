@@ -561,7 +561,14 @@ class PluggyService:
                 "description": descricao,
                 "pluggy_transaction_id": tx.get("id"),
                 "transaction_type": tipo,
-                "payment_method": (tx.get("paymentMethod") or "debito").lower(),
+                # BUG CORRIGIDO: antes usava o campo bruto da Pluggy (paymentMethod,
+                # ex: "PIX", "TED", "OTHER") direto como payment_method — que quase
+                # nunca vira "credito" depois do .lower(), mesmo pra transações de
+                # cartão de crédito de verdade. Isso as tornava invisíveis pro
+                # consultar_fatura, que filtra estritamente por payment_method =
+                # "credito". Usa a flag 'eh_credito' já calculada acima (considera
+                # creditCardMetadata), que é o sinal correto.
+                "payment_method": "credito" if item["eh_credito"] else "debito",
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
                 "billing_date": billing_date_calculada,
                 "is_forecast": item["is_forecast"],
