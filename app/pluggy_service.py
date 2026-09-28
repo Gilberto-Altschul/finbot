@@ -392,18 +392,20 @@ class PluggyService:
         if bill_id_fatura_fechada:
             logger.info(f"Última fatura fechada identificada via Bills API: billId={bill_id_fatura_fechada}")
 
-        # Fallback: dia de corte real da Pluggy, ou configurado manualmente
-        dia_corte_real = None
-        if not bill_id_fatura_fechada and item_id and account_id:
+# Prioridade absoluta: usa o dia de corte configurado no Supabase do usuário.
+        # Só recorre à Pluggy se o Supabase não tiver o dado configurado.
+        dia_corte_configurado, _dia_vencimento = db.get_card_settings(user_phone)
+        
+        if dia_corte_configurado:
+            dia_corte = dia_corte_configurado
+            logger.info(f"Usando dia de corte configurado no Supabase: {dia_corte}")
+        elif not bill_id_fatura_fechada and item_id and account_id:
             dia_corte_real = await self.obter_dia_corte_real(item_id, account_id)
-
-        if dia_corte_real:
-            dia_corte = dia_corte_real
-            logger.info(f"Usando dia de corte REAL da Pluggy: {dia_corte}")
+            dia_corte = dia_corte_real if dia_corte_real else 25 # Fallback de segurança
+            logger.info(f"Usando dia de corte obtido da Pluggy: {dia_corte}")
         else:
-            dia_corte, _dia_vencimento = db.get_card_settings(user_phone)
-            logger.info(f"Usando dia de corte configurado: {dia_corte}")
-
+            dia_corte = 25
+            logger.info(f"Usando dia de corte padrão: {dia_corte}")
         # ── Fase 1: prepara as transações válidas (rápido, sem I/O) ──────────
         preparadas = []
         for tx in transactions:
