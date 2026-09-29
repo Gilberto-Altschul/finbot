@@ -80,7 +80,7 @@ def get_card_settings(user_phone: str) -> tuple[int, int]:
         # Fallback caso realmente não exista configuração pro usuário
         return 5, 12
         
-    return int(cfg.get("cartao_dia_corte", 5)), int(cfg.get("cartao_dia_vencimento", 12))
+    return int(cfg.get("cartao_dia_corte") or 5), int(cfg.get("cartao_dia_vencimento") or 12)
 
 # ── Chat History ──────────────────────────────────────────────────────────────
 
