@@ -485,6 +485,7 @@ class PluggyService:
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
                 "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
                 "installment_number": credit_card_metadata.get("installmentNumber"),
+                "installment_total": credit_card_metadata.get("totalInstallments"),
             })
 
         # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
@@ -553,6 +554,13 @@ class PluggyService:
                         pass
                 billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
 
+            # BUG CORRIGIDO: 'installmentNumber'/'totalInstallments' eram lidos da
+            # Pluggy (usados só pra calcular billing_date_calculada acima), mas
+            # nunca gravados na linha final — por isso compras parceladas nunca
+            # mostravam o indicativo "(N/T)" na fatura, mesmo sincronizando certo.
+            installment_of_final = item.get("installment_number")
+            installment_total_final = item.get("installment_total")
+
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
@@ -573,6 +581,9 @@ class PluggyService:
                 "billing_date": billing_date_calculada,
                 "is_forecast": item["is_forecast"],
             }
+            if installment_of_final and installment_total_final and installment_total_final > 1:
+                row["installment_of"] = installment_of_final
+                row["installment_total"] = installment_total_final
             if subcategory_id:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
