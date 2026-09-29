@@ -352,10 +352,16 @@ class PluggyService:
             return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
 
         # 3. Busca transações
+        # BUG CORRIGIDO: dateTo = hoje cortava qualquer parcela futura (2ª, 3ª,
+        # 4ª parcela de compras parceladas), já que essas têm data posterior a
+        # hoje. A parcela 1 sempre aparecia (é recente por natureza, no momento
+        # da compra), mas as seguintes nunca eram buscadas na Pluggy. Estende
+        # a janela 60 dias pra frente pra capturar parcelas futuras já
+        # disponíveis na Pluggy, sem perder o histórico recente de trás.
         params = {
             "accountId": account_id,
             "dateFrom": (date.today() - timedelta(days=45)).isoformat(),
-            "dateTo": date.today().isoformat()
+            "dateTo": (date.today() + timedelta(days=60)).isoformat()
         }
         
         tx_resp = requests.get(
