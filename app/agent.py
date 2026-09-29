@@ -348,7 +348,17 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 logger.error(f"Erro no parsing de limite: {e}")
 
     # 2. Gasto Manual (Fast Path) - Detecta 'cafe 1' ou 'Almoço 35.50'
-    m = _EXPENSE_RE.match(msg)
+# 2. Gasto Manual (Fast Path) - Detecta 'cafe 1' ou 'Almoço 35.50' (com suporte a mês por extenso ex: 'outubro')
+    mes_override_data = None
+    msg_para_regex = msg
+    for m_nome, m_num in _MESES_MAP.items():
+        if re.search(rf"\b{m_nome}\b", msg_norm):
+            mes_override_data = f"{date.today().year}-{m_num}-01"
+            msg_para_regex = re.sub(rf"\b{m_nome}\b", "", msg_para_regex, flags=re.IGNORECASE)
+            msg_para_regex = re.sub(r"\bfatura\b", "", msg_para_regex, flags=re.IGNORECASE)
+            break
+
+    m = _EXPENSE_RE.match(msg_para_regex.strip())
     if m:
         desc_raw = m.group("desc").strip()
         # Evita capturar comandos conhecidos como se fossem nomes de estabelecimentos
@@ -358,6 +368,10 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             method = _parse_method(m.group("method"))
             parc = int(m.group("parcelas_pre") or m.group("parcelas_pos") or 1)
             data_raw = m.group("data")
+            
+            # Se encontrou um mês por extenso (ex: "outubro"), aplica-o como data de referência
+            if mes_override_data and not data_raw:
+                data_raw = mes_override_data
             
             # Identifica se é uma receita (income) em vez de gasto, usando a
             # taxonomia oficial de subcategorias de Receita (5 buckets fixos).
@@ -371,13 +385,16 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 args_receita = {"valor": valor, "categoria": cat_receita, "descricao": desc_raw}
                 if data_raw:
                     try:
-                        parts = re.split(r"[/.-]", data_raw)
-                        d, mo = int(parts[0]), int(parts[1])
-                        y = int(parts[2]) if len(parts) > 2 else date.today().year
-                        if y < 100: y += 2000
-                        args_receita["data"] = f"{y}-{mo:02d}-{d:02d}"
+                        if "-" in data_raw and len(data_raw) == 10:
+                            args_receita["data"] = data_raw
+                        else:
+                            parts = re.split(r"[/.-]", data_raw)
+                            d, mo = int(parts[0]), int(parts[1])
+                            y = int(parts[2]) if len(parts) > 2 else date.today().year
+                            if y < 100: y += 2000
+                            args_receita["data"] = f"{y}-{mo:02d}-{d:02d}"
                     except: pass
-                return {"tool": "registrar_receita", "args": args_receita}
+                return {"tool": "registrar_receita", "args_receita": args_receita}
 
             cat, sub = await categorizar_gasto_hibrido(user_phone, desc_raw)
             if cat != "Perguntar" and cat not in SISTEMA_CATEGORIAS:
@@ -392,16 +409,19 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             args = {"valor": valor, "categoria": cat, "subcategoria": sub, "descricao": desc_raw, "payment_method": method}
             if data_raw:
                 try:
-                    parts = re.split(r"[/.-]", data_raw)
-                    d, mo = int(parts[0]), int(parts[1])
-                    y = int(parts[2]) if len(parts) > 2 else date.today().year
-                    if y < 100: y += 2000
-                    args["data"] = f"{y}-{mo:02d}-{d:02d}"
+                    if "-" in data_raw and len(data_raw) == 10:
+                        args["data"] = data_raw
+                    else:
+                        parts = re.split(r"[/.-]", data_raw)
+                        d, mo = int(parts[0]), int(parts[1])
+                        y = int(parts[2]) if len(parts) > 2 else date.today().year
+                        if y < 100: y += 2000
+                        args["data"] = f"{y}-{mo:02d}-{d:02d}"
                 except: pass
             if method == "credito" and parc > 1: args["parcelas"] = parc
             return {"tool": "registrar_gasto", "args": args}
-
-    # 0.5 INTENÇÕES COMPLEXAS: Se o usuário quer comparar, analisar ou saber motivos, ignora Fast Path e vai para LLM
+        
+            # 0.5 INTENÇÕES COMPLEXAS: Se o usuário quer comparar, analisar ou saber motivos, ignora Fast Path e vai para LLM
     if any(k in msg_norm for k in ["compara", "diferenca", "analise", "evolucao", "porque", "por que", "dias", "primeiros", "ultimos", "quando", "que dia", "zerado", "vazio", "errado"]):
         return None
     
