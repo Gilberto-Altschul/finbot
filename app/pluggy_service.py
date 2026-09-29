@@ -566,7 +566,6 @@ class PluggyService:
             # mostravam o indicativo "(N/T)" na fatura, mesmo sincronizando certo.
             installment_of_final = item.get("installment_number")
             installment_total_final = item.get("installment_total")
-
             row = {
                 "user_phone": user_phone,
                 "amount": abs(raw_amount),
