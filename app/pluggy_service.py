@@ -10,6 +10,9 @@ from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
 from app.billing import _add_months
 from app.utils import _normalize, parse_mes_fatura
+from app.classificador import classificar, Decisao
+from app.merchant import normalizar_merchant, familia_ambigua
+from app import revisao
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -494,53 +497,69 @@ class PluggyService:
                 "installment_total": credit_card_metadata.get("totalInstallments"),
             })
 
-        # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
+        # ── Fase 1.5: descarta o que já está no banco ANTES de classificar ───
+        # A janela é de 105 dias (45 atrás + 60 à frente): sem isso, cada
+        # sincronização reclassificava (e pagava LLM) por centenas de lançamentos
+        # que o banco depois rejeitava como duplicados.
+        try:
+            ids_existentes = db.filtrar_transacoes_existentes(
+                user_phone,
+                list({str(i["tx"]["id"]).strip().lower() for i in preparadas if i["tx"].get("id")}),
+            )
+        except Exception as e:
+            logger.warning(f"Pré-filtro de duplicadas falhou ({e}); o índice único do banco segue como defesa.")
+            ids_existentes = set()
+        preparadas = [i for i in preparadas
+                      if str(i["tx"].get("id") or "").strip().lower() not in ids_existentes]
+        if not preparadas:
+            return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
+
+        # ── Fase 2: classifica em paralelo — agrupado por merchant ÚNICO ─────
         # Merchants repetidos no mesmo lote (comum: assinaturas, mercado
         # frequentado, etc.) categorizam só UMA vez cada, evitando chamadas
         # redundantes à LLM/keyword quando duas ocorrências do mesmo merchant
         # são processadas em paralelo antes da primeira salvar o aprendizado.
         semaforo = asyncio.Semaphore(8)
 
-        async def _categorizar_uma(descricao: str, categoria_dica: str | None) -> tuple[str, str | None]:
+        async def _classificar_uma(descricao: str, categoria_dica: str | None) -> Decisao:
             async with semaforo:
                 try:
                     fallback = (categoria_dica, "Outros") if categoria_dica else None
-                    categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
-                        user_phone, descricao, fallback=fallback, permitir_melhor_esforco=True
-                    )
-                    if not categoria_pt or categoria_pt == "Perguntar":
-                        categoria_pt = categoria_dica or "Outros"
-                        subcategoria_pt = None
-                    return categoria_pt, subcategoria_pt
+                    return await classificar(user_phone, descricao, fallback=fallback)
                 except Exception as e:
-                    logger.warning(f"Falha ao categorizar '{descricao}': {e}")
-                    return categoria_dica or "Outros", None
+                    logger.warning(f"Falha ao classificar '{descricao}': {e}")
+                    return Decisao(categoria_dica or "Outros", "Outros", "revisar", 0.0,
+                                   normalizar_merchant(descricao), [])
 
-        # Agrupa índices de `preparadas` por descrição normalizada
+        def _chave_grupo(descricao: str) -> str:
+            # Marketplace (Mercado Livre, Amazon...): a decisão depende da descrição exata.
+            # Demais: "PADARIA X 123" e "PADARIA X 456" são o mesmo estabelecimento.
+            return _normalize(descricao) if familia_ambigua(descricao) else normalizar_merchant(descricao)
+
         grupos: dict[str, list[int]] = {}
         for idx, item in enumerate(preparadas):
-            chave = _normalize(item["descricao"])
-            grupos.setdefault(chave, []).append(idx)
+            grupos.setdefault(_chave_grupo(item["descricao"]), []).append(idx)
 
-        # Uma tarefa por merchant ÚNICO (não por transação)
         chaves_unicas = list(grupos.keys())
-        # categoria_dica: usa a do primeiro item de cada grupo (mesma descrição -> mesma dica Pluggy)
-        tarefas = [
-            _categorizar_uma(preparadas[grupos[chave][0]]["descricao"], preparadas[grupos[chave][0]]["categoria_dica"])
-            for chave in chaves_unicas
-        ]
-        resultados_unicos = await asyncio.gather(*tarefas)
+        resultados_unicos = await asyncio.gather(*[
+            _classificar_uma(preparadas[grupos[c][0]]["descricao"], preparadas[grupos[c][0]]["categoria_dica"])
+            for c in chaves_unicas
+        ])
 
-        # Propaga o resultado de cada merchant único para TODAS as suas ocorrências
-        resultados: list[tuple[str, str | None]] = [None] * len(preparadas)
-        for chave, resultado in zip(chaves_unicas, resultados_unicos):
+        resultados: list[Decisao] = [None] * len(preparadas)
+        for chave, decisao in zip(chaves_unicas, resultados_unicos):
             for idx in grupos[chave]:
-                resultados[idx] = resultado
+                resultados[idx] = decisao
 
         # ── Fase 3: monta as linhas para inserção ────────────────────────────
-        for item, (categoria_pt, subcategoria_pt) in zip(preparadas, resultados):
+        cache_sub_id: dict[str, int | None] = {}
+        for item, dec in zip(preparadas, resultados):
             tx, descricao, raw_amount, tipo = item["tx"], item["descricao"], item["raw_amount"], item["tipo"]
-            subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
+            categoria_pt, subcategoria_pt = dec.categoria, dec.subcategoria
+            if subcategoria_pt not in cache_sub_id:
+                cache_sub_id[subcategoria_pt] = (
+                    db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt != "Outros" else None)
+            subcategory_id = cache_sub_id[subcategoria_pt]
 
             # 💡 AQUI É ONDE O OVERRIDE É APLICADO:
             if billing_date_override:
@@ -585,6 +604,10 @@ class PluggyService:
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
                 "billing_date": billing_date_calculada,
                 "is_forecast": item["is_forecast"],
+                "merchant_key": dec.merchant_key,
+                # Receita nunca entra na fila de perguntas (a revisão só trata despesas)
+                "review_status": "auto" if tipo == "income" else dec.status,
+                "confidence": dec.confidence,
             }
             if installment_of_final and installment_total_final and installment_total_final > 1:
                 row["installment_of"] = installment_of_final
@@ -593,13 +616,32 @@ class PluggyService:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
             
+        # Contar ANTES: inserir_gastos_em_lote criptografa user_phone dentro das rows.
+        n_revisar = sum(1 for r in rows if r["review_status"] == "revisar")
+        n_auto = len(rows) - n_revisar
+
         inseridos = db.inserir_gastos_em_lote(rows)
         logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
 
+        if inseridos == -1:
+            return "❌ Tive um problema ao salvar suas transações. Tente sincronizar novamente.", None
         if inseridos == 0:
             return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
 
         resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
         if bill_id_fatura_fechada:
             resumo += " (última fatura fechada)"
+        if n_revisar:
+            resumo += f"\n✨ {n_auto} já classificados sozinhos · 🤔 {n_revisar} para você confirmar (sem pressa)."
+        else:
+            resumo += "\n✨ Tudo classificado automaticamente."
+
+        # Só puxa a conversa se ESTA sincronização gerou dúvidas; as antigas ficam em "revisar".
+        if n_revisar:
+            try:
+                pergunta = revisao.iniciar(user_phone)
+                if pergunta:
+                    resumo += "\n\n" + pergunta
+            except Exception as e:
+                logger.error(f"Falha ao iniciar revisão após sincronização: {e}")
         return resumo, rows

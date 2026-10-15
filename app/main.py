@@ -10,6 +10,7 @@ from collections import deque
 import io
 import time
 import httpx
+import requests
 from pypdf import PdfReader, PdfWriter
 
 from fastapi import FastAPI, Form, Header, HTTPException, BackgroundTasks, Request, Response
@@ -19,6 +20,7 @@ import app.agent as agent
 import app.database as db
 import app.pdf_import as pdf_import
 import app.ingestion as ingestion
+import app.revisao as revisao
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -103,7 +105,68 @@ def _dividir_mensagem(body: str, limite: int = WHATSAPP_MAX_CHARS) -> list[str]:
     return partes
 
 
+# ── Botões de resposta rápida (Twilio Content API) ───────────────────────────
+# Na janela de 24h o WhatsApp aceita quick-reply (até 3 botões) sem aprovação de template.
+# O template é criado uma vez (por nº de botões) e reaproveitado pelo friendly_name.
+USAR_BOTOES = os.getenv("FINBOT_BOTOES", "1") != "0"
+_CONTENT_SIDS: dict[int, str] = {}
+
+
+def _content_sid(n_botoes: int) -> str:
+    if n_botoes in _CONTENT_SIDS:
+        return _CONTENT_SIDS[n_botoes]
+    nome = f"finbot_revisao_{n_botoes}"
+    auth = (settings.twilio_account_sid, settings.twilio_auth_token)
+    lista = requests.get("https://content.twilio.com/v1/Content", auth=auth, params={"PageSize": 200}, timeout=20)
+    lista.raise_for_status()
+    for c in lista.json().get("contents", []):
+        if c.get("friendly_name") == nome:
+            _CONTENT_SIDS[n_botoes] = c["sid"]
+            return c["sid"]
+    corpo = {
+        "friendly_name": nome, "language": "pt_BR",
+        "variables": {str(i): "x" for i in range(1, 2 + 2 * n_botoes)},
+        "types": {"twilio/quick-reply": {
+            "body": "🤔 {{1}}\n\n✏️ Ou digite outra categoria.",
+            "actions": [{"title": "{{%d}}" % (2 + 2 * i), "id": "{{%d}}" % (3 + 2 * i)} for i in range(n_botoes)],
+        }},
+    }
+    r = requests.post("https://content.twilio.com/v1/Content", auth=auth, json=corpo, timeout=20)
+    r.raise_for_status()
+    _CONTENT_SIDS[n_botoes] = r.json()["sid"]
+    return _CONTENT_SIDS[n_botoes]
+
+
+def _enviar_quick_reply(to: str, cabeca: str, botoes: list[tuple[str, str]]) -> None:
+    variaveis = {"1": cabeca.replace("\n", " ")}
+    for i, (bid, titulo) in enumerate(botoes):
+        variaveis[str(2 + 2 * i)], variaveis[str(3 + 2 * i)] = titulo, bid
+    _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=to,
+                            content_sid=_content_sid(len(botoes)), content_variables=json.dumps(variaveis))
+
+
 def _send_whatsapp(to: str, body: str) -> None:
+    """Envia texto; se o final da mensagem for uma pergunta de revisão, troca por botões."""
+    if USAR_BOTOES and body and "ou digite uma palavra" in body:
+        try:
+            est = revisao.ler_estado(to)
+            bts = revisao.botoes(est) if est else []
+            if bts and body.endswith(est["texto"]):
+                prefixo = body[: -len(est["texto"])].strip()
+                if prefixo:
+                    _send_whatsapp_texto(to, prefixo)
+                try:
+                    _enviar_quick_reply(to, est["cabeca"], bts)
+                except Exception as exc:  # botão falhou: a pergunta em texto continua funcionando
+                    logger.warning(f"Botões indisponíveis ({exc}); enviando pergunta em texto.")
+                    _send_whatsapp_texto(to, est["texto"])
+                return
+        except Exception as exc:
+            logger.warning(f"Falha ao preparar botões: {exc}")
+    _send_whatsapp_texto(to, body)
+
+
+def _send_whatsapp_texto(to: str, body: str) -> None:
     if not body or not str(body).strip():
         logger.error(f"Erro: corpo de mensagem vazio para {to}. Abortando envio.")
         return
@@ -217,32 +280,26 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. Verifique se o arquivo está correto.")
 
 
-async def async_process_categorizacao(user_phone: str, resposta_usuario: str, transactions_json: str):
-    """Aplica a categorização do usuário e grava as transações confirmadas."""
+async def async_process_revisao(user_phone: str, resposta_usuario: str):
+    """Aplica a resposta à pergunta atual da fila de revisão e envia a próxima."""
     try:
-        transactions = ingestion.aplicar_categorizacao_usuario(transactions_json, resposta_usuario)
-        resultado = await ingestion.gravar_transacoes_confirmadas(user_phone, transactions)
-        await asyncio.to_thread(_send_whatsapp, user_phone, resultado)
+        reply = await asyncio.to_thread(revisao.responder, user_phone, resposta_usuario)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
     except Exception as exc:
-        logger.error(f"Erro ao processar categorização de {user_phone}: {exc}", exc_info=True)
-        db.limpar_transacoes_pendentes(user_phone)
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Erro ao aplicar as categorias. As transações foram salvas como *Outros*.")
+        logger.error(f"Erro ao processar revisão de {user_phone}: {exc}", exc_info=True)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Não consegui aplicar essa categoria. Suas transações continuam salvas — tente de novo.")
+
+
+async def async_process_retomar_revisao(user_phone: str):
+    """Comando "revisar": reabre a fila de pendentes quando o usuário quiser."""
+    try:
+        reply = await asyncio.to_thread(revisao.retomar, user_phone)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+    except Exception as exc:
+        logger.error(f"Erro ao retomar revisão de {user_phone}: {exc}", exc_info=True)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-
-def _parece_categorizacao(mensagem: str) -> bool:
-    """
-    Retorna True se a mensagem parece uma resposta de categorização.
-    Padrões aceitos: começa com número ("1 roupa"), é "ok", ou lista de itens ("1 x, 2 y").
-    """
-    msg = mensagem.strip().lower()
-    if msg == "ok":
-        return True
-    # Verifica se começa com número seguido de espaço e texto
-    import re
-    return bool(re.match(r"^[0-9]+\s+[a-zA-Z]", msg))
-
 
 @app.get("/health")
 def health():
@@ -257,7 +314,8 @@ async def webhook(
     MessageSid: str = Form(...),
     NumMedia: int = Form(0),
     MediaUrl0: str = Form(None),
-    MediaContentType0: str = Form(None)
+    MediaContentType0: str = Form(None),
+    ButtonPayload: str = Form(None)
 ):
     if MessageSid in processed_messages:
         logger.warning(f"Mensagem duplicada ignorada: {MessageSid}")
@@ -266,6 +324,14 @@ async def webhook(
     processed_messages.append(MessageSid)
     user_phone = From.strip()
     user_message = Body.strip()
+
+    # Toque em botão da revisão: o id vem em ButtonPayload ("r:<qid>:<n>"), o Body é só o título.
+    if ButtonPayload and ButtonPayload.startswith("r:"):
+        escolha = await asyncio.to_thread(revisao.resolver_payload, user_phone, ButtonPayload)
+        if escolha is None:
+            await asyncio.to_thread(_send_whatsapp, user_phone, "Essa pergunta já foi respondida 😉 Se quiser rever o que sobrou, digite *revisar*.")
+            return Response(content="<Response/>", media_type="text/xml")
+        user_message = escolha
 
     try:
         db._get_or_create_user_connection(user_phone)
@@ -304,11 +370,16 @@ async def webhook(
                 background_tasks.add_task(_process, user_phone, user_message)
             return Response(content="<Response/>", media_type="text/xml")
 
-    # ── CASO 3: RESPOSTA DE CATEGORIZAÇÃO PENDENTE ───────────────────────────
-    transactions_json = db.obter_transacoes_pendentes(user_phone)
-    if transactions_json and _parece_categorizacao(user_message):
-        logger.info(f"Resposta de categorização recebida de {user_phone}: {user_message}")
-        background_tasks.add_task(async_process_categorizacao, user_phone, user_message, transactions_json)
+    # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──
+    if revisao.eh_comando_revisar(user_message):
+        background_tasks.add_task(async_process_retomar_revisao, user_phone)
+        return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 3: RESPOSTA À PERGUNTA DE REVISÃO ───────────────────────────────
+    # As transações já estão salvas; isto só reclassifica. Conversa normal passa direto (CASO 4).
+    if revisao.ler_estado(user_phone) and revisao.eh_resposta_de_revisao(user_message, ingestion._resolver_categoria):
+        logger.info(f"Resposta de revisão recebida de {user_phone}: {user_message}")
+        background_tasks.add_task(async_process_revisao, user_phone, user_message)
         return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 4: MENSAGEM NORMAL ───────────────────────────────────────────────

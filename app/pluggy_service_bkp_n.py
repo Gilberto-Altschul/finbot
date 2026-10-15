@@ -1,0 +1,605 @@
+import asyncio
+import requests
+import base64
+import json   
+import logging
+import time
+from datetime import date, timedelta
+import app.database as db
+from app.config import get_settings
+from app.categorizer import categorizar_gasto_hibrido
+from app.billing import _add_months
+from app.utils import _normalize, parse_mes_fatura
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+# Mapa das categorias oficiais da Pluggy (docs.pluggy.ai/docs/transaction-categories)
+# para a taxonomia em português do FinBot (SISTEMA_CATEGORIAS em app/utils.py).
+# Cobre tanto os nomes de nível 1 (ex: "Housing") quanto os de nível 2/3
+# (ex: "Eating out"), já que a Pluggy pode retornar qualquer nível como `category`.
+# Categorias sem correspondência clara caem em "Outros" e acionam o classificador
+# por texto (categorizar_gasto_hibrido) como fallback.
+CATEGORIA_PLUGGY_PARA_PT = {
+    # Income
+    "Income": "Financeiro",
+    "Salary": "Financeiro",
+    "Retirement": "Financeiro",
+    "Entrepreneurial activities": "Empresa",
+    "Government aid": "Financeiro",
+    "Non-recurring income": "Financeiro",
+    # Loans and Financing
+    "Loans and Financing": "Financeiro",
+    "Late payment and overdraft costs": "Financeiro",
+    "Interests charged": "Financeiro",
+    "Loans": "Financeiro",
+    "Financing": "Financeiro",
+    "Real estate financing": "Moradia",
+    "Vehicle Financing": "Transporte",
+    "Student loan": "Educação",
+    # Investments
+    "Investments": "Financeiro",
+    "Automatic investment": "Financeiro",
+    "Fixed income": "Financeiro",
+    "Mutual funds": "Financeiro",
+    "Variable income": "Financeiro",
+    "Margin": "Financeiro",
+    "Proceeds interests and dividends": "Financeiro",
+    "Pension": "Financeiro",
+    # Same person transfer / Transfers
+    "Same person transfer": "Financeiro",
+    "Same person transfer - Cash": "Financeiro",
+    "Same person transfer - PIX": "Financeiro",
+    "Same person transfer - TED": "Financeiro",
+    "Transfers": "Financeiro",
+    "Transfer": "Financeiro",
+    "Transfer - Bank slip (Boleto)": "Financeiro",
+    "Transfer - Cash": "Financeiro",
+    "Transfer - Check": "Financeiro",
+    "Transfer - DOC": "Financeiro",
+    "Transfer - Foreign exchange": "Financeiro",
+    "Transfer - Internal": "Financeiro",
+    "Transfer - PIX": "Financeiro",
+    "Transfer - TED": "Financeiro",
+    "Credit card payment": "Financeiro",
+    "Third-party transfers": "Financeiro",
+    "Bank slip": "Financeiro",
+    "Debt card": "Financeiro",
+    "DOC": "Financeiro",
+    "PIX": "Financeiro",
+    "TED": "Financeiro",
+    # Legal obligations
+    "Legal obligations": "Financeiro",
+    "Blocked balances": "Financeiro",
+    "Alimony": "Família e Dependentes",
+    # Services
+    "Services": "Outros",
+    "Telecommunications": "Moradia",
+    "Internet": "Moradia",
+    "Mobile": "Moradia",
+    "TV": "Lazer",
+    "Education": "Educação",
+    "Online Courses": "Educação",
+    "University": "Educação",
+    "School": "Educação",
+    "Kindergarten": "Educação",
+    "Wellness and fitness": "Saúde",
+    "Gyms and fitness centers": "Saúde",
+    "Sports practice": "Lazer",
+    "Wellness": "Saúde",
+    "Tickets": "Lazer",
+    "Stadiums and arenas": "Lazer",
+    "Landmarks and museums": "Lazer",
+    "Cinema, theater and concerts": "Lazer",
+    # Shopping
+    "Shopping": "Outros",
+    "Online shopping": "Outros",
+    "Electronics": "Outros",
+    "Pet supplies and vet": "Pets",
+    "Clothing": "Vestuário e Beleza",
+    "Kids and toys": "Família e Dependentes",
+    "Bookstore": "Educação",
+    "Sports goods": "Lazer",
+    "Office Supplies": "Empresa",
+    "Cashback": "Financeiro",
+    # Digital services
+    "Digital services": "Lazer",
+    "Gaming": "Lazer",
+    "Video streaming": "Lazer",
+    "Music streaming": "Lazer",
+    # Groceries / Food and drinks
+    "Groceries": "Alimentação",
+    "Food and drinks": "Alimentação",
+    "Eating out": "Alimentação",
+    "Food delivery": "Alimentação",
+    # Travel
+    "Travel": "Lazer",
+    "Airport and airlines": "Lazer",
+    "Accommodation": "Lazer",
+    "Mileage programs": "Lazer",
+    "Bus tickets": "Transporte",
+    # Donations / Gambling
+    "Donations": "Outros",
+    "Gambling": "Lazer",
+    "Lottery": "Lazer",
+    "Online bet": "Lazer",
+    # Taxes
+    "Taxes": "Financeiro",
+    "Income taxes": "Financeiro",
+    "Taxes on investments": "Financeiro",
+    "Tax on financial operations": "Financeiro",
+    # Bank fees
+    "Bank fees": "Financeiro",
+    "Account fees": "Financeiro",
+    "Wire transfer fees and ATM fees": "Financeiro",
+    "Credit card fees": "Financeiro",
+    # Housing
+    "Housing": "Moradia",
+    "Rent": "Moradia",
+    "Houseware": "Moradia",
+    "Urban land and building tax": "Moradia",
+    "Utilities": "Moradia",
+    "Water": "Moradia",
+    "Electricity": "Moradia",
+    "Gas": "Moradia",
+    # Healthcare
+    "Healthcare": "Saúde",
+    "Dentist": "Saúde",
+    "Pharmacy": "Saúde",
+    "Optometry": "Saúde",
+    "Hospital clinics and labs": "Saúde",
+    # Transportation
+    "Transportation": "Transporte",
+    "Taxi and ride-hailing": "Transporte",
+    "Public transportation": "Transporte",
+    "Car rental": "Transporte",
+    "Bicycle": "Transporte",
+    "Automotive": "Transporte",
+    "Gas stations": "Transporte",
+    "Parking": "Transporte",
+    "Tolls and in-vehicle payment": "Transporte",
+    "Vehicle ownership taxes and fees": "Transporte",
+    "Vehicle maintenance": "Transporte",
+    "Traffic tickets": "Transporte",
+    # Insurance
+    "Insurance": "Financeiro",
+    "Life insurance": "Financeiro",
+    "Home Insurance": "Moradia",
+    "Health insurance": "Saúde",
+    "Vehicle insurance": "Transporte",
+    # Leisure / Other
+    "Leisure": "Lazer",
+    "Other": "Outros",
+}
+
+class PluggyService:
+    async def obter_dia_corte_real(self, item_id: str, account_id: str) -> int | None:
+        """
+        Busca o dia de fechamento REAL da fatura direto da Pluggy
+        (creditData.balanceCloseDate), em vez de depender só do dia_corte
+        configurado manualmente no FinBot — que pode estar desatualizado ou
+        errado. Retorna None se a conta não for de crédito ou o campo não
+        vier preenchido (banco não suporta esse dado).
+        """
+        try:
+            contas = await self.listar_contas(item_id)
+            for conta in contas:
+                if conta.get("id") == account_id:
+                    credit_data = conta.get("creditData") or {}
+                    close_date_str = credit_data.get("balanceCloseDate")
+                    if close_date_str:
+                        return date.fromisoformat(close_date_str[:10]).day
+            return None
+        except Exception as e:
+            logger.warning(f"Não foi possível obter balanceCloseDate real da Pluggy: {e}")
+            return None
+
+    async def listar_faturas(self, account_id: str) -> list[dict]:
+        """Busca as faturas (Bills) de uma conta de cartão de crédito na Pluggy."""
+        resp = requests.get(
+            f"{self.base_url}/bills",
+            headers=self.headers,
+            params={"accountId": account_id},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    async def obter_ultima_fatura_fechada_id(self, account_id: str) -> str | None:
+        """
+        Identifica o billId da última fatura JÁ FECHADA (billClosingDate
+        preenchido, ou dueDate mais recente que já passou). Retorna None se
+        a instituição não suportar a entidade Bills (nem toda instituição
+        Direct suporta — só Regulado é obrigatório).
+        """
+        try:
+            faturas = await self.listar_faturas(account_id)
+            if not faturas:
+                return None
+            logger.info(
+                "Faturas retornadas pela Pluggy para account %s: %s",
+                account_id,
+                [
+                    {
+                        "id": f.get("id"),
+                        "dueDate": f.get("dueDate"),
+                        "billClosingDate": f.get("billClosingDate"),
+                        "totalAmount": f.get("totalAmount"),
+                    }
+                    for f in faturas
+                ],
+            )
+            fechadas = [f for f in faturas if f.get("billClosingDate")]
+            candidatas = fechadas or faturas
+            candidatas.sort(key=lambda f: f.get("billClosingDate") or f.get("dueDate") or "", reverse=True)
+            escolhida = candidatas[0] if candidatas else None
+            if escolhida:
+                logger.info(
+                    "Fatura escolhida como 'última fechada': id=%s dueDate=%s billClosingDate=%s",
+                    escolhida.get("id"), escolhida.get("dueDate"), escolhida.get("billClosingDate"),
+                )
+            return escolhida["id"] if escolhida else None
+        except Exception as e:
+            logger.warning(f"Não foi possível obter Bills da Pluggy (instituição pode não suportar): {e}")
+            return None
+
+    @staticmethod
+    def _fatura_ja_fechou(purchase_date: date, dia_corte: int) -> bool:
+        """
+        Calcula se a fatura que contém essa compra já fechou de verdade,
+        usando o dia de corte configurado — em vez de confiar no campo
+        `status` da Pluggy, que pode demorar dias para ser atualizado
+        depois que o banco já fechou a fatura de fato.
+        """
+        if purchase_date.day <= dia_corte:
+            corte = date(purchase_date.year, purchase_date.month, dia_corte)
+        else:
+            proximo_mes = _add_months(date(purchase_date.year, purchase_date.month, 1), 1)
+            corte = date(proximo_mes.year, proximo_mes.month, dia_corte)
+        return date.today() > corte
+
+    @staticmethod
+    def _mes_vencimento_fatura(purchase_date: date, dia_corte: int) -> date:
+        """
+        Primeiro dia do mês de vencimento da fatura que contém essa compra,
+        calculado pelo dia de corte — usado como billing_date quando a
+        instituição (ex: C6 Bank) não preenche creditCardMetadata.billId
+        nem creditCardDate de forma confiável. Mesma lógica de corte usada
+        em `_fatura_ja_fechou`, só que devolvendo o mês de vencimento em
+        vez de um booleano.
+        """
+        if purchase_date.day <= dia_corte:
+            mes_fechamento = date(purchase_date.year, purchase_date.month, 1)
+        else:
+            mes_fechamento = _add_months(date(purchase_date.year, purchase_date.month, 1), 1)
+        return _add_months(mes_fechamento, 1)
+
+    def __init__(self):
+        # 🔹 Autenticação via clientId/clientSecret
+
+        auth_resp = requests.post(
+            "https://api.pluggy.ai/auth",
+            json={
+                "clientId": settings.pluggy_client_id,
+                "clientSecret": settings.pluggy_client_secret
+            },
+            timeout=30
+        )
+        auth_resp.raise_for_status()
+        api_key = auth_resp.json()["apiKey"]
+
+# --- INÍCIO DO LOG DE DEBUG PARA JWT ---
+        if api_key and '.' in api_key:
+            try:
+                parts = api_key.split('.')
+                if len(parts) >= 2:
+                    payload = parts[1]
+                    # Adiciona padding para base64 válido
+                    payload += '=' * (-len(payload) % 4)
+                    decoded_payload = json.loads(base64.urlsafe_b64decode(payload))
+                    
+            except Exception as e:
+                logger.error(f"Erro ao decodificar JWT para debug: {e}")
+        # --- FIM DO LOG DE DEBUG ---
+
+        self.base_url = "https://api.pluggy.ai"
+        self.headers = {
+            "X-API-KEY": api_key,
+            "accept": "application/json"
+        }
+
+    async def listar_itens(self):
+        resp = requests.get(
+            f"{self.base_url}/items",
+            headers=self.headers,
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    async def listar_contas(self, item_id: str):
+        resp = requests.get(
+            f"{self.base_url}/accounts",
+            headers=self.headers,
+            params={"itemId": item_id},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    async def verificar_status_sincronizacao(self, item_id: str):
+        """Consulta o Pluggy para saber se o item terminou de processar."""
+        logger.info(f"[DEBUG] item_id recebido: {item_id!r}")
+        response = requests.get(
+            f"{self.base_url}/items/{item_id}",
+            headers=self.headers,
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info(f"Status do item {item_id}: {data.get('status')}")
+        return data.get("status")
+
+    async def sync_user_transactions(
+        self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None
+    ):
+        # 1. Converte o mês informado (ex: "outubro" -> "2026-10-01") se houver
+        billing_date_override = parse_mes_fatura(billing_month_input) if billing_month_input else None
+
+        # 2. Verifica status do item
+        status = await self.verificar_status_sincronizacao(item_id)
+        if status != "UPDATED":
+            return f"A sincronização ainda está em andamento (Status: {status}). Aguarde um pouco e tente novamente.", None
+
+        # 3. Busca transações
+        # BUG CORRIGIDO: dateTo = hoje cortava qualquer parcela futura (2ª, 3ª,
+        # 4ª parcela de compras parceladas), já que essas têm data posterior a
+        # hoje. A parcela 1 sempre aparecia (é recente por natureza, no momento
+        # da compra), mas as seguintes nunca eram buscadas na Pluggy. Estende
+        # a janela 60 dias pra frente pra capturar parcelas futuras já
+        # disponíveis na Pluggy, sem perder o histórico recente de trás.
+        params = {
+            "accountId": account_id,
+            "dateFrom": (date.today() - timedelta(days=45)).isoformat(),
+            "dateTo": (date.today() + timedelta(days=60)).isoformat()
+        }
+        
+        tx_resp = requests.get(
+            f"{self.base_url}/v2/transactions",
+            headers=self.headers,
+            params=params,
+            timeout=30
+        )
+        tx_resp.raise_for_status()
+        transactions = tx_resp.json().get("results", [])
+        
+        # 4. Repassa o billing_date_override para o processamento
+        return await self._process_transactions(
+            user_phone, transactions, item_id=item_id, account_id=account_id, billing_date_override=billing_date_override
+        )
+
+    async def _process_transactions(
+        self, 
+        user_phone: str, 
+        transactions: list[dict], 
+        item_id: str | None = None, 
+        account_id: str | None = None,
+        billing_date_override: str | None = None  # <--- Adicionar este parâmetro
+    ) -> tuple[str, list[dict] | None]:
+        """
+        Converte transações da Pluggy para o formato padrão e insere em lote no banco,
+        com logs detalhados e tratamento de campos opcionais.
+        """
+        if not transactions:
+            logger.info("Nenhuma transação recebida da Pluggy.")
+            return "✅ Sincronização concluída. Nenhuma nova transação encontrada.", None
+
+        rows = []
+        pendentes_ignoradas = 0
+        # Busca a última fatura FECHADA via Bills API (critério exato, quando suportado)
+        bill_id_fatura_fechada = await self.obter_ultima_fatura_fechada_id(account_id) if account_id else None
+        if bill_id_fatura_fechada:
+            logger.info(f"Última fatura fechada identificada via Bills API: billId={bill_id_fatura_fechada}")
+
+# Prioridade absoluta: usa o dia de corte configurado no Supabase do usuário.
+        # Só recorre à Pluggy se o Supabase não tiver o dado configurado.
+        dia_corte_configurado, _dia_vencimento = db.get_card_settings(user_phone)
+        
+        if dia_corte_configurado:
+            dia_corte = dia_corte_configurado
+            logger.info(f"Usando dia de corte configurado no Supabase: {dia_corte}")
+        elif not bill_id_fatura_fechada and item_id and account_id:
+            dia_corte_real = await self.obter_dia_corte_real(item_id, account_id)
+            dia_corte = dia_corte_real if dia_corte_real else 25 # Fallback de segurança
+            logger.info(f"Usando dia de corte obtido da Pluggy: {dia_corte}")
+        else:
+            dia_corte = 25
+            logger.info(f"Usando dia de corte padrão: {dia_corte}")
+        # ── Fase 1: prepara as transações válidas (rápido, sem I/O) ──────────
+        preparadas = []
+        for tx in transactions:
+            logger.info(f"Transação recebida da Pluggy: {tx}")
+
+            payment_method_raw = (tx.get("paymentMethod") or "").upper()
+            credit_card_metadata = tx.get("creditCardMetadata") or {}
+            eh_credito = bool(credit_card_metadata) or payment_method_raw not in ("", "OTHER", "PIX", "BOLETO", "TED", "DOC")
+
+            purchase_date_str = (tx.get("date") or tx.get("transactionDate", ""))[:10]
+            tx_bill_id = credit_card_metadata.get("billId")
+            if eh_credito and tx_bill_id and bill_id_fatura_fechada:
+                # Critério exato: só é "fechada" se o billId bater com a última
+                # fatura fechada identificada via Bills API. Algumas instituições
+                # (ex: C6 Bank) não preenchem creditCardMetadata.billId — nesse
+                # caso tx_bill_id vem None e caímos no cálculo por dia de corte
+                # abaixo, em vez de comparar None contra um billId real (o que
+                # sempre dava is_forecast=True, incorretamente, pra essas instituições).
+                is_forecast = tx_bill_id != bill_id_fatura_fechada
+            elif eh_credito and purchase_date_str:
+                try:
+                    purchase_date_obj = date.fromisoformat(purchase_date_str)
+                    # Não confia no status da Pluggy (pode estar atrasado em relação
+                    # ao fechamento real do banco) — calcula pelo dia de corte.
+                    is_forecast = not self._fatura_ja_fechou(purchase_date_obj, dia_corte)
+                except ValueError:
+                    is_forecast = tx.get("status") == "PENDING"
+            else:
+                # Débito/PIX/boleto não têm ciclo de fatura — mantém o status da Pluggy
+                is_forecast = tx.get("status") == "PENDING"
+
+            if is_forecast:
+                pendentes_ignoradas += 1  # mantém a contagem no log, agora não bloqueia mais
+
+            descricao = tx.get("description") or tx.get("title")
+            if not tx.get("amount") or not descricao:
+                logger.warning(f"Transação descartada por falta de campos obrigatórios: {tx}")
+                continue
+
+            # Pagamento da própria fatura não é gasto real nem receita —
+            # é só o registro administrativo de quitação, frequentemente
+            # duplicado (boleto + confirmação de recebimento pelo mesmo valor).
+            desc_lower_check = descricao.lower()
+            if any(p in desc_lower_check for p in ["pagamento de fatura", "pagamento recebido", "pagto fatura", "pag fatura"]):
+                logger.info(f"Ignorando pagamento de fatura (não é gasto real): {descricao}")
+                continue
+
+            moeda = tx.get("currencyCode", "BRL")
+            if moeda != "BRL" and tx.get("amountInAccountCurrency") is not None:
+                raw_amount = float(tx["amountInAccountCurrency"])
+                logger.info(f"Conversão de moeda: {tx['amount']} {moeda} -> {raw_amount} BRL ({descricao})")
+            else:
+                if moeda != "BRL":
+                    logger.warning(f"Transação em {moeda} sem amountInAccountCurrency — gravando valor bruto sem conversão: {tx}")
+                raw_amount = float(tx["amount"])
+
+            tipo_pluggy = (tx.get("type") or "").upper()
+            # Para transações que não são de crédito, o sinal do valor é mais confiável que o campo 'type'.
+            # Valores positivos são receitas (income), negativos são despesas (expense).
+            if not eh_credito:
+                tipo = "income" if raw_amount > 0 else "expense"
+            elif tipo_pluggy == "DEBIT":
+                tipo = "expense"
+            elif tipo_pluggy == "CREDIT":
+                tipo = "income"
+            else:
+                tipo = "expense" # Assume despesa como padrão para crédito sem tipo
+
+            categoria_pluggy = tx.get("category")
+            categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
+
+            preparadas.append({
+                "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
+                "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
+                "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
+                "installment_number": credit_card_metadata.get("installmentNumber"),
+                "installment_total": credit_card_metadata.get("totalInstallments"),
+            })
+
+        # ── Fase 2: categoriza em paralelo — agrupado por merchant ÚNICO ─────
+        # Merchants repetidos no mesmo lote (comum: assinaturas, mercado
+        # frequentado, etc.) categorizam só UMA vez cada, evitando chamadas
+        # redundantes à LLM/keyword quando duas ocorrências do mesmo merchant
+        # são processadas em paralelo antes da primeira salvar o aprendizado.
+        semaforo = asyncio.Semaphore(8)
+
+        async def _categorizar_uma(descricao: str, categoria_dica: str | None) -> tuple[str, str | None]:
+            async with semaforo:
+                try:
+                    fallback = (categoria_dica, "Outros") if categoria_dica else None
+                    categoria_pt, subcategoria_pt = await categorizar_gasto_hibrido(
+                        user_phone, descricao, fallback=fallback, permitir_melhor_esforco=True
+                    )
+                    if not categoria_pt or categoria_pt == "Perguntar":
+                        categoria_pt = categoria_dica or "Outros"
+                        subcategoria_pt = None
+                    return categoria_pt, subcategoria_pt
+                except Exception as e:
+                    logger.warning(f"Falha ao categorizar '{descricao}': {e}")
+                    return categoria_dica or "Outros", None
+
+        # Agrupa índices de `preparadas` por descrição normalizada
+        grupos: dict[str, list[int]] = {}
+        for idx, item in enumerate(preparadas):
+            chave = _normalize(item["descricao"])
+            grupos.setdefault(chave, []).append(idx)
+
+        # Uma tarefa por merchant ÚNICO (não por transação)
+        chaves_unicas = list(grupos.keys())
+        # categoria_dica: usa a do primeiro item de cada grupo (mesma descrição -> mesma dica Pluggy)
+        tarefas = [
+            _categorizar_uma(preparadas[grupos[chave][0]]["descricao"], preparadas[grupos[chave][0]]["categoria_dica"])
+            for chave in chaves_unicas
+        ]
+        resultados_unicos = await asyncio.gather(*tarefas)
+
+        # Propaga o resultado de cada merchant único para TODAS as suas ocorrências
+        resultados: list[tuple[str, str | None]] = [None] * len(preparadas)
+        for chave, resultado in zip(chaves_unicas, resultados_unicos):
+            for idx in grupos[chave]:
+                resultados[idx] = resultado
+
+        # ── Fase 3: monta as linhas para inserção ────────────────────────────
+        for item, (categoria_pt, subcategoria_pt) in zip(preparadas, resultados):
+            tx, descricao, raw_amount, tipo = item["tx"], item["descricao"], item["raw_amount"], item["tipo"]
+            subcategory_id = db.get_subcategory_id_by_name(subcategoria_pt) if subcategoria_pt else None
+
+            # 💡 AQUI É ONDE O OVERRIDE É APLICADO:
+            if billing_date_override:
+                billing_date_calculada = billing_date_override
+            else:
+                # Lógica normal de cálculo por dia de corte caso nenhum mês tenha sido informado
+                billing_date_calculada = tx.get("creditCardDate")
+                installment_number = item.get("installment_number")
+                if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
+                    try:
+                        data_ref = date.fromisoformat(item["purchase_date_str"])
+                        if installment_number and installment_number > 1:
+                            billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
+                        else:
+                            billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
+                    except ValueError:
+                        pass
+                billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
+
+            # BUG CORRIGIDO: 'installmentNumber'/'totalInstallments' eram lidos da
+            # Pluggy (usados só pra calcular billing_date_calculada acima), mas
+            # nunca gravados na linha final — por isso compras parceladas nunca
+            # mostravam o indicativo "(N/T)" na fatura, mesmo sincronizando certo.
+            installment_of_final = item.get("installment_number")
+            installment_total_final = item.get("installment_total")
+            row = {
+                "user_phone": user_phone,
+                "amount": abs(raw_amount),
+                "category": categoria_pt,
+                "subcategory": subcategoria_pt,
+                "description": descricao,
+                "pluggy_transaction_id": tx.get("id"),
+                "transaction_type": tipo,
+                # BUG CORRIGIDO: antes usava o campo bruto da Pluggy (paymentMethod,
+                # ex: "PIX", "TED", "OTHER") direto como payment_method — que quase
+                # nunca vira "credito" depois do .lower(), mesmo pra transações de
+                # cartão de crédito de verdade. Isso as tornava invisíveis pro
+                # consultar_fatura, que filtra estritamente por payment_method =
+                # "credito". Usa a flag 'eh_credito' já calculada acima (considera
+                # creditCardMetadata), que é o sinal correto.
+                "payment_method": "credito" if item["eh_credito"] else "debito",
+                "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
+                "billing_date": billing_date_calculada,
+                "is_forecast": item["is_forecast"],
+            }
+            if installment_of_final and installment_total_final and installment_total_final > 1:
+                row["installment_of"] = installment_of_final
+                row["installment_total"] = installment_total_final
+            if subcategory_id:
+                row["subcategory_id"] = subcategory_id
+            rows.append(row)
+            
+        inseridos = db.inserir_gastos_em_lote(rows)
+        logger.info(f"Sincronização finalizada: {inseridos} novas transações inseridas.")
+
+        if inseridos == 0:
+            return "✅ Seu extrato está atualizado. Nenhuma transação nova detectada.", None
+
+        resumo = f"📌 *Novas transações encontradas:* {inseridos} lançamentos registrados."
+        if bill_id_fatura_fechada:
+            resumo += " (última fatura fechada)"
+        return resumo, rows
