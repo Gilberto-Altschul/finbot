@@ -2,6 +2,7 @@
 import logging
 import asyncio
 import base64
+import hmac
 import json
 import os
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ import time
 import httpx
 from pypdf import PdfReader, PdfWriter
 
-from fastapi import FastAPI, Form, BackgroundTasks, Request, Response
+from fastapi import FastAPI, Form, Header, HTTPException, BackgroundTasks, Request, Response
 from twilio.rest import Client
 
 import app.agent as agent
@@ -316,15 +317,24 @@ async def webhook(
     return Response(content="<Response/>", media_type="text/xml")
 
 @app.post("/webhook/pluggy")
-async def webhook_pluggy(request: Request):
-    """Recebe eventos e notificações da plataforma Pluggy."""
+async def webhook_pluggy(request: Request, x_webhook_secret: str = Header(default="")):
+    """Recebe eventos da Pluggy. Exige o header X-Webhook-Secret, cadastrado ao
+    registrar o webhook na Pluggy (campo `headers` do POST /webhooks)."""
+    segredo = os.environ.get("PLUGGY_WEBHOOK_SECRET", "")
+    if not segredo:
+        logger.error("PLUGGY_WEBHOOK_SECRET não configurado — webhook da Pluggy desativado.")
+        raise HTTPException(status_code=503, detail="webhook não configurado")
+    if not hmac.compare_digest(x_webhook_secret.encode(), segredo.encode()):
+        logger.warning("Webhook da Pluggy rejeitado: segredo inválido.")
+        raise HTTPException(status_code=401, detail="unauthorized")
+
     try:
         payload = await request.json()
-        logger.info(f"Webhook da Pluggy recebido: {payload.get('event', 'evento desconhecido')}")
-        
-        # Aqui você adiciona a lógica para tratar os dados enviados pela Pluggy
-        
-        return {"status": "success"}
-    except Exception as exc:
-        logger.error(f"Erro ao processar webhook da Pluggy: {exc}")
-        return {"status": "error", "message": str(exc)}
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload inválido")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload inválido")
+
+    logger.info(f"Webhook da Pluggy recebido: {str(payload.get('event', 'desconhecido'))[:60]}")
+    # TODO (etapa 1, passo 2): gravar o evento em pluggy_events e processar em segundo plano.
+    return {"status": "success"}
