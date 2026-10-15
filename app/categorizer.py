@@ -8,8 +8,24 @@ import app.database as db
 import re
 from app.llm import call_llm
 from app.utils import _normalize, SISTEMA_CATEGORIAS
+from app.merchant import contem_termo, familia_ambigua
 
 logger = logging.getLogger(__name__)
+
+
+# Termos curtos que viram falso positivo quando buscados como pedaço de outra palavra:
+# 'cea' em "mercearia", 'amil' em "família", 'bar' em "Barbosa"/"Barra"/"Barueri", 'pub' em "publicidade".
+# Só estes exigem palavra inteira; os demais (ex.: 'cafe' em "cafeteria") continuam por substring.
+_PALAVRA_INTEIRA = {"bar", "pub", "cea", "amil"}
+
+
+def _tem_termo(texto_norm: str, termos: list[str]) -> bool:
+    for t in termos:
+        tn = _normalize(t)
+        if contem_termo(texto_norm, tn, palavra_inteira=tn in _PALAVRA_INTEIRA):
+            return True
+    return False
+
 
 # Termos que SEMPRE devem disparar a pergunta ao usuário, independente de histórico ou banco.
 _AMBIGUOUS_TERMS = [
@@ -124,22 +140,22 @@ async def categorizar_gasto_hibrido(
     desc_norm = _normalize(descricao)
 
     # Camada -1: Proteção Hardcoded para Família e Dependentes (Prioridade Máxima)
-    if any(_normalize(term) in desc_norm for term in _FAMILY_FORCE_TERMS):
+    if _tem_termo(desc_norm, _FAMILY_FORCE_TERMS):
         logger.info(f"Camada -1 (Family Priority) detectada: '{descricao}'. Categorizando como Família e Dependentes.")
         return "Família e Dependentes", "Apoio Familiar"
 
     # Camada -1.1: Proteção Hardcoded para Saúde (Evita conflito com Financeiro/Seguros)
-    if any(_normalize(term) in desc_norm for term in _HEALTH_FORCE_TERMS):
+    if _tem_termo(desc_norm, _HEALTH_FORCE_TERMS):
         logger.info(f"Camada -1.1 (Saúde Priority) detectada: '{descricao}'. Categorizando como Saúde.")
         return "Saúde", "Plano de Saúde"
 
     # Camada -1.2: Proteção Hardcoded para Seguro Automóvel (Vai para Transporte)
-    if any(_normalize(term) in desc_norm for term in _AUTO_FORCE_TERMS):
+    if _tem_termo(desc_norm, _AUTO_FORCE_TERMS):
         logger.info(f"Camada -1.2 (Auto Priority) detectada: '{descricao}'. Categorizando como Transporte.")
         return "Transporte", "Seguro Auto"
 
     # Camada -1.3: Proteção Hardcoded para Vestuário e Beleza
-    if any(_normalize(term) in desc_norm for term in _CLOTHING_FORCE_TERMS):
+    if _tem_termo(desc_norm, _CLOTHING_FORCE_TERMS):
         logger.info(f"Camada -1.3 (Clothing Priority) detectada: '{descricao}'. Categorizando como Vestuário e Beleza.")
         if "manicure" in desc_norm or "pedicure" in desc_norm or "unha" in desc_norm:
             sub = "Manicure"
@@ -157,7 +173,7 @@ async def categorizar_gasto_hibrido(
     # ambiguidade, para "cod bar"/"codigo de barras" não disparar falso positivo
     # no termo "bar" (ex: "VIVO-SP TELESP CELULAR-COD BAR" não é um bar).
     desc_norm_sem_ruido = re.sub(r"\bcod(igo)?\s*bar(ra)?[a-z]*\b", "", desc_norm)
-    ambiguo = any(_normalize(term) in desc_norm_sem_ruido for term in _AMBIGUOUS_TERMS)
+    ambiguo = _tem_termo(desc_norm_sem_ruido, _AMBIGUOUS_TERMS)
     if ambiguo and not permitir_melhor_esforco:
         logger.info(f"Camada 0 (Ambiguidade) detectada: '{descricao}'. Forçando interrupção para pergunta.")
         return "Perguntar", "Perguntar"
@@ -169,7 +185,8 @@ async def categorizar_gasto_hibrido(
     # anterior EXATA desse mesmo merchant, usa ela direto — evita chamar
     # keyword/LLM de novo para o mesmo estabelecimento que já foi resolvido.
     # Só recorre a Camada 2/3 na primeira vez que esse merchant aparece.
-    mapping = db.get_user_merchant_mapping(user_phone, desc_norm)
+    eh_marketplace = familia_ambigua(descricao) is not None
+    mapping = None if eh_marketplace else db.get_user_merchant_mapping(user_phone, desc_norm)
     categoria_conhecida = mapping["category_name"] if mapping else None
     if categoria_conhecida:
         logger.info(f"Camada 1 (User Merchant) — categoria conhecida: {desc_norm} -> {categoria_conhecida}")
@@ -199,7 +216,8 @@ async def categorizar_gasto_hibrido(
             keywords = sub.get("keywords", [])
             if any(_normalize(kw) in desc_norm for kw in keywords) or _normalize(sub["name"]) in desc_norm:
                 logger.info(f"Camada 2 (Subcategory Keyword) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
-                db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])
+                if not eh_marketplace:
+                    db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])
                 return sub["category_name"], sub["name"]
     except Exception as e:
         logger.error(f"Erro na Camada 2 de categorização: {e}")
@@ -238,7 +256,7 @@ async def categorizar_gasto_hibrido(
         cat = categoria_conhecida or data.get("categoria", "Outros")
         sub = data.get("subcategoria", "Outros")
 
-        if cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"]:
+        if not eh_marketplace and cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"]:
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)
 
         return cat, sub
