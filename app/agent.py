@@ -327,6 +327,10 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     m_remover = re.fullmatch(r"remover banco\s+(\d+)", msg_norm)
     if m_remover:
         return {"tool": "remover_banco", "args": {"indice": int(m_remover.group(1))}}
+    # Qual versão do código está rodando (para conferir se a publicação valeu).
+    if re.fullmatch(r"(versao|versão|build)", msg.strip(), flags=re.IGNORECASE):
+        from app.dados_banco import VERSAO
+        return {"tool": "direct_reply", "args": {"mensagem": f"🔧 Versão do FinBot: {VERSAO}"}}
     # Sem código, a IA inventava um "link do Pluggy" que não existe: resposta fixa e verdadeira.
     if re.fullmatch(r"(conectar|adicionar|incluir|novo) (banco|conta|contas|bancos)", msg_norm):
         from app.dados_banco import MSG_CONECTAR_BANCO

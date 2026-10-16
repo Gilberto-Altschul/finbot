@@ -20,6 +20,9 @@ from app.utils import get_lookup_prefix, _normalize
 
 logger = logging.getLogger(__name__)
 
+# Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
+VERSAO = "2026-10-16 · vencimento pelo banco"
+
 T_CONTAS, T_HIST, T_FATURAS = "finbot_contas", "finbot_saldo_historico", "finbot_faturas"
 
 
