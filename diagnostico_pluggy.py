@@ -121,6 +121,57 @@ def analisar_cartao(ac, bills, h):
         print(f"    {g:<34} {round(v, 2):>10}  ({qtd[g]} lancamentos)")
     print(f"    {'TOTAL':<34} {round(sum(grupos.values()), 2):>10}")
     print("  -> compare com a fatura aberta que o app do banco mostra.")
+    reconciliar_faturas_fechadas(ac, res, h)
+
+
+def _brl(t):
+    """Valor da compra em reais (converte compras em moeda estrangeira quando a Pluggy informa)."""
+    if (t.get("currencyCode") or "BRL") != "BRL" and t.get("amountInAccountCurrency") is not None:
+        return abs(float(t["amountInAccountCurrency"]))
+    return abs(_num(t.get("amount")) or 0.0)
+
+
+def reconciliar_faturas_fechadas(ac, bills, h):
+    """Para cada fatura fechada: total do banco x soma das compras que a Pluggy entrega no ciclo.
+    Se a falta se repete todo mes, sao itens (parcelas, tarifas) que a Pluggy nao manda como compra."""
+    from datetime import date, timedelta
+    cic = sorted(((b["billClosingDate"][:10], b["dueDate"][:10], float(b.get("totalAmount") or 0),
+                   sum(float(f.get("amount") or 0) for f in (b.get("financeCharges") or [])))
+                  for b in bills if b.get("billClosingDate") and b.get("dueDate")))
+    if len(cic) < 2:
+        return
+    cic = cic[-5:]
+    pagamentos = {round(float(p.get("amount") or 0), 2) for b in bills for p in (b.get("payments") or [])}
+    pagamentos |= {round(c[2], 2) for c in cic}
+    ini = (date.fromisoformat(cic[0][0]) + timedelta(days=1)).isoformat()
+    r = get("/v2/transactions", h, {"accountId": ac["id"], "dateFrom": ini, "dateTo": date.today().isoformat()})
+    if "_http" in r:
+        print(f"  reconciliacao: /v2/transactions falhou: {r}")
+        return
+    txs = r.get("results", [])
+    print("\n  >> RECONCILIACAO DAS FATURAS FECHADAS (totais, sem descricoes)")
+    print("  fechamento | venc.      | total banco | compras Pluggy | falta   | encargos | parcelas 2+ na Pluggy")
+    for i in range(1, len(cic)):
+        ini_c, fim_c = cic[i - 1][0], cic[i][0]
+        soma, n_parc, v_parc = 0.0, 0, 0.0
+        for t in txs:
+            d = (t.get("date") or "")[:10]
+            if not (ini_c < d <= fim_c):
+                continue
+            tipo = (t.get("type") or "").upper()
+            valor = _brl(t)
+            if tipo == "CREDIT":
+                if round(valor, 2) in pagamentos:
+                    continue          # pagamento da fatura, nao e compra
+                soma -= valor         # estorno
+                continue
+            soma += valor
+            meta = t.get("creditCardMetadata") or {}
+            if (meta.get("installmentNumber") or 1) > 1:
+                n_parc, v_parc = n_parc + 1, v_parc + valor
+        total = cic[i][2]
+        print(f"  {fim_c} | {cic[i][1]} | {total:>11.2f} | {soma:>14.2f} | {total - soma:>7.2f} | {cic[i][3]:>8.2f} | {n_parc} ({v_parc:.2f})")
+    print("  -> se 'falta' for parecida todo mes (e maior que os encargos), sao parcelas/itens que a Pluggy nao manda como compra.")
 
 
 def main():

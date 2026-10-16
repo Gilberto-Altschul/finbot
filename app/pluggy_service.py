@@ -551,11 +551,10 @@ class PluggyService:
                                if str(i["tx"].get("id") or "").strip().lower() in ids_existentes]
             try:
                 # Os antigos também foram atribuídos à fatura pelo dia de corte fixo. Reatribui pela
-                # régua real do banco (só os sem cartão; compras parceladas e com creditCardDate ficam).
+                # régua real do banco (só os sem cartão; com creditCardDate ficam).
                 alvo_fatura = {str(i["tx"]["id"]).strip().lower(): i for i in preparadas
                                if i.get("ciclo_info") is not None and i["eh_credito"]
-                               and not i["tx"].get("creditCardDate")
-                               and not ((i.get("installment_number") or 1) > 1)}
+                               and not i["tx"].get("creditCardDate")}
                 if alvo_fatura and not billing_date_override:
                     for k in range(0, len(existentes_orig), 100):
                         gravados = (db.get_db().table("finbot_expenses")
@@ -649,10 +648,12 @@ class PluggyService:
                 if not billing_date_calculada and item["eh_credito"] and item["purchase_date_str"]:
                     try:
                         data_ref = date.fromisoformat(item["purchase_date_str"])
-                        if installment_number and installment_number > 1:
-                            billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
-                        elif item.get("ciclo_info") is not None:
+                        if item.get("ciclo_info") is not None:
+                            # Régua real do banco, também para parcelas 2+: a data que a Pluggy dá à parcela cai
+                            # DENTRO do ciclo que a cobra (a soma bate com o total da fatura fechada).
                             billing_date_calculada = item["ciclo_info"][0].mes_ref.isoformat()
+                        elif installment_number and installment_number > 1:
+                            billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
                         else:
                             billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
                     except ValueError:
