@@ -143,7 +143,7 @@ def reconciliar_faturas_fechadas(ac, bills, h):
     cic = cic[-5:]
     pagamentos = {round(float(p.get("amount") or 0), 2) for b in bills for p in (b.get("payments") or [])}
     pagamentos |= {round(c[2], 2) for c in cic}
-    ini = (date.fromisoformat(cic[0][0]) + timedelta(days=1)).isoformat()
+    ini = (date.fromisoformat(cic[0][0]) - timedelta(days=10)).isoformat()
     r = get("/v2/transactions", h, {"accountId": ac["id"], "dateFrom": ini, "dateTo": date.today().isoformat()})
     if "_http" in r:
         print(f"  reconciliacao: /v2/transactions falhou: {r}")
@@ -172,6 +172,69 @@ def reconciliar_faturas_fechadas(ac, bills, h):
         total = cic[i][2]
         print(f"  {fim_c} | {cic[i][1]} | {total:>11.2f} | {soma:>14.2f} | {total - soma:>7.2f} | {cic[i][3]:>8.2f} | {n_parc} ({v_parc:.2f})")
     print("  -> se 'falta' for parecida todo mes (e maior que os encargos), sao parcelas/itens que a Pluggy nao manda como compra.")
+
+    # Calibracao: o fechamento informado pela Pluggy pode estar alguns dias depois do real.
+    print("\n  >> CALIBRACAO DO DIA DE FECHAMENTO (falta por fatura, voltando N dias o fechamento)")
+    print("  recuo | " + " | ".join(f"venc {cic[i][1]}" for i in range(1, len(cic))) + " | soma |falta|")
+    for recuo in range(0, 7):
+        faltas = []
+        for i in range(1, len(cic)):
+            ini_c = (date.fromisoformat(cic[i - 1][0]) - timedelta(days=recuo)).isoformat()
+            fim_c = (date.fromisoformat(cic[i][0]) - timedelta(days=recuo)).isoformat()
+            soma = 0.0
+            for t in txs:
+                d = (t.get("date") or "")[:10]
+                if not (ini_c < d <= fim_c):
+                    continue
+                valor = _brl(t)
+                if (t.get("type") or "").upper() == "CREDIT":
+                    if round(valor, 2) in pagamentos:
+                        continue
+                    soma -= valor
+                else:
+                    soma += valor
+            faltas.append(cic[i][2] - soma)
+        print(f"  {recuo:>5} | " + " | ".join(f"{f:>15.2f}" for f in faltas) + f" | {sum(abs(f) for f in faltas):>8.2f}")
+    print("  -> o recuo com menor soma de |falta| e o fechamento real; tarifas de 98,00 por fatura ficam como residuo.")
+
+    # Hipotese: o C6 fecha num dia fixo do mes (recuando p/ dia util se cair no fim de semana).
+    # Pagamento a mais numa fatura (ex.: 758,66 em 18/08) vira credito na fatura seguinte.
+    def _soma_pagtos(b):
+        return sum(float(p.get("amount") or 0) for p in (b.get("payments") or []))
+    por_venc = {b["dueDate"][:10]: b for b in bills if b.get("dueDate")}
+    def _fecha(venc_iso, dia, util):
+        v = date.fromisoformat(venc_iso)
+        m = v.month - 1 or 12
+        a = v.year - (1 if v.month == 1 else 0)
+        d = date(a, m, dia)
+        while util and d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d
+    print("\n  >> HIPOTESE: fechamento em dia fixo (falta ja descontando o credito de pagamento a mais)")
+    print("  dia | fds->dia util | " + " | ".join(f"venc {cic[i][1]}" for i in range(1, len(cic))) + " | soma |falta|")
+    for util in (True, False):
+        for dia in range(20, 27):
+            faltas = []
+            for i in range(1, len(cic)):
+                ini_c = _fecha(cic[i - 1][1], dia, util).isoformat()
+                fim_c = _fecha(cic[i][1], dia, util).isoformat()
+                soma = 0.0
+                for t in txs:
+                    d = (t.get("date") or "")[:10]
+                    if not (ini_c < d <= fim_c):
+                        continue
+                    valor = _brl(t)
+                    if (t.get("type") or "").upper() == "CREDIT":
+                        if round(valor, 2) in pagamentos:
+                            continue
+                        soma -= valor
+                    else:
+                        soma += valor
+                ant = por_venc.get(cic[i - 1][1])
+                extra = max(0.0, _soma_pagtos(ant) - float(ant.get("totalAmount") or 0)) if ant else 0.0
+                faltas.append(cic[i][2] - soma + extra)
+            print(f"  {dia:>3} | {'sim' if util else 'nao':^13} | " + " | ".join(f"{f:>15.2f}" for f in faltas) + f" | {sum(abs(f) for f in faltas):>8.2f}")
+    print("  -> a linha com soma proxima de 0 (so tarifas/IOF de residuo) e o dia real de fechamento.")
 
 
 def main():

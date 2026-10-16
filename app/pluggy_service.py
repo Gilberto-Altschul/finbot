@@ -422,6 +422,13 @@ class PluggyService:
             except Exception as e:
                 logger.warning(f"Faturas indisponíveis para a conta {account_id} ({e}); usando dia de corte.")
         ciclos = fat.montar_ciclos(faturas_pluggy)
+        if ciclos and account_id:
+            try:
+                r = db.get_db().table("finbot_contas").select("nome, apelido").eq("account_id", account_id).limit(1).execute()
+                linha = (r.data or [{}])[0]
+                ciclos = fat.aplicar_fechamento_fixo(ciclos, f"{linha.get('apelido') or ''} {linha.get('nome') or ''}")
+            except Exception as e:
+                logger.warning(f"Fechamento fixo não aplicado ({e}); usando o informado pela Pluggy.")
         if ciclos:
             logger.info(f"Ciclos reais de fatura: {[(str(c.fechamento), str(c.vencimento)) for c in ciclos[-4:]]}")
         bill_id_fatura_fechada = (
@@ -519,6 +526,14 @@ class PluggyService:
                 tipo = "income"
             else:
                 tipo = "expense" # Assume despesa como padrão para crédito sem tipo
+
+            # C6 manda o type invertido nas tarifas: "Estorno Tarifa" vem como DEBIT e "Tarifa/Anuidade" como CREDIT.
+            # No cartão, a descrição manda: estorno é crédito (abate a fatura), tarifa/anuidade é gasto.
+            if eh_credito:
+                if "estorno" in desc_lower_check:
+                    tipo = "income"
+                elif desc_lower_check.startswith(("tarifa", "anuidade")):
+                    tipo = "expense"
 
             categoria_pluggy = tx.get("category")
             categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)

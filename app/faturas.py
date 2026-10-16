@@ -38,11 +38,47 @@ class Ciclo:
     bill_id: str | None = None
     estimado: bool = False            # True = ciclo calculado, não veio do banco
     fechamento_estimado: bool = False  # True = o banco não informou o fechamento
+    dia_fixo: int | None = None        # dia fixo de fechamento (ver DIA_FECHAMENTO_FIXO)
 
     @property
     def mes_ref(self) -> date:
         """Convenção do FinBot: billing_date = dia 1 do mês de vencimento."""
         return date(self.vencimento.year, self.vencimento.month, 1)
+
+
+# A Pluggy informa fechamentos que não batem com o do banco (ex.: C6 manda 23/05, 25/07, 26/08, 25/09).
+# Conferido com as faturas reais: o C6 fecha no dia 23 (na sexta anterior se cair no fim de semana).
+# Chave = trecho do nome do cartão/banco (minúsculo).
+DIA_FECHAMENTO_FIXO = {"c6": 23}
+
+
+def dia_fechamento_fixo(nome: str | None) -> int | None:
+    n = (nome or "").lower()
+    for chave, dia in DIA_FECHAMENTO_FIXO.items():
+        if chave in n:
+            return dia
+    return None
+
+
+def _fechamento_fixo(venc: date, dia: int) -> date:
+    """Fechamento da fatura que vence em `venc`: `dia` do mês anterior, recuando p/ dia útil."""
+    ano, mes = (venc.year - 1, 12) if venc.month == 1 else (venc.year, venc.month - 1)
+    d = date(ano, mes, min(dia, calendar.monthrange(ano, mes)[1]))
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def aplicar_fechamento_fixo(ciclos: list["Ciclo"], nome: str | None) -> list["Ciclo"]:
+    """Troca o fechamento informado pela Pluggy pelo dia real do banco, quando conhecido."""
+    dia = dia_fechamento_fixo(nome)
+    if not dia:
+        return ciclos
+    for c in ciclos:
+        c.fechamento = _fechamento_fixo(c.vencimento, dia)
+        c.fechamento_estimado = False
+        c.dia_fixo = dia
+    return ciclos
 
 
 def _data(s) -> date | None:
@@ -93,7 +129,11 @@ def proximo_ciclo(ultimo: Ciclo, dia_venc: int | None = None) -> Ciclo:
     """Estima o ciclo seguinte: repete o dia de fechamento do último e o dia típico de vencimento."""
     base = _soma_meses(date(ultimo.vencimento.year, ultimo.vencimento.month, 1), 1)
     dia = min(dia_venc or ultimo.vencimento.day, calendar.monthrange(base.year, base.month)[1])
-    return Ciclo(_soma_meses(ultimo.fechamento, 1), base.replace(day=dia),
+    venc = base.replace(day=dia)
+    if ultimo.dia_fixo:
+        return Ciclo(_fechamento_fixo(venc, ultimo.dia_fixo), venc, None, None,
+                     estimado=True, fechamento_estimado=True, dia_fixo=ultimo.dia_fixo)
+    return Ciclo(_soma_meses(ultimo.fechamento, 1), venc,
                  None, None, estimado=True, fechamento_estimado=True)
 
 
