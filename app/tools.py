@@ -17,6 +17,7 @@ from app.billing import fatura_vencimento, fatura_label, parcelas
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
 from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
+from app import dados_banco as dbk
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,16 @@ SCHEMAS: list[dict] = [
                 "pagina": {"type": "integer", "description": "Página dos lançamentos (default: 1). Use quando o usuário pedir 'fatura pág 2'."}
             }
         }
+    },
+    {
+        "name": "listar_faturas_cartao",
+        "description": "Lista as FATURAS FECHADAS do cartão de crédito mês a mês (fechamento, vencimento, total e se foi paga), direto do banco via Pluggy, e mostra a fatura aberta. Use para 'faturas', 'minhas faturas', 'faturas anteriores', 'histórico de faturas'.",
+        "parameters": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "fatura_aberta",
+        "description": "Mostra o valor da fatura ABERTA do cartão agora e as datas estimadas de fechamento e vencimento. Use para 'fatura atual', 'fatura aberta', 'quanto está a fatura agora'.",
+        "parameters": {"type": "object", "properties": {}}
     },
     {
         "name": "diagnosticar_estouro",
@@ -328,6 +339,11 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     
                     # Dispara o Transactions
                     mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id, item_id)
+                    # "sincronizar" também renova saldos e faturas guardados (best-effort: não atrapalha a resposta).
+                    try:
+                        await dbk.atualizar(lambda: pluggy, user_phone)
+                    except Exception as e:
+                        logger.warning(f"Não foi possível guardar saldos/faturas após sincronizar: {e}")
                     return {"mensagem": mensagem}
     
         case "listar_gastos_detalhados":
@@ -817,6 +833,22 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             msg = f"💳 *{fatura_label(due).capitalize()}*\n"
             msg += f"📅 Vencimento: {due.strftime('%d/%m/%Y')}\n"
             msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n"
+            try:
+                total_banco = await dbk.total_do_banco(PluggyService, user_phone, due)
+            except Exception as e:
+                logger.warning(f"Total do banco indisponível ({e})")
+                total_banco = None
+            if total_banco is not None:
+                msg += f"🏦 Fatura no banco: R$ {_fmt_moeda(total_banco)}\n"
+                dif = round(total_banco - total_fatura, 2)
+                if abs(dif) > 0.01:
+                    msg += f"⚠️ Diferença de R$ {_fmt_moeda(abs(dif))} (compras ainda não sincronizadas ou ajustes do banco)\n"
+            if pagina == 1 and all(g.get("category") for g in gastos):
+                por_cat: dict[str, float] = {}
+                for g in gastos:
+                    por_cat[g["category"]] = por_cat.get(g["category"], 0.0) + float(g["amount"])
+                top = sorted(por_cat.items(), key=lambda kv: kv[1], reverse=True)[:6]
+                msg += "\n📊 *Por categoria:*\n" + "\n".join(f" • {c}: R$ {_fmt_moeda(v)}" for c, v in top) + "\n"
             if total_paginas > 1:
                 msg += f"📄 Página {pagina}/{total_paginas}\n"
             msg += f"\n🧾 *Lançamentos:*\n" + "\n".join(linhas)
@@ -853,7 +885,28 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 "mensagem": f"📅 *Fechamento do Mês Passado*\n\n💰 Receitas: R$ {_fmt_moeda(resumo['receitas'])}\n💸 Gastos Totais: R$ {_fmt_moeda(resumo['gastos'])}\n📉 Saldo: R$ {_fmt_moeda(resumo['saldo'])}"
             }
 
+        case "listar_faturas_cartao":
+            try:
+                return {"mensagem": await dbk.mensagem_faturas(PluggyService, user_phone)}
+            except Exception as e:
+                logger.error(f"Falha ao listar faturas na Pluggy: {e}")
+                return {"mensagem": "⚠️ Não consegui consultar as faturas no banco agora. Tente novamente em instantes."}
+
+        case "fatura_aberta":
+            try:
+                return {"mensagem": await dbk.mensagem_fatura_aberta(PluggyService, user_phone)}
+            except Exception as e:
+                logger.error(f"Falha ao consultar fatura aberta na Pluggy: {e}")
+                return {"mensagem": "⚠️ Não consegui consultar a fatura aberta agora. Tente novamente em instantes."}
+
         case "consultar_saldo":
+            # Saldo REAL das contas (Pluggy). Se a Pluggy estiver fora, cai no cálculo antigo.
+            try:
+                msg_real = await dbk.mensagem_saldos(PluggyService, user_phone)
+                if msg_real:
+                    return {"mensagem": msg_real}
+            except Exception as e:
+                logger.warning(f"Saldo via Pluggy indisponível ({e}); usando cálculo interno.")
             saldo = db.monthly_income_total(user_phone) - db.monthly_total(user_phone)
             status_emoji = "🟢" if saldo >= 0 else "🔴"
             return {"mensagem": f"{status_emoji} *Seu Saldo Atual:* R$ {_fmt_moeda(saldo)}\n_(Total de Entradas menos despesas em conta corrente)_"}

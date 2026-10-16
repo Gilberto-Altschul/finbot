@@ -83,4 +83,4 @@ def parse_mes_fatura(input_mes: str | int) -> str:
     elif mes > mes_atual and (mes - mes_atual) > 6:
         ano -= 1
 
-    return date(ano, mes, 1).isoformat()
+    return date(ano, mes, 1).isoformat()

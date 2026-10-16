@@ -263,4 +263,4 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
         final_transactions.append(tx)
 
     logger.info(f"Parsed {len(final_transactions)} transactions for {user_phone}.")
-    return final_transactions
+    return final_transactions

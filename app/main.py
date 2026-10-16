@@ -408,4 +408,4 @@ async def webhook_pluggy(request: Request, x_webhook_secret: str = Header(defaul
 
     logger.info(f"Webhook da Pluggy recebido: {str(payload.get('event', 'desconhecido'))[:60]}")
     # TODO (etapa 1, passo 2): gravar o evento em pluggy_events e processar em segundo plano.
-    return {"status": "success"}
+    return {"status": "success"}

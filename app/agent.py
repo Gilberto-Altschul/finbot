@@ -139,6 +139,10 @@ _KEYWORD_TOOLS = {
 
     "saldo": "consultar_saldo",
     "receitas": "listar_receitas",
+    # Ordem importa: o roteamento é por substring, então os mais específicos vêm antes de "fatura".
+    "faturas": "listar_faturas_cartao",
+    "fatura atual": "fatura_aberta",
+    "fatura aberta": "fatura_aberta",
     "fatura": "consultar_fatura",
     "cartao": "consultar_fatura",
     "cartão": "consultar_fatura",
@@ -686,4 +690,4 @@ async def run(user_phone: str, user_message: str) -> str:
             reply = "⚠️ *Aviso do FinBot:* Minha cota diária de inteligência artificial gratuita foi atingida para hoje.\n\nMas você ainda pode registrar gastos digitando no padrão natural! Ex: `Padaria 15,90`"
 
     db.save_message(user_phone, "assistant", reply)
-    return reply
+    return reply

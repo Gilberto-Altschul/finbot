@@ -13,6 +13,7 @@ from app.utils import _normalize, parse_mes_fatura
 from app.classificador import classificar, Decisao, tem_restaurante
 from app.merchant import normalizar_merchant, familia_ambigua
 from app import revisao
+from app import faturas as fat
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -208,7 +209,7 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-    async def obter_ultima_fatura_fechada_id(self, account_id: str) -> str | None:
+    async def obter_ultima_fatura_fechada_id(self, account_id: str, faturas: list[dict] | None = None) -> str | None:
         """
         Identifica o billId da última fatura JÁ FECHADA (billClosingDate
         preenchido, ou dueDate mais recente que já passou). Retorna None se
@@ -216,7 +217,8 @@ class PluggyService:
         Direct suporta — só Regulado é obrigatório).
         """
         try:
-            faturas = await self.listar_faturas(account_id)
+            if faturas is None:
+                faturas = await self.listar_faturas(account_id)
             if not faturas:
                 return None
             logger.info(
@@ -320,6 +322,11 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json().get("results", [])
 
+    async def obter_item(self, item_id: str) -> dict:
+        resp = requests.get(f"{self.base_url}/items/{item_id}", headers=self.headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",
@@ -400,7 +407,18 @@ class PluggyService:
         rows = []
         pendentes_ignoradas = 0
         # Busca a última fatura FECHADA via Bills API (critério exato, quando suportado)
-        bill_id_fatura_fechada = await self.obter_ultima_fatura_fechada_id(account_id) if account_id else None
+        # As faturas são buscadas UMA vez: servem ao critério antigo (billId) e aos ciclos reais.
+        faturas_pluggy: list[dict] = []
+        if account_id:
+            try:
+                faturas_pluggy = await self.listar_faturas(account_id)
+            except Exception as e:
+                logger.warning(f"Faturas indisponíveis para a conta {account_id} ({e}); usando dia de corte.")
+        ciclos = fat.montar_ciclos(faturas_pluggy)
+        if ciclos:
+            logger.info(f"Ciclos reais de fatura: {[(str(c.fechamento), str(c.vencimento)) for c in ciclos[-4:]]}")
+        bill_id_fatura_fechada = (
+            await self.obter_ultima_fatura_fechada_id(account_id, faturas=faturas_pluggy) if account_id else None)
         if bill_id_fatura_fechada:
             logger.info(f"Última fatura fechada identificada via Bills API: billId={bill_id_fatura_fechada}")
 
@@ -429,7 +447,16 @@ class PluggyService:
 
             purchase_date_str = (tx.get("date") or tx.get("transactionDate", ""))[:10]
             tx_bill_id = credit_card_metadata.get("billId")
-            if eh_credito and tx_bill_id and bill_id_fatura_fechada:
+            ciclo_info = None
+            if eh_credito and ciclos and purchase_date_str:
+                try:
+                    ciclo_info = fat.ciclo_da_compra(date.fromisoformat(purchase_date_str), ciclos)
+                except ValueError:
+                    ciclo_info = None
+            if ciclo_info is not None:
+                # Régua exata: datas de fechamento/vencimento reais do banco.
+                is_forecast = not ciclo_info[1]
+            elif eh_credito and tx_bill_id and bill_id_fatura_fechada:
                 # Critério exato: só é "fechada" se o billId bater com a última
                 # fatura fechada identificada via Bills API. Algumas instituições
                 # (ex: C6 Bank) não preenchem creditCardMetadata.billId — nesse
@@ -493,6 +520,7 @@ class PluggyService:
                 "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
                 "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
+                "ciclo_info": ciclo_info,
                 "installment_number": credit_card_metadata.get("installmentNumber"),
                 "installment_total": credit_card_metadata.get("totalInstallments"),
             })
@@ -578,6 +606,8 @@ class PluggyService:
                         data_ref = date.fromisoformat(item["purchase_date_str"])
                         if installment_number and installment_number > 1:
                             billing_date_calculada = date(data_ref.year, data_ref.month, 1).isoformat()
+                        elif item.get("ciclo_info") is not None:
+                            billing_date_calculada = item["ciclo_info"][0].mes_ref.isoformat()
                         else:
                             billing_date_calculada = self._mes_vencimento_fatura(data_ref, dia_corte).isoformat()
                     except ValueError:
@@ -649,4 +679,4 @@ class PluggyService:
                     resumo += "\n\n" + pergunta
             except Exception as e:
                 logger.error(f"Falha ao iniciar revisão após sincronização: {e}")
-        return resumo, rows
+        return resumo, rows

@@ -263,4 +263,4 @@ async def categorizar_gasto_hibrido(
         return cat, sub
     except Exception as e:
         logger.error(f"Erro na Camada 3 (LLM): {e}")
-        return (categoria_conhecida, "Outros") if categoria_conhecida else ("Outros", "Outros")
+        return (categoria_conhecida, "Outros") if categoria_conhecida else ("Outros", "Outros")
