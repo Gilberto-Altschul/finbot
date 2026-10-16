@@ -21,7 +21,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-16 · vencimento pelo banco"
+VERSAO = "2026-10-16b · créditos abatidos"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -331,10 +331,29 @@ def _gastos_da_fatura(user_phone: str, due: date) -> list[dict]:
     return res.data or []
 
 
+def _creditos_da_fatura(user_phone: str, due: date) -> list[dict]:
+    """Créditos no cartão (estornos, 'Inclusão de Pagamento'...) que o banco abate da fatura."""
+    ini = date(due.year, due.month, 1).isoformat()
+    fim = date(due.year, due.month, monthrange(due.year, due.month)[1]).isoformat()
+    try:
+        res = (db.get_db().table("finbot_expenses")
+               .select("description, amount, purchase_date, account_id")
+               .ilike("user_phone", db._q(user_phone)).eq("payment_method", "credito").eq("transaction_type", "income")
+               .gte("billing_date", ini).lte("billing_date", fim).execute())
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"Créditos da fatura indisponíveis: {e}")
+        return []
+
+
 def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,
-                  detalhar: bool, pagina: int, page_size: int = 15) -> str:
-    total = round(sum(float(g["amount"]) for g in gastos), 2)
+                  detalhar: bool, pagina: int, page_size: int = 15, creditos: list[dict] | None = None) -> str:
+    bruto = round(sum(float(g["amount"]) for g in gastos), 2)
+    abatido = round(sum(abs(float(c["amount"])) for c in (creditos or [])), 2)
+    total = round(bruto - abatido, 2)
     msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 Total no FinBot: *R$ {fat.fmt_moeda(total)}*\n"
+    if abatido:
+        msg += f"↩️ Já abatidos créditos/estornos: R$ {fat.fmt_moeda(abatido)}\n"
     if total_banco is not None:
         msg += f"🏦 Fatura no banco: R$ {fat.fmt_moeda(total_banco)}\n"
         dif = round(total_banco - total, 2)
@@ -389,6 +408,7 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
     else:
         return None
     gastos = _gastos_da_fatura(user_phone, due)
+    creditos = _creditos_da_fatura(user_phone, due)
     blocos = []
     for c in alvo:
         # Lançamentos antigos não têm conta: com um cartão só, só podem ser dele.
@@ -399,7 +419,8 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
             logger.warning(f"Total do banco indisponível para {c['nome']}: {e}")
             total_banco = None
         due_c = vencimento_do_mes(user_phone, due.year, due.month, c["id"]) or due   # cada cartão tem o seu vencimento
-        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina))
+        creds = [x for x in creditos if x.get("account_id") == c["id"] or (len(cartoes) == 1 and not x.get("account_id"))]
+        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds))
     sem_conta = [g for g in gastos if not g.get("account_id")]
     if sem_conta and len(cartoes) > 1:
         blocos.append(f"📎 {len(sem_conta)} lançamento(s) antigo(s) sem cartão definido "
