@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass, field
 
 import app.database as db
+import app.rotina as rotina
 from app.merchant import normalizar_merchant
 from app.merchant_stats import ler_historico, registrar_resposta, MIN_AMOSTRAS
 
@@ -56,11 +57,17 @@ def agrupar_pendentes(rows: list[dict], pulados: set[str] | None = None) -> list
     return sorted(grupos.values(), key=lambda g: -g.total)
 
 
+_ALTERNATIVAS = {("Alimentação", "Restaurante"): ("Lazer", "Restaurante lazer")}
+
+
 def montar_opcoes(g: Grupo, ranking: list[tuple[str, str, int]]) -> list[tuple[str, str]]:
     """Até 3 botões: primeiro o que ELE já usou nesse lugar, depois o palpite do sistema."""
     ops = [(c, s) for c, s, _ in ranking]
     if g.atual[0] != "Outros" and g.atual not in ops:
         ops.append(g.atual)
+    alt = _ALTERNATIVAS.get(g.atual)   # restaurante: a outra face da dúvida (rotina x lazer)
+    if alt and alt not in ops:
+        ops.append(alt)
     return ops[:3]
 
 
@@ -224,6 +231,10 @@ def responder(user_phone: str, texto: str) -> str:
         return proxima or "Ok, deixei para depois. ✅"
 
     cat, sub = escolha
+    eh_refeicao = sub in (rotina.SUB_ROTINA, rotina.SUB_LAZER)
+    if eh_refeicao:
+        rotina.invalidar(user_phone)
+        antes = rotina.perfil(user_phone)
     peso = 1 if est["familia"] else MIN_AMOSTRAS   # marketplace precisa se repetir; o resto aprende de 1 resposta
     sub_id = db.get_subcategory_id_by_name(sub)
     campos = {"category": cat, "subcategory": sub, "review_status": "confirmado", "confidence": 1.0}
@@ -236,6 +247,11 @@ def responder(user_phone: str, texto: str) -> str:
 
     n = len(est["ids"])
     confirmacao = f"✅ Anotado: {cat} › {sub}." + (f" Reclassifiquei {n} lançamentos." if n > 1 else "")
+    if eh_refeicao:
+        rotina.invalidar(user_phone)
+        depois = rotina.perfil(user_phone)
+        if depois != antes:   # só informa, não pergunta: o usuário foi consistente o bastante para o bot aprender
+            confirmacao += f"\n💡 Aprendi: {depois.descricao()}. Não pergunto mais nesses casos."
     proxima = iniciar(user_phone, est["faltam"] - 1, est["pulados"])
     return f"{confirmacao}\n\n{proxima}" if proxima else confirmacao + " Tudo revisado! 🎉"
 

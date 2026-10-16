@@ -15,6 +15,13 @@ CONF_DUVIDA = 0.5       # termo ambíguo ou histórico dividido
 CONF_NENHUMA = 0.0      # Outros / sem palpite útil
 
 
+# Restaurante: rotina (Alimentação) ou lazer? Decide pelo contexto da compra, não pelo lugar.
+# Limite e dias são o ponto de partida; app/rotina.py aprende o perfil de cada usuário.
+RESTAURANTE = ("Alimentação", "Restaurante")
+RESTAURANTE_LAZER = ("Lazer", "Restaurante lazer")
+_TERMOS_RESTAURANTE = ["restaurante", "restaurant", "bistro", "gastronomia", "churrascaria", "pizzaria"]
+
+
 @dataclass
 class Decisao:
     categoria: str
@@ -65,12 +72,44 @@ def tem_termo_ambiguo(descricao: str) -> bool:
     return _tem_termo(d, _AMBIGUOUS_TERMS)
 
 
+def tem_restaurante(descricao: str) -> bool:
+    from app.categorizer import _tem_termo
+    from app.utils import _normalize
+    return familia_ambigua(descricao) is None and _tem_termo(_normalize(descricao), _TERMOS_RESTAURANTE)
+
+
+def eh_cotidiano(valor: float | None, data: str | None, perfil=None) -> bool:
+    """Refeição de rotina conforme o perfil do usuário (padrão: seg-qui, até R$ 90). Sem valor/data, não presume."""
+    from app.rotina import Perfil
+    perfil = perfil or Perfil()
+    if valor is None or not data:
+        return False
+    try:
+        from datetime import date
+        dia = date.fromisoformat(str(data)[:10])
+    except ValueError:
+        return False
+    return abs(float(valor)) <= perfil.limite and dia.weekday() in perfil.dias
+
+
+def decidir_restaurante(merchant_key: str, valor: float | None, data: str | None, perfil=None) -> Decisao:
+    """Rotina -> Alimentação automático. Senão pergunta (padrão Alimentação até responder)."""
+    if eh_cotidiano(valor, data, perfil):
+        return Decisao(*RESTAURANTE, "auto", CONF_REGRA, merchant_key, [RESTAURANTE])
+    return Decisao(*RESTAURANTE, "revisar", CONF_DUVIDA, merchant_key, [RESTAURANTE, RESTAURANTE_LAZER])
+
+
 async def classificar(user_phone: str, descricao: str,
-                      fallback: tuple[str, str] | None = None) -> Decisao:
-    """Orquestra: histórico do usuário → categorizador híbrido (modo melhor-esforço)."""
+                      fallback: tuple[str, str] | None = None,
+                      valor: float | None = None, data: str | None = None) -> Decisao:
+    """Orquestra: histórico do usuário → categorizador híbrido (modo melhor-esforço).
+    `valor` e `data` (YYYY-MM-DD) só importam para restaurantes (rotina x lazer)."""
     from app.categorizer import categorizar_gasto_hibrido
 
     merchant_key = normalizar_merchant(descricao)
+    if tem_restaurante(descricao):   # o mesmo lugar pode ser almoço ou jantar: histórico do lugar não decide
+        from app.rotina import perfil as perfil_do_usuario
+        return decidir_restaurante(merchant_key, valor, data, perfil_do_usuario(user_phone))
     familia = familia_ambigua(descricao)
     hist_familia = ler_historico(user_phone, chave_familia(familia)) if familia else Historico()
     hist_merchant = Historico() if familia else ler_historico(user_phone, merchant_key)

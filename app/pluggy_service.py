@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
 from app.billing import _add_months
 from app.utils import _normalize, parse_mes_fatura
-from app.classificador import classificar, Decisao
+from app.classificador import classificar, Decisao, tem_restaurante
 from app.merchant import normalizar_merchant, familia_ambigua
 from app import revisao
 
@@ -122,7 +122,7 @@ CATEGORIA_PLUGGY_PARA_PT = {
     "Mileage programs": "Lazer",
     "Bus tickets": "Transporte",
     # Donations / Gambling
-    "Donations": "Outros",
+    "Donations": "Presentes e Doações",
     "Gambling": "Lazer",
     "Lottery": "Lazer",
     "Online bet": "Lazer",
@@ -521,28 +521,33 @@ class PluggyService:
         # são processadas em paralelo antes da primeira salvar o aprendizado.
         semaforo = asyncio.Semaphore(8)
 
-        async def _classificar_uma(descricao: str, categoria_dica: str | None) -> Decisao:
+        async def _classificar_uma(descricao: str, categoria_dica: str | None,
+                                   valor: float | None, data: str | None) -> Decisao:
             async with semaforo:
                 try:
                     fallback = (categoria_dica, "Outros") if categoria_dica else None
-                    return await classificar(user_phone, descricao, fallback=fallback)
+                    return await classificar(user_phone, descricao, fallback=fallback, valor=valor, data=data)
                 except Exception as e:
                     logger.warning(f"Falha ao classificar '{descricao}': {e}")
                     return Decisao(categoria_dica or "Outros", "Outros", "revisar", 0.0,
                                    normalizar_merchant(descricao), [])
 
-        def _chave_grupo(descricao: str) -> str:
-            # Marketplace (Mercado Livre, Amazon...): a decisão depende da descrição exata.
+        def _chave_grupo(item: dict) -> str:
+            # Marketplace: a decisão depende da descrição exata. Restaurante: depende de valor e dia.
             # Demais: "PADARIA X 123" e "PADARIA X 456" são o mesmo estabelecimento.
-            return _normalize(descricao) if familia_ambigua(descricao) else normalizar_merchant(descricao)
+            d = item["descricao"]
+            if tem_restaurante(d):
+                return f"{normalizar_merchant(d)}|{item['purchase_date_str']}|{abs(item['raw_amount'])}"
+            return _normalize(d) if familia_ambigua(d) else normalizar_merchant(d)
 
         grupos: dict[str, list[int]] = {}
         for idx, item in enumerate(preparadas):
-            grupos.setdefault(_chave_grupo(item["descricao"]), []).append(idx)
+            grupos.setdefault(_chave_grupo(item), []).append(idx)
 
         chaves_unicas = list(grupos.keys())
         resultados_unicos = await asyncio.gather(*[
-            _classificar_uma(preparadas[grupos[c][0]]["descricao"], preparadas[grupos[c][0]]["categoria_dica"])
+            _classificar_uma(preparadas[grupos[c][0]]["descricao"], preparadas[grupos[c][0]]["categoria_dica"],
+                             preparadas[grupos[c][0]]["raw_amount"], preparadas[grupos[c][0]]["purchase_date_str"])
             for c in chaves_unicas
         ])
 

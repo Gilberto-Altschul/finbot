@@ -6,7 +6,7 @@ import app.database as db
 import asyncio
 from dataclasses import dataclass
 import app.revisao as revisao
-from app.classificador import classificar
+from app.classificador import classificar, tem_restaurante
 from app.merchant import normalizar_merchant, familia_ambigua
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Categorias válidas para o usuário escolher
 CATEGORIAS_VALIDAS = [
     "Alimentação", "Transporte", "Lazer", "Moradia", "Saúde",
-    "Vestuário e Beleza", "Educação", "Pets", "Financeiro", "Extra", "Outros"
+    "Vestuário e Beleza", "Educação", "Pets", "Financeiro", "Presentes e Doações", "Extra", "Outros"
 ]
 
 # Mapa de subcategorias → (categoria, subcategoria)
@@ -72,13 +72,26 @@ SUBCATEGORIA_MAP = {
     "viagem": ("Lazer", "Viagem"),
     "hotel": ("Lazer", "Viagem"),
     "hospedagem": ("Lazer", "Viagem"),
+    "restaurante lazer": ("Lazer", "Restaurante lazer"),
+    "jantar": ("Lazer", "Restaurante lazer"),
+    "jantar fora": ("Lazer", "Restaurante lazer"),
     "bar": ("Lazer", "Bar"),
     "balada": ("Lazer", "Bar"),
     "diversao": ("Lazer", "Hobbies e Jogos"),
     "diversão": ("Lazer", "Hobbies e Jogos"),
     "entretenimento": ("Lazer", "Hobbies e Jogos"),
-    "presente": ("Lazer", "Presente"),
-    "gift": ("Lazer", "Presente"),
+    "presente": ("Presentes e Doações", "Presentes"),
+    "presentes": ("Presentes e Doações", "Presentes"),
+    "gift": ("Presentes e Doações", "Presentes"),
+    "doacao": ("Presentes e Doações", "Doações"),
+    "doação": ("Presentes e Doações", "Doações"),
+    "doacoes": ("Presentes e Doações", "Doações"),
+    "doações": ("Presentes e Doações", "Doações"),
+    "caridade": ("Presentes e Doações", "Doações"),
+    "vaquinha": ("Presentes e Doações", "Doações"),
+    "dizimo": ("Presentes e Doações", "Dízimo e Ofertas"),
+    "dízimo": ("Presentes e Doações", "Dízimo e Ofertas"),
+    "igreja": ("Presentes e Doações", "Dízimo e Ofertas"),
     # Moradia
     "aluguel": ("Moradia", "Aluguel"),
     "condominio": ("Moradia", "Condomínio"),
@@ -292,11 +305,12 @@ async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImp
 
         fallback = (tx.category, tx.subcategory) if tx.category and tx.category != "Outros" else None
         chave = normalizar_merchant(tx.description)
-        comum = familia_ambigua(tx.description) is None
+        comum = familia_ambigua(tx.description) is None and not tem_restaurante(tx.description)
         if comum and chave in cache_decisao:
             dec = cache_decisao[chave]
         else:
-            dec = await classificar(user_phone, tx.description, fallback=fallback)
+            dec = await classificar(user_phone, tx.description, fallback=fallback,
+                                    valor=tx.amount, data=str(tx.date))
             if comum:
                 cache_decisao[chave] = dec
 

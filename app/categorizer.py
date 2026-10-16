@@ -29,8 +29,9 @@ def _tem_termo(texto_norm: str, termos: list[str]) -> bool:
 
 # Termos que SEMPRE devem disparar a pergunta ao usuário, independente de histórico ou banco.
 _AMBIGUOUS_TERMS = [
-    "restaurante", "restaurant", "bar", "pub", "boteco", "cervejaria",
-    "padaria", "cafe", "café", "lanche", "bakery", "bistro", "gastronomia", "doceria",
+    # Dia a dia (padaria, café, lanche) e bares já têm categoria clara: não perguntam.
+    # Restaurante pode ser rotina ou lazer: o contexto (valor/dia) decide em app/classificador.py.
+    "restaurante", "restaurant", "bistro", "gastronomia", "churrascaria", "pizzaria",
     # Marketplaces genéricos — vendem de tudo, não dá para inferir categoria pela loja
     "mercadolivre", "mercado livre", "amazon", "shopee", "aliexpress",
     "magazine luiza", "magalu", "americanas.com", "submarino", "shein",

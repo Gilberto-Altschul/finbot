@@ -69,7 +69,7 @@ SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "valor": {"type": "number"},
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes"]},
+                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]},
                 "subcategoria": {"type": "string"},
                 "descricao": {"type": "string"},
                 "beneficiario": {"type": "string"},
@@ -123,7 +123,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes"]},
+                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]},
                 "subcategoria": {"type": "string", "description": "Opcional. Nome da subcategoria dentro da categoria (ex: 'Viagem', 'Streaming', 'Restaurante') para detalhar só ela."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM."}
             },
@@ -160,7 +160,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes"]}
+                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]}
             },
             "required": ["categoria"]
         }
@@ -192,7 +192,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Outros"]},
+                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações", "Outros"]},
                 "valor": {"type": "number", "description": "O valor do limite para a categoria."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM. Se omitido, usa o mês atual."}
             },

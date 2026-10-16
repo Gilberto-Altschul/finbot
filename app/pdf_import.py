@@ -137,7 +137,7 @@ Regras:
      NUNCA use ano {fatura_ano + 1}.
    - description: nome limpo do estabelecimento
    - amount: float positivo
-   - category: Alimentação, Transporte, Lazer, Moradia, Saúde, Vestuário e Beleza, Educação, Pets, Financeiro, Extra, Outros
+   - category: Alimentação, Transporte, Lazer, Moradia, Saúde, Vestuário e Beleza, Educação, Pets, Financeiro, Presentes e Doações, Extra, Outros
    - subcategory: subcategoria lógica
    - installment_of/installment_total: parcela atual/total (null se não parcelado)
    - payment_method: credito ou debito
