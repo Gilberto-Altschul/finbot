@@ -21,7 +21,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-16d · fechamento C6 dia 23"
+VERSAO = "2026-10-16f · acertar pela fatura"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -325,7 +325,7 @@ def _gastos_da_fatura(user_phone: str, due: date) -> list[dict]:
     ini = date(due.year, due.month, 1).isoformat()
     fim = date(due.year, due.month, monthrange(due.year, due.month)[1]).isoformat()
     res = (db.get_db().table("finbot_expenses")
-           .select("category, subcategory, description, amount, purchase_date, billing_date, installment_of, installment_total, account_id")
+           .select("id, category, subcategory, description, amount, purchase_date, billing_date, installment_of, installment_total, account_id")
            .ilike("user_phone", db._q(user_phone)).eq("payment_method", "credito").eq("transaction_type", "expense")
            .gte("billing_date", ini).lte("billing_date", fim).order("purchase_date", desc=True).execute())
     return res.data or []
@@ -370,11 +370,13 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
     if detalhar:
         paginas = (len(gastos) + page_size - 1) // page_size
         msg += (f"\n🧾 *Lançamentos* (pág. {pagina}/{paginas}):\n" if paginas > 1 else "\n🧾 *Lançamentos:*\n")
-        for g in gastos[(pagina - 1) * page_size: pagina * page_size]:
+        for n, g in enumerate(gastos[(pagina - 1) * page_size: pagina * page_size], 1):
             dt = str(g.get("purchase_date") or g.get("billing_date") or "")
             data = f"{dt[8:10]}/{dt[5:7]} | " if len(dt) >= 10 else ""
             parc = f" ({g['installment_of']}/{g['installment_total']})" if g.get("installment_of") else ""
-            msg += f" • {data}{g['description']}{parc}: R$ {fat.fmt_moeda(float(g['amount']))}\n"
+            cat = f" · 🏷️ {g['category']}" if g.get("category") else ""
+            msg += f" {n}. {data}{g['description']}{parc}: R$ {fat.fmt_moeda(float(g['amount']))}{cat}\n"
+        msg += "\n💡 Para corrigir: *acertar [nº] categoria [nome]* (ex.: acertar 3 categoria Lazer) ou *acertar [nº] excluir*."
         if pagina < paginas:
             mes_txt = _MESES_COMPLETOS[due.month - 1]   # sem o mês, a página 2 abriria a fatura atual
             msg += f"\n➡️ Digite *fatura {nome.lower()} {mes_txt} pág {pagina + 1}* para ver mais."
@@ -421,6 +423,12 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
         due_c = vencimento_do_mes(user_phone, due.year, due.month, c["id"]) or due   # cada cartão tem o seu vencimento
         creds = [x for x in creditos if x.get("account_id") == c["id"] or (len(cartoes) == 1 and not x.get("account_id"))]
         blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds))
+        if detalhar:
+            try:
+                from app import tools as _tools   # import tardio: tools importa este módulo
+                _tools._SESSAO_LISTAGEM[user_phone] = [g["id"] for g in proprios[(pagina - 1) * 15: pagina * 15] if g.get("id") is not None]
+            except Exception as e:
+                logger.warning(f"Não registrei a lista da fatura para 'acertar': {e}")
     sem_conta = [g for g in gastos if not g.get("account_id")]
     if sem_conta and len(cartoes) > 1:
         blocos.append(f"📎 {len(sem_conta)} lançamento(s) antigo(s) sem cartão definido "
