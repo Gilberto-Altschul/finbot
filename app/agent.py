@@ -178,7 +178,7 @@ _PALAVRAS_FATURA = ["fatura", "faturas", "do", "da", "de", "cartao", "cartão", 
 
 def _extrair_cartao(msg_norm: str) -> str:
     """'fatura nubank setembro' -> 'nubank'. Tira a palavra 'fatura', meses, números e enchimento."""
-    resto = msg_norm
+    resto = re.sub(r"[\W_]", " ", msg_norm)   # *negrito* do WhatsApp (o rodapé sugere "*fatura ... pág 2*") e outra pontuação
     for nome in _MESES_MAP:
         resto = re.sub(rf"\b{nome}\b", " ", resto)
     resto = re.sub(r"\bpag\w*\s*\d*\b", " ", resto)
