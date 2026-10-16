@@ -550,6 +550,28 @@ class PluggyService:
             existentes_orig = [str(i["tx"]["id"]) for i in preparadas
                                if str(i["tx"].get("id") or "").strip().lower() in ids_existentes]
             try:
+                # Os antigos também foram atribuídos à fatura pelo dia de corte fixo. Reatribui pela
+                # régua real do banco (só os sem cartão; compras parceladas e com creditCardDate ficam).
+                alvo_fatura = {str(i["tx"]["id"]).strip().lower(): i for i in preparadas
+                               if i.get("ciclo_info") is not None and i["eh_credito"]
+                               and not i["tx"].get("creditCardDate")
+                               and not ((i.get("installment_number") or 1) > 1)}
+                if alvo_fatura and not billing_date_override:
+                    for k in range(0, len(existentes_orig), 100):
+                        antigos = (db.get_db().table("finbot_expenses").select("pluggy_transaction_id")
+                                   .in_("pluggy_transaction_id", existentes_orig[k:k + 100])
+                                   .is_("account_id", "null").execute().data or [])
+                        for r in antigos:
+                            it = alvo_fatura.get(str(r["pluggy_transaction_id"]).strip().lower())
+                            if it:
+                                (db.get_db().table("finbot_expenses")
+                                 .update({"billing_date": it["ciclo_info"][0].mes_ref.isoformat(),
+                                          "is_forecast": it["is_forecast"]})
+                                 .eq("pluggy_transaction_id", r["pluggy_transaction_id"])
+                                 .is_("account_id", "null").execute())
+            except Exception as e:
+                logger.warning(f"Não consegui reatribuir a fatura dos lançamentos antigos ({e})")
+            try:
                 for k in range(0, len(existentes_orig), 100):
                     (db.get_db().table("finbot_expenses").update({"account_id": account_id})
                      .in_("pluggy_transaction_id", existentes_orig[k:k + 100]).is_("account_id", "null").execute())
