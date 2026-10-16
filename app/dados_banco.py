@@ -81,6 +81,64 @@ def ler_faturas(user_phone: str, account_id: str) -> list[tuple[fat.Ciclo, str]]
     return itens
 
 
+def nomes_cartoes(user_phone: str) -> list[str]:
+    """Nomes (apelido ou banco + cartão) dos cartões de crédito guardados."""
+    try:
+        return [c["nome"] for c in ler_contas(user_phone) if c["tipo"] == "CREDIT" and c.get("nome")]
+    except Exception:
+        return []
+
+
+def _cartoes_com_ciclos(user_phone: str, account_id: str | None = None):
+    for c in ler_contas(user_phone):
+        if c["tipo"] != "CREDIT" or (account_id and c["id"] != account_id):
+            continue
+        ciclos = [ci for ci, _ in ler_faturas(user_phone, c["id"])]
+        if ciclos:
+            yield c, ciclos
+
+
+def vencimento_do_mes(user_phone: str, ano: int, mes: int, account_id: str | None = None) -> date | None:
+    """Vencimento REAL (ou estimado pelo padrão do banco) da fatura que vence em ano/mês.
+    Com `account_id`, só daquele cartão. Usa só o que está guardado; None se não houver nada."""
+    try:
+        for _c, ciclos in _cartoes_com_ciclos(user_phone, account_id):
+            for ci in ciclos:
+                if (ci.vencimento.year, ci.vencimento.month) == (ano, mes):
+                    return ci.vencimento
+            dia = fat._dia_venc_tipico(ciclos)
+            ultimo = ciclos[-1]
+            for _ in range(36):
+                if (ultimo.vencimento.year, ultimo.vencimento.month) >= (ano, mes):
+                    break
+                ultimo = fat.proximo_ciclo(ultimo, dia)
+                if (ultimo.vencimento.year, ultimo.vencimento.month) == (ano, mes):
+                    return ultimo.vencimento
+            if dia:  # mês anterior ao histórico guardado: mantém o dia típico
+                return date(ano, mes, min(dia, monthrange(ano, mes)[1]))
+    except Exception as e:
+        logger.warning(f"vencimento_do_mes falhou: {e}")
+    return None
+
+
+def proximo_vencimento(user_phone: str, hoje: date | None = None) -> date | None:
+    """Vencimento da próxima fatura a vencer (a aberta, ou a fechada ainda não vencida)."""
+    hoje = hoje or hoje_local()
+    try:
+        for _c, ciclos in _cartoes_com_ciclos(user_phone):
+            for ci in ciclos:
+                if ci.vencimento >= hoje:
+                    return ci.vencimento
+            dia, ultimo = fat._dia_venc_tipico(ciclos), ciclos[-1]
+            for _ in range(36):
+                ultimo = fat.proximo_ciclo(ultimo, dia)
+                if ultimo.vencimento >= hoje:
+                    return ultimo.vencimento
+    except Exception as e:
+        logger.warning(f"proximo_vencimento falhou: {e}")
+    return None
+
+
 def esta_em_dia(contas: list[dict], hoje: date | None = None) -> bool:
     """Em dia = existe dado e TODAS as contas foram buscadas hoje (horário de Brasília)."""
     hoje = hoje or hoje_local()
@@ -333,7 +391,8 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
         except Exception as e:
             logger.warning(f"Total do banco indisponível para {c['nome']}: {e}")
             total_banco = None
-        blocos.append(_bloco_cartao(c["nome"], due, proprios, total_banco, detalhar, pagina))
+        due_c = vencimento_do_mes(user_phone, due.year, due.month, c["id"]) or due   # cada cartão tem o seu vencimento
+        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina))
     sem_conta = [g for g in gastos if not g.get("account_id")]
     if sem_conta and len(cartoes) > 1:
         blocos.append(f"📎 {len(sem_conta)} lançamento(s) antigo(s) sem cartão definido "

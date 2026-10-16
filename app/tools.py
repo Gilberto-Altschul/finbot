@@ -835,16 +835,18 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             if parsed:
                 year, month = parsed
                 last_day = monthrange(year, month)[1]
-                due = date(year, month, min(dia_vencimento, last_day))
+                due = dbk.vencimento_do_mes(user_phone, year, month) or date(year, month, min(dia_vencimento, last_day))
             else:
                 hoje = date.today()
                 last_day_now = monthrange(hoje.year, hoje.month)[1]
                 due_this_month = date(hoje.year, hoje.month, min(dia_vencimento, last_day_now))
                 
-                if hoje <= due_this_month:
-                    due = due_this_month
-                else:
-                    due = fatura_vencimento(hoje.replace(day=1), dia_corte, dia_vencimento)
+                due = dbk.proximo_vencimento(user_phone)   # pelas datas reais do banco
+                if due is None:
+                    if hoje <= due_this_month:
+                        due = due_this_month
+                    else:
+                        due = fatura_vencimento(hoje.replace(day=1), dia_corte, dia_vencimento)
 
             # Vários cartões (ou cartão pedido: "fatura nubank setembro"): um bloco por cartão, filtrado pela conta.
             cartao_txt = (args.get("cartao") or "").strip()
@@ -884,6 +886,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 linhas.append(f" • {dt_display}{desc_final}: R$ {_fmt_moeda(valor)}")
 
             msg = f"💳 *{fatura_label(due).capitalize()}*\n"
+            _cartoes = dbk.nomes_cartoes(user_phone)
+            if _cartoes:
+                msg += "🏦 " + " + ".join(_cartoes) + "\n"
             msg += f"📅 Vencimento: {due.strftime('%d/%m/%Y')}\n"
             msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n"
             try:

@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import requests
+from datetime import date, timedelta
 
 BASE = "https://api.pluggy.ai"
 MASCARAR = {"number", "taxNumber", "owner", "marketingName", "name_holder",
@@ -54,6 +55,72 @@ def get(path, headers, params=None):
 def show(titulo, obj):
     print(f"\n--- {titulo} ---")
     print(json.dumps(mask(obj), indent=2, ensure_ascii=False, default=str))
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def analisar_cartao(ac, bills, h):
+    """Explica de onde pode vir a diferenca entre o 'saldo' do cartao e a fatura aberta.
+    Imprime SO totais (nenhuma descricao de compra)."""
+    cd = ac.get("creditData") or {}
+    limite, disp = _num(cd.get("creditLimit")), _num(cd.get("availableCreditLimit"))
+    print("\n  >> ANALISE DA FATURA ABERTA")
+    print(f"  balance (saldo da conta) ........ {ac.get('balance')}")
+    print(f"  creditLimit ..................... {limite}")
+    print(f"  availableCreditLimit ............ {disp}")
+    if limite is not None and disp is not None:
+        print(f"  limite usado (limite - disp.) ... {round(limite - disp, 2)}")
+    res = bills.get("results", []) if isinstance(bills, dict) and "_http" not in bills else []
+    fechs = sorted((b.get("billClosingDate") or "")[:10] for b in res if b.get("billClosingDate"))
+    if not fechs:
+        print("  (sem billClosingDate nas faturas: nao da para delimitar o ciclo)")
+        return
+    ultimo = date.fromisoformat(fechs[-1])
+    hoje = date.today()
+    print(f"  ultimo fechamento informado ..... {ultimo}")
+    d_de, d_ate = (ultimo + timedelta(days=1)).isoformat(), (hoje + timedelta(days=150)).isoformat()
+    # Mesmos parametros que o FinBot usa (a API recusa page/pageSize/limit nesta rota).
+    r = get("/v2/transactions", h, {"accountId": ac["id"], "dateFrom": d_de, "dateTo": d_ate})
+    if "_http" in r:
+        print(f"  /v2/transactions falhou: {r}")
+        return
+    txs = r.get("results", [])
+    print(f"  campos da resposta: {sorted(k for k in r if k != 'results')} | recebidas: {len(txs)}")
+    print(f"  valor de 'next' (se houver mais paginas): {r.get('next')!r}")
+    print("  Lancamentos (sem descricao):  data | valor | type | status | metodo | parcela")
+    for t in sorted(txs, key=lambda t: (t.get("date") or "")):
+        meta = t.get("creditCardMetadata") or {}
+        print(f"    {(t.get('date') or '')[:10]} | {t.get('amount')} | {t.get('type')} | {t.get('status')} | "
+              f"{t.get('paymentMethod')} | {meta.get('installmentNumber')}/{meta.get('totalInstallments')}")
+    grupos = {"ate hoje, parcela 1 ou a vista": 0.0, "ate hoje, parcelas 2+": 0.0,
+              "datadas no futuro (parcelas)": 0.0, "pendentes (status PENDING)": 0.0}
+    qtd = dict.fromkeys(grupos, 0)
+    for t in txs:
+        a = _num(t.get("amount")) or 0.0
+        liquido = abs(a) if (t.get("type") or "").upper() == "DEBIT" else -abs(a)
+        meta = t.get("creditCardMetadata") or {}
+        parc = meta.get("installmentNumber") or 1
+        data = (t.get("date") or "")[:10]
+        if (t.get("status") or "").upper() == "PENDING":
+            g = "pendentes (status PENDING)"
+        elif data > hoje.isoformat():
+            g = "datadas no futuro (parcelas)"
+        elif parc > 1:
+            g = "ate hoje, parcelas 2+"
+        else:
+            g = "ate hoje, parcela 1 ou a vista"
+        grupos[g] += liquido
+        qtd[g] += 1
+    print(f"  Transacoes de {d_de} em diante (liquido = compras - estornos):")
+    for g, v in grupos.items():
+        print(f"    {g:<34} {round(v, 2):>10}  ({qtd[g]} lancamentos)")
+    print(f"    {'TOTAL':<34} {round(sum(grupos.values()), 2):>10}")
+    print("  -> compare com a fatura aberta que o app do banco mostra.")
 
 
 def main():
@@ -114,7 +181,11 @@ def main():
                     res = bills.get("results", [])
                     print(f"  Faturas retornadas: {len(res)}")
                     show("FATURAS /bills (ate 6)", res[:6])
-            tx = get("/v2/transactions", h, {"accountId": ac["id"], "limit": 1})
+            if ac.get("type") == "CREDIT":
+                analisar_cartao(ac, bills, h)
+            tx = get("/v2/transactions", h, {"accountId": ac["id"],
+                                             "dateFrom": (date.today() - timedelta(days=30)).isoformat(),
+                                             "dateTo": date.today().isoformat()})
             print(f"  /v2/transactions respondeu: {'erro ' + str(tx.get('_http')) if '_http' in tx else 'ok'}")
 
 

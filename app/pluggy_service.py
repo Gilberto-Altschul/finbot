@@ -16,6 +16,10 @@ from app import revisao
 from app import faturas as fat
 
 logger = logging.getLogger(__name__)
+
+# Quantos dias para trás buscar na Pluggy. 45 dias cortava compras de faturas JÁ FECHADAS
+# (a fatura que venceu em 01/10 cobre compras desde 26/08). 120 cobre ~4 ciclos.
+JANELA_TRAS_DIAS = 120
 settings = get_settings()
 
 # Mapa das categorias oficiais da Pluggy (docs.pluggy.ai/docs/transaction-categories)
@@ -371,7 +375,7 @@ class PluggyService:
         # disponíveis na Pluggy, sem perder o histórico recente de trás.
         params = {
             "accountId": account_id,
-            "dateFrom": (date.today() - timedelta(days=45)).isoformat(),
+            "dateFrom": (date.today() - timedelta(days=JANELA_TRAS_DIAS)).isoformat(),
             "dateTo": (date.today() + timedelta(days=60)).isoformat()
         }
         
@@ -540,6 +544,39 @@ class PluggyService:
         except Exception as e:
             logger.warning(f"Pré-filtro de duplicadas falhou ({e}); o índice único do banco segue como defesa.")
             ids_existentes = set()
+        # Lançamentos antigos (importados antes da migration 005) não têm account_id e, por já
+        # existirem, eram descartados aqui sem nunca receber o cartão. Preenche só o que está vazio.
+        if account_id and ids_existentes:
+            existentes_orig = [str(i["tx"]["id"]) for i in preparadas
+                               if str(i["tx"].get("id") or "").strip().lower() in ids_existentes]
+            try:
+                # Os antigos também foram atribuídos à fatura pelo dia de corte fixo. Reatribui pela
+                # régua real do banco (só os sem cartão; compras parceladas e com creditCardDate ficam).
+                alvo_fatura = {str(i["tx"]["id"]).strip().lower(): i for i in preparadas
+                               if i.get("ciclo_info") is not None and i["eh_credito"]
+                               and not i["tx"].get("creditCardDate")
+                               and not ((i.get("installment_number") or 1) > 1)}
+                if alvo_fatura and not billing_date_override:
+                    for k in range(0, len(existentes_orig), 100):
+                        antigos = (db.get_db().table("finbot_expenses").select("pluggy_transaction_id")
+                                   .in_("pluggy_transaction_id", existentes_orig[k:k + 100])
+                                   .is_("account_id", "null").execute().data or [])
+                        for r in antigos:
+                            it = alvo_fatura.get(str(r["pluggy_transaction_id"]).strip().lower())
+                            if it:
+                                (db.get_db().table("finbot_expenses")
+                                 .update({"billing_date": it["ciclo_info"][0].mes_ref.isoformat(),
+                                          "is_forecast": it["is_forecast"]})
+                                 .eq("pluggy_transaction_id", r["pluggy_transaction_id"])
+                                 .is_("account_id", "null").execute())
+            except Exception as e:
+                logger.warning(f"Não consegui reatribuir a fatura dos lançamentos antigos ({e})")
+            try:
+                for k in range(0, len(existentes_orig), 100):
+                    (db.get_db().table("finbot_expenses").update({"account_id": account_id})
+                     .in_("pluggy_transaction_id", existentes_orig[k:k + 100]).is_("account_id", "null").execute())
+            except Exception as e:
+                logger.warning(f"Não consegui preencher account_id dos lançamentos antigos ({e})")
         preparadas = [i for i in preparadas
                       if str(i["tx"].get("id") or "").strip().lower() not in ids_existentes]
         if not preparadas:
