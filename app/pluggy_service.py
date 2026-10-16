@@ -558,17 +558,22 @@ class PluggyService:
                                and not ((i.get("installment_number") or 1) > 1)}
                 if alvo_fatura and not billing_date_override:
                     for k in range(0, len(existentes_orig), 100):
-                        antigos = (db.get_db().table("finbot_expenses").select("pluggy_transaction_id")
-                                   .in_("pluggy_transaction_id", existentes_orig[k:k + 100])
-                                   .is_("account_id", "null").execute().data or [])
-                        for r in antigos:
+                        gravados = (db.get_db().table("finbot_expenses")
+                                    .select("pluggy_transaction_id, billing_date, account_id")
+                                    .in_("pluggy_transaction_id", existentes_orig[k:k + 100]).execute().data or [])
+                        for r in gravados:
+                            # só mexe no que é desta conta (ou ainda sem conta) e cuja fatura difere da régua real
+                            if r.get("account_id") not in (None, account_id):
+                                continue
                             it = alvo_fatura.get(str(r["pluggy_transaction_id"]).strip().lower())
-                            if it:
-                                (db.get_db().table("finbot_expenses")
-                                 .update({"billing_date": it["ciclo_info"][0].mes_ref.isoformat(),
-                                          "is_forecast": it["is_forecast"]})
-                                 .eq("pluggy_transaction_id", r["pluggy_transaction_id"])
-                                 .is_("account_id", "null").execute())
+                            if not it:
+                                continue
+                            alvo = it["ciclo_info"][0].mes_ref.isoformat()
+                            if str(r.get("billing_date") or "")[:10] == alvo:
+                                continue
+                            (db.get_db().table("finbot_expenses")
+                             .update({"billing_date": alvo, "is_forecast": it["is_forecast"]})
+                             .eq("pluggy_transaction_id", r["pluggy_transaction_id"]).execute())
             except Exception as e:
                 logger.warning(f"Não consegui reatribuir a fatura dos lançamentos antigos ({e})")
             try:
