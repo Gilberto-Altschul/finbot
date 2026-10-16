@@ -324,6 +324,13 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     m_banco = re.fullmatch(r"adicionar banco\s+(\S+)", msg.strip(), flags=re.IGNORECASE)
     if m_banco:
         return {"tool": "adicionar_banco", "args": {"item_id": m_banco.group(1)}}
+    m_remover = re.fullmatch(r"remover banco\s+(\d+)", msg_norm)
+    if m_remover:
+        return {"tool": "remover_banco", "args": {"indice": int(m_remover.group(1))}}
+    # Sem código, a IA inventava um "link do Pluggy" que não existe: resposta fixa e verdadeira.
+    if re.fullmatch(r"(conectar|adicionar|incluir|novo) (banco|conta|contas|bancos)", msg_norm):
+        from app.dados_banco import MSG_CONECTAR_BANCO
+        return {"tool": "direct_reply", "args": {"mensagem": MSG_CONECTAR_BANCO}}
 
     # Comando "Acertar" (Ex: "acertar 1 excluir")
     if msg_norm.startswith("acertar"):

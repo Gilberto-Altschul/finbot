@@ -358,3 +358,32 @@ async def adicionar_banco(pluggy_factory, user_phone: str, item_id: str) -> str:
         return "⚠️ O item existe, mas não trouxe nenhuma conta ainda. Tente de novo em alguns minutos."
     return "✅ Banco conectado:\n" + "\n".join(f"• {c['nome']}" for c in novas) + \
            "\n\nDigite *saldo* para ver, ou *sincronizar* para importar as compras."
+
+
+def remover_banco(user_phone: str, indice: int) -> str:
+    """Desvincula o banco (item) da conta nº `indice` da lista de 'contas'. Não apaga lançamentos."""
+    contas = ler_contas(user_phone)
+    if not contas or indice < 1 or indice > len(contas):
+        return "⚠️ Não achei essa conta. Digite *contas* para ver a lista numerada."
+    alvo = contas[indice - 1]
+    item_id, key = alvo.get("item_id"), get_lookup_prefix(user_phone)
+    if not item_id:
+        return "⚠️ Essa conta não tem banco vinculado."
+    do_banco = [c for c in contas if c.get("item_id") == item_id]
+    cli = db.get_db()
+    for c in do_banco:
+        cli.table(T_FATURAS).delete().eq("user_key", key).eq("account_id", c["id"]).execute()
+        cli.table(T_CONTAS).delete().eq("user_key", key).eq("account_id", c["id"]).execute()
+    cli.table(itens_mod.TABELA).delete().eq("user_key", key).eq("item_id", item_id).execute()
+    return ("✅ Banco removido:\n" + "\n".join(f"• {c['nome']}" for c in do_banco) +
+            "\n\nSeus lançamentos já importados continuam guardados.")
+
+
+MSG_CONECTAR_BANCO = (
+    "🏦 *Para conectar um banco:*\n"
+    "1. Conecte o banco na Pluggy (meu.pluggy.ai ou o painel da sua aplicação)\n"
+    "2. Abra o item conectado e copie o *código do item*\n"
+    "3. Me mande: *adicionar banco <código>*\n\n"
+    "Depois é só digitar *saldo* ou *sincronizar*.\n"
+    "_(Em breve: um link para conectar direto por aqui.)_"
+)

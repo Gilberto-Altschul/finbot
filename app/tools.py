@@ -182,6 +182,11 @@ SCHEMAS: list[dict] = [
         }
     },
     {
+        "name": "remover_banco",
+        "description": "Desvincula o banco da conta nº N da lista de 'contas'. Só por comando explícito: 'remover banco 3'.",
+        "parameters": {"type": "object", "properties": {"indice": {"type": "integer", "description": "Número da conta na lista de 'contas'"}}, "required": ["indice"]}
+    },
+    {
         "name": "listar_faturas_cartao",
         "description": "Lista as FATURAS FECHADAS do cartão de crédito mês a mês (fechamento, vencimento, total e se foi paga), direto do banco via Pluggy, e mostra a fatura aberta. Use para 'faturas', 'minhas faturas', 'faturas anteriores', 'histórico de faturas'.",
         "parameters": {"type": "object", "properties": {}}
@@ -248,7 +253,7 @@ SCHEMAS: list[dict] = [
 # Motivo: numa pergunta aberta como "como gastar 15 mil por mês", o modelo
 # interpretou como pedido de ação e sobrescreveu 8 limites de uma vez, sem
 # confirmação. Conselho/planejamento deve virar TEXTO, não escrita no banco.
-SOMENTE_DETERMINISTICAS: set[str] = {"definir_limite", "definir_apelido", "adicionar_banco"}
+SOMENTE_DETERMINISTICAS: set[str] = {"definir_limite", "definir_apelido", "adicionar_banco", "remover_banco"}
 
 # Versão dos schemas que é exposta ao Gemini (function calling).
 LLM_SCHEMAS: list[dict] = [s for s in SCHEMAS if s["name"] not in SOMENTE_DETERMINISTICAS]
@@ -942,6 +947,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
         case "definir_apelido":
             return {"mensagem": dbk.definir_apelido(user_phone, int(args.get("indice") or 0), str(args.get("apelido") or ""))}
+
+        case "remover_banco":
+            return {"mensagem": dbk.remover_banco(user_phone, int(args.get("indice") or 0))}
 
         case "adicionar_banco":
             try:

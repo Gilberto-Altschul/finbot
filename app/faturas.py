@@ -285,6 +285,10 @@ async def _ids_dos_itens(pluggy, user_phone: str) -> list[str]:
     from app.config import get_settings
 
     ids: list[str] = list(itens.ler_ids(user_phone))   # bancos já vinculados ao usuário
+    if ids:
+        # A tabela do usuário é a FONTE DA VERDADE: o item do .env e a listagem da Pluggy só servem para
+        # descobrir o primeiro banco. Senão um item de teste do .env voltaria mesmo depois de removido.
+        return list(dict.fromkeys(ids))
     try:
         for it in await pluggy.listar_itens():
             if it.get("id"):
