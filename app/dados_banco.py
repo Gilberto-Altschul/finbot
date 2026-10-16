@@ -81,41 +81,6 @@ def ler_faturas(user_phone: str, account_id: str) -> list[tuple[fat.Ciclo, str]]
     return itens
 
 
-def nomes_cartoes(user_phone: str) -> list[str]:
-    """Nomes (apelido ou banco + cartão) dos cartões de crédito guardados."""
-    try:
-        return [c["nome"] for c in ler_contas(user_phone) if c["tipo"] == "CREDIT" and c.get("nome")]
-    except Exception:
-        return []
-
-
-def vencimento_do_mes(user_phone: str, ano: int, mes: int) -> date | None:
-    """Vencimento REAL (ou estimado pelo padrão do banco) da fatura que vence em ano/mês.
-    Usa só o que está guardado. None se não houver nenhuma fatura guardada."""
-    try:
-        contas = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
-        for c in contas:
-            ciclos = [ci for ci, _ in ler_faturas(user_phone, c["id"])]
-            if not ciclos:
-                continue
-            for ci in ciclos:
-                if (ci.vencimento.year, ci.vencimento.month) == (ano, mes):
-                    return ci.vencimento
-            dia = fat._dia_venc_tipico(ciclos)
-            ultimo = ciclos[-1]
-            for _ in range(36):
-                if (ultimo.vencimento.year, ultimo.vencimento.month) >= (ano, mes):
-                    break
-                ultimo = fat.proximo_ciclo(ultimo, dia)
-                if (ultimo.vencimento.year, ultimo.vencimento.month) == (ano, mes):
-                    return ultimo.vencimento
-            if dia:  # mês anterior ao histórico guardado: mantém o dia típico
-                return date(ano, mes, min(dia, monthrange(ano, mes)[1]))
-    except Exception:
-        return None
-    return None
-
-
 def esta_em_dia(contas: list[dict], hoje: date | None = None) -> bool:
     """Em dia = existe dado e TODAS as contas foram buscadas hoje (horário de Brasília)."""
     hoje = hoje or hoje_local()

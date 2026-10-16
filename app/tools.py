@@ -835,7 +835,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             if parsed:
                 year, month = parsed
                 last_day = monthrange(year, month)[1]
-                due = dbk.vencimento_do_mes(user_phone, year, month) or date(year, month, min(dia_vencimento, last_day))
+                due = date(year, month, min(dia_vencimento, last_day))
             else:
                 hoje = date.today()
                 last_day_now = monthrange(hoje.year, hoje.month)[1]
@@ -884,9 +884,6 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 linhas.append(f" • {dt_display}{desc_final}: R$ {_fmt_moeda(valor)}")
 
             msg = f"💳 *{fatura_label(due).capitalize()}*\n"
-            _cartoes = dbk.nomes_cartoes(user_phone)
-            if _cartoes:
-                msg += "🏦 " + " + ".join(_cartoes) + "\n"
             msg += f"📅 Vencimento: {due.strftime('%d/%m/%Y')}\n"
             msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n"
             try:
