@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
 VERSAO = "2026-10-16 · vencimento pelo banco"
 
+_MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+                    "setembro", "outubro", "novembro", "dezembro"]
+
 T_CONTAS, T_HIST, T_FATURAS = "finbot_contas", "finbot_saldo_historico", "finbot_faturas"
 
 
@@ -354,7 +357,8 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
             parc = f" ({g['installment_of']}/{g['installment_total']})" if g.get("installment_of") else ""
             msg += f" • {data}{g['description']}{parc}: R$ {fat.fmt_moeda(float(g['amount']))}\n"
         if pagina < paginas:
-            msg += f"\n➡️ Digite *fatura {nome.lower()} pág {pagina + 1}* para ver mais."
+            mes_txt = _MESES_COMPLETOS[due.month - 1]   # sem o mês, a página 2 abriria a fatura atual
+            msg += f"\n➡️ Digite *fatura {nome.lower()} {mes_txt} pág {pagina + 1}* para ver mais."
     return msg.rstrip()
 
 

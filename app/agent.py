@@ -182,7 +182,7 @@ def _extrair_cartao(msg_norm: str) -> str:
     for nome in _MESES_MAP:
         resto = re.sub(rf"\b{nome}\b", " ", resto)
     resto = re.sub(r"\bpag\w*\s*\d*\b", " ", resto)
-    resto = re.sub(r"\d+", " ", resto)
+    resto = re.sub(r"\b\d+\b", " ", resto)   # só números soltos: o "6" de "c6" fica
     for w in _PALAVRAS_FATURA:
         resto = re.sub(rf"\b{re.escape(_normalize(w))}\b", " ", resto)
     return " ".join(resto.split())
