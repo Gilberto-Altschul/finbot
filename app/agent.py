@@ -172,6 +172,22 @@ _MESES_MAP = {
     "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12"
 }
 
+_PALAVRAS_FATURA = ["fatura", "faturas", "do", "da", "de", "cartao", "cartão", "no", "na", "mes", "mês", "atual",
+                    "aberta", "a", "o", "minha", "meu", "quanto", "qual", "ver", "mostra", "mostre", "pag", "pagina"]
+
+
+def _extrair_cartao(msg_norm: str) -> str:
+    """'fatura nubank setembro' -> 'nubank'. Tira a palavra 'fatura', meses, números e enchimento."""
+    resto = msg_norm
+    for nome in _MESES_MAP:
+        resto = re.sub(rf"\b{nome}\b", " ", resto)
+    resto = re.sub(r"\bpag\w*\s*\d*\b", " ", resto)
+    resto = re.sub(r"\d+", " ", resto)
+    for w in _PALAVRAS_FATURA:
+        resto = re.sub(rf"\b{re.escape(_normalize(w))}\b", " ", resto)
+    return " ".join(resto.split())
+
+
 def _parse_method(raw: str | None) -> str:
     if not raw: return "debito"
     raw = raw.lower().strip()
@@ -294,8 +310,20 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             if m_nome in msg_norm:
                 args_fatura["mes"] = f"{date.today().year}-{m_num}"
                 break
+        if _extrair_cartao(msg_norm):
+            args_fatura["cartao"] = _extrair_cartao(msg_norm)
 
         return {"tool": "consultar_fatura", "args": args_fatura}
+
+    # Contas / apelido / adicionar banco — comandos exatos, antes dos atalhos por palavra-chave
+    if re.fullmatch(r"(minhas )?contas", msg_norm):
+        return {"tool": "minhas_contas", "args": {}}
+    m_apelido = re.fullmatch(r"apelido (\d+) (.+)", msg.strip(), flags=re.IGNORECASE)
+    if m_apelido:
+        return {"tool": "definir_apelido", "args": {"indice": int(m_apelido.group(1)), "apelido": m_apelido.group(2)}}
+    m_banco = re.fullmatch(r"adicionar banco\s+(\S+)", msg.strip(), flags=re.IGNORECASE)
+    if m_banco:
+        return {"tool": "adicionar_banco", "args": {"item_id": m_banco.group(1)}}
 
     # Comando "Acertar" (Ex: "acertar 1 excluir")
     if msg_norm.startswith("acertar"):
@@ -507,6 +535,9 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             
             if tool_name == "consultar_limite":
                 return {"tool": "consultar_limite", "args": {}}
+
+            if tool_name == "consultar_fatura" and _extrair_cartao(msg_norm):
+                args["cartao"] = _extrair_cartao(msg_norm)   # ex.: "fatura nubank setembro"
             
             return {"tool": tool_name, "args": args}
         
@@ -547,7 +578,9 @@ async def run(user_phone: str, user_message: str) -> str:
         # nunca executam a partir de uma decisão do LLM.
         if call["name"] in tool_registry.SOMENTE_DETERMINISTICAS:
             logger.warning(f"Tool restrita '{call['name']}' solicitada pelo LLM — bloqueada.")
-            return {"mensagem": "⚠️ Para alterar limites, use o comando direto: *limite <categoria> <valor>* (ex: limite lazer 500)."}
+            if call["name"] == "definir_limite":
+                return {"mensagem": "⚠️ Para alterar limites, use o comando direto: *limite <categoria> <valor>* (ex: limite lazer 500)."}
+            return {"mensagem": "⚠️ Esse comando precisa ser digitado por você, direto (ex.: *apelido 2 Cartão da firma*)."}
 
         args_pt = dict(call["args"])
         if "amount" in args_pt: args_pt["valor"] = args_pt.pop("amount")

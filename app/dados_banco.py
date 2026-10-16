@@ -13,7 +13,10 @@ from datetime import date, datetime, timezone, timedelta
 
 import app.database as db
 from app import faturas as fat
-from app.utils import get_lookup_prefix
+from calendar import monthrange
+
+from app import bancos, itens as itens_mod, revisao
+from app.utils import get_lookup_prefix, _normalize
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +50,20 @@ def hoje_local() -> date:
 
 
 # ── leitura ──────────────────────────────────────────────────────────────────
+def ordenar(contas: list[dict]) -> list[dict]:
+    """Ordem estável (contas correntes antes dos cartões): é ela que o usuário vê em 'contas'
+    e usa em 'apelido <n> <nome>'."""
+    # Usa o nome AUTOMÁTICO (não o apelido): renomear uma conta não pode embaralhar os números da lista.
+    return sorted(contas, key=lambda c: (c["tipo"] != "BANK", _normalize(c.get("nome_auto") or c.get("nome") or ""), c["id"]))
+
+
 def ler_contas(user_phone: str) -> list[dict]:
     res = db.get_db().table(T_CONTAS).select("*").eq("user_key", get_lookup_prefix(user_phone)).execute()
-    return [{"id": r["account_id"], "item_id": r.get("item_id"), "tipo": r["tipo"], "nome": r.get("nome"),
-             "saldo": None if r.get("saldo") is None else float(r["saldo"]),
-             "atualizado_iso": r.get("atualizado_banco"), "sincronizado_em": r.get("sincronizado_em")}
-            for r in (res.data or [])]
+    return ordenar([{"id": r["account_id"], "item_id": r.get("item_id"), "tipo": r["tipo"],
+                     "nome": r.get("apelido") or r.get("nome"), "nome_auto": r.get("nome"), "apelido": r.get("apelido"),
+                     "saldo": None if r.get("saldo") is None else float(r["saldo"]),
+                     "atualizado_iso": r.get("atualizado_banco"), "sincronizado_em": r.get("sincronizado_em")}
+                    for r in (res.data or [])])
 
 
 def ler_faturas(user_phone: str, account_id: str) -> list[tuple[fat.Ciclo, str]]:
@@ -90,14 +101,21 @@ async def atualizar(pluggy_factory, user_phone: str) -> int:
     linhas, historico = [], []
     for c in contas:
         linhas.append({"user_key": key, "account_id": c["id"], "item_id": c["item_id"], "tipo": c["tipo"],
-                       "nome": c["nome"], "saldo": c["saldo"], "credit_limit": c.get("limite"),
+                       "nome": c["nome"], "banco_nome": c.get("banco"), "saldo": c["saldo"], "credit_limit": c.get("limite"),
                        "available_limit": c.get("limite_disponivel"),
                        "atualizado_banco": c.get("atualizado_iso"), "sincronizado_em": agora})
         ant = anteriores.get(c["id"])
         if c["saldo"] is not None and (ant is None or ant.get("saldo") is None
                                        or round(float(ant["saldo"]), 2) != round(float(c["saldo"]), 2)):
             historico.append({"user_key": key, "account_id": c["id"], "saldo": c["saldo"], "capturado_em": agora})
+    # `apelido` NÃO está em `linhas` de propósito: o upsert preserva o que o usuário definiu.
     db.get_db().table(T_CONTAS).upsert(linhas, on_conflict="user_key,account_id").execute()
+    vistos: dict[str, tuple] = {}
+    for c in contas:
+        if c.get("item_id") and (c["item_id"] not in vistos or c.get("banco_codigo")):
+            vistos[c["item_id"]] = (c.get("banco_codigo"), c.get("banco"))
+    for item_id, (cod, nome_banco) in vistos.items():
+        itens_mod.registrar(user_phone, item_id, cod, nome_banco)   # auto-vincula: o item do .env passa a ser do usuário
     if historico:
         db.get_db().table(T_HIST).insert(historico).execute()
 
@@ -164,11 +182,179 @@ async def mensagem_fatura_aberta(pluggy_factory, user_phone: str) -> str:
     return "\n\n".join(partes) + _aviso(contas, velho)
 
 
-async def total_do_banco(pluggy_factory, user_phone: str, vencimento: date) -> float | None:
-    """Total oficial da fatura que vence no mês de `vencimento` (a partir do que está guardado)."""
+async def total_do_banco(pluggy_factory, user_phone: str, vencimento: date, account_id: str | None = None) -> float | None:
+    """Total oficial da fatura que vence no mês de `vencimento` (a partir do que está guardado).
+    Com `account_id`, só aquele cartão; sem ele, o primeiro que tiver fatura no mês."""
     contas, _ = await garantir(pluggy_factory, user_phone)
-    for c in (c for c in contas if c["tipo"] == "CREDIT"):
+    for c in (c for c in contas if c["tipo"] == "CREDIT" and (account_id is None or c["id"] == account_id)):
         for ci, _st in ler_faturas(user_phone, c["id"]):
             if (ci.vencimento.year, ci.vencimento.month) == (vencimento.year, vencimento.month):
                 return ci.total
     return None
+
+
+# ── contas e apelidos ────────────────────────────────────────────────────────
+async def mensagem_contas(pluggy_factory, user_phone: str) -> str:
+    contas, velho = await garantir(pluggy_factory, user_phone)
+    if not contas:
+        return "🏦 Ainda não encontrei contas conectadas."
+    linhas = ["🏦 *Suas contas*", ""] + [f"{i} · {c['nome']}" for i, c in enumerate(contas, 1)]
+    linhas.append("\n_Para mudar o nome: apelido <número> <nome>_")
+    return "\n".join(linhas) + _aviso(contas, velho)
+
+
+def definir_apelido(user_phone: str, indice: int, apelido: str) -> str:
+    contas = ler_contas(user_phone)
+    apelido = " ".join((apelido or "").split())[:40]
+    if not contas or indice < 1 or indice > len(contas):
+        return "⚠️ Não achei essa conta. Digite *contas* para ver a lista numerada."
+    if not apelido:
+        return "⚠️ Me diga o nome. Ex.: apelido 2 Cartão da firma"
+    alvo = contas[indice - 1]
+    db.get_db().table(T_CONTAS).update({"apelido": apelido}).eq("user_key", get_lookup_prefix(user_phone)).eq("account_id", alvo["id"]).execute()
+    return f"✅ Pronto: *{apelido}*"
+
+
+def achar_contas(contas: list[dict], texto: str, tipo: str | None = None) -> tuple[list[dict], str]:
+    base = [c for c in contas if tipo is None or c["tipo"] == tipo]
+    return bancos.resolver_conta(base, texto, _normalize)
+
+
+# ── sincronizar tudo ─────────────────────────────────────────────────────────
+async def sincronizar_todas(pluggy, user_phone: str, contas: list[dict]) -> str:
+    """Importa as transações de TODAS as contas e faz UMA pergunta de revisão no fim."""
+    linhas, n_revisar, n_auto = [], 0, 0
+    for c in contas:
+        try:
+            msg, rows = await pluggy.sync_user_transactions(user_phone, c["id"], c["item_id"], iniciar_revisao=False)
+        except Exception as e:
+            logger.error(f"Falha ao sincronizar {c['id']}: {e}")
+            linhas.append(f"• {c['nome']}: ❌ não consegui sincronizar")
+            continue
+        if rows:
+            n = len(rows)
+            r = sum(1 for x in rows if x.get("review_status") == "revisar")
+            n_revisar, n_auto = n_revisar + r, n_auto + (n - r)
+            linhas.append(f"• {c['nome']}: {n} novo{'s' if n != 1 else ''}")
+        elif msg.startswith("❌"):
+            linhas.append(f"• {c['nome']}: ❌ erro ao salvar")
+        elif "andamento" in msg:
+            linhas.append(f"• {c['nome']}: o banco ainda está atualizando, tente de novo daqui a pouco")
+        else:
+            linhas.append(f"• {c['nome']}: sem novidades")
+    texto = "✅ *Sincronizado*\n" + "\n".join(linhas)
+    if n_revisar:
+        texto += f"\n\n✨ {n_auto} classificados sozinhos · 🤔 {n_revisar} para você confirmar (sem pressa)."
+        try:
+            pergunta = revisao.iniciar(user_phone)
+            if pergunta:
+                texto += "\n\n" + pergunta
+        except Exception as e:
+            logger.error(f"Falha ao iniciar revisão após sincronizar tudo: {e}")
+    elif n_auto:
+        texto += "\n\n✨ Tudo classificado automaticamente."
+    return texto
+
+
+# ── fatura por cartão ────────────────────────────────────────────────────────
+def _gastos_da_fatura(user_phone: str, due: date) -> list[dict]:
+    ini = date(due.year, due.month, 1).isoformat()
+    fim = date(due.year, due.month, monthrange(due.year, due.month)[1]).isoformat()
+    res = (db.get_db().table("finbot_expenses")
+           .select("category, subcategory, description, amount, purchase_date, billing_date, installment_of, installment_total, account_id")
+           .ilike("user_phone", db._q(user_phone)).eq("payment_method", "credito").eq("transaction_type", "expense")
+           .gte("billing_date", ini).lte("billing_date", fim).order("purchase_date", desc=True).execute())
+    return res.data or []
+
+
+def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,
+                  detalhar: bool, pagina: int, page_size: int = 15) -> str:
+    total = round(sum(float(g["amount"]) for g in gastos), 2)
+    msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 Total no FinBot: *R$ {fat.fmt_moeda(total)}*\n"
+    if total_banco is not None:
+        msg += f"🏦 Fatura no banco: R$ {fat.fmt_moeda(total_banco)}\n"
+        dif = round(total_banco - total, 2)
+        if abs(dif) > 0.01:
+            msg += f"⚠️ Diferença de R$ {fat.fmt_moeda(abs(dif))} (compras ainda não sincronizadas ou ajustes do banco)\n"
+    if not gastos:
+        return msg + "Nenhum lançamento nesta fatura até agora."
+    por_cat: dict[str, float] = {}
+    for g in gastos:
+        por_cat[g.get("category") or "Outros"] = por_cat.get(g.get("category") or "Outros", 0.0) + float(g["amount"])
+    top = sorted(por_cat.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    if not detalhar or pagina == 1:
+        msg += "\n📊 *Por categoria:*\n" + "\n".join(f" • {c}: R$ {fat.fmt_moeda(v)}" for c, v in top) + "\n"
+    if detalhar:
+        paginas = (len(gastos) + page_size - 1) // page_size
+        msg += (f"\n🧾 *Lançamentos* (pág. {pagina}/{paginas}):\n" if paginas > 1 else "\n🧾 *Lançamentos:*\n")
+        for g in gastos[(pagina - 1) * page_size: pagina * page_size]:
+            dt = str(g.get("purchase_date") or g.get("billing_date") or "")
+            data = f"{dt[8:10]}/{dt[5:7]} | " if len(dt) >= 10 else ""
+            parc = f" ({g['installment_of']}/{g['installment_total']})" if g.get("installment_of") else ""
+            msg += f" • {data}{g['description']}{parc}: R$ {fat.fmt_moeda(float(g['amount']))}\n"
+        if pagina < paginas:
+            msg += f"\n➡️ Digite *fatura {nome.lower()} pág {pagina + 1}* para ver mais."
+    return msg.rstrip()
+
+
+async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
+                                  texto_cartao: str | None = None, pagina: int = 1) -> str | None:
+    """
+    Fatura de um cartão específico ('fatura nubank setembro') ou, com 2+ cartões, um bloco por cartão.
+    Devolve None quando não se aplica (0 ou 1 cartão sem pedido explícito): o fluxo antigo segue valendo.
+    """
+    cartoes = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
+    if not cartoes:
+        return None
+    aviso = ""
+    if texto_cartao and texto_cartao.strip():
+        achadas, motivo = achar_contas(cartoes, texto_cartao)
+        nomes = ", ".join(c["nome"] for c in cartoes)
+        if motivo == "varias":
+            return f"⚠️ Qual deles? {', '.join(c['nome'] for c in achadas)}. Ex.: fatura {achadas[0]['nome'].lower()}"
+        if motivo == "nenhuma":
+            # Texto que não é nome de cartão (a frase pode ter outra palavra solta): não trava o usuário.
+            if len(cartoes) < 2:
+                return None
+            alvo, detalhar, aviso = cartoes, False, f"ℹ️ Não achei o cartão “{texto_cartao.strip()}”; seguem todos ({nomes}).\n\n"
+        else:
+            alvo, detalhar = achadas, True
+    elif len(cartoes) > 1:
+        alvo, detalhar = cartoes, False
+    else:
+        return None
+    gastos = _gastos_da_fatura(user_phone, due)
+    blocos = []
+    for c in alvo:
+        # Lançamentos antigos não têm conta: com um cartão só, só podem ser dele.
+        proprios = [g for g in gastos if g.get("account_id") == c["id"] or (len(cartoes) == 1 and not g.get("account_id"))]
+        try:
+            total_banco = await total_do_banco(pluggy_factory, user_phone, due, c["id"])
+        except Exception as e:
+            logger.warning(f"Total do banco indisponível para {c['nome']}: {e}")
+            total_banco = None
+        blocos.append(_bloco_cartao(c["nome"], due, proprios, total_banco, detalhar, pagina))
+    sem_conta = [g for g in gastos if not g.get("account_id")]
+    if sem_conta and len(cartoes) > 1:
+        blocos.append(f"📎 {len(sem_conta)} lançamento(s) antigo(s) sem cartão definido "
+                      f"(R$ {fat.fmt_moeda(sum(float(g['amount']) for g in sem_conta))}).")
+    return aviso + "\n\n".join(blocos)
+
+
+# ── adicionar banco manualmente (até a conexão automática existir) ───────────
+async def adicionar_banco(pluggy_factory, user_phone: str, item_id: str) -> str:
+    item_id = (item_id or "").strip()
+    if not item_id:
+        return "⚠️ Me mande o código do item. Ex.: adicionar banco 8f3a1c2e-..."
+    pluggy = pluggy_factory()
+    try:
+        await pluggy.obter_item(item_id)
+    except Exception:
+        return "⚠️ Não encontrei esse item na Pluggy. Confira o código e tente de novo."
+    itens_mod.registrar(user_phone, item_id)
+    contas, _ = await garantir(lambda: pluggy, user_phone, forcar=True)
+    novas = [c for c in contas if c.get("item_id") == item_id]
+    if not novas:
+        return "⚠️ O item existe, mas não trouxe nenhuma conta ainda. Tente de novo em alguns minutos."
+    return "✅ Banco conectado:\n" + "\n".join(f"• {c['nome']}" for c in novas) + \
+           "\n\nDigite *saldo* para ver, ou *sincronizar* para importar as compras."

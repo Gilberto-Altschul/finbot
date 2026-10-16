@@ -351,7 +351,8 @@ class PluggyService:
         return data.get("status")
 
     async def sync_user_transactions(
-        self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None
+        self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None,
+        iniciar_revisao: bool = True,
     ):
         # 1. Converte o mês informado (ex: "outubro" -> "2026-10-01") se houver
         billing_date_override = parse_mes_fatura(billing_month_input) if billing_month_input else None
@@ -385,7 +386,8 @@ class PluggyService:
         
         # 4. Repassa o billing_date_override para o processamento
         return await self._process_transactions(
-            user_phone, transactions, item_id=item_id, account_id=account_id, billing_date_override=billing_date_override
+            user_phone, transactions, item_id=item_id, account_id=account_id,
+            billing_date_override=billing_date_override, iniciar_revisao=iniciar_revisao,
         )
 
     async def _process_transactions(
@@ -394,7 +396,8 @@ class PluggyService:
         transactions: list[dict], 
         item_id: str | None = None, 
         account_id: str | None = None,
-        billing_date_override: str | None = None  # <--- Adicionar este parâmetro
+        billing_date_override: str | None = None,  # <--- Adicionar este parâmetro
+        iniciar_revisao: bool = True,  # False = quem chama junta várias contas e pergunta uma vez só no fim
     ) -> tuple[str, list[dict] | None]:
         """
         Converte transações da Pluggy para o formato padrão e insere em lote no banco,
@@ -639,6 +642,7 @@ class PluggyService:
                 "purchase_date": (tx.get("date") or tx.get("transactionDate", ""))[:10],
                 "billing_date": billing_date_calculada,
                 "is_forecast": item["is_forecast"],
+                "account_id": account_id,
                 "merchant_key": dec.merchant_key,
                 # Receita nunca entra na fila de perguntas (a revisão só trata despesas)
                 "review_status": "auto" if tipo == "income" else dec.status,
@@ -672,7 +676,7 @@ class PluggyService:
             resumo += "\n✨ Tudo classificado automaticamente."
 
         # Só puxa a conversa se ESTA sincronização gerou dúvidas; as antigas ficam em "revisar".
-        if n_revisar:
+        if n_revisar and iniciar_revisao:
             try:
                 pergunta = revisao.iniciar(user_phone)
                 if pergunta:

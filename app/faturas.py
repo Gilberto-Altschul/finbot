@@ -16,6 +16,8 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
+from app import bancos, itens
+
 logger = logging.getLogger(__name__)
 
 # Quando o banco não informa o fechamento (ocorre em faturas antigas), estima-se
@@ -255,15 +257,21 @@ def _atualizado_em(iso: str | None) -> str:
 
 def formatar_saldos(contas: list[dict]) -> str:
     """contas: [{'tipo','nome','saldo','atualizado_iso'}] — tipo = 'BANK' | 'CREDIT'."""
-    bancos = [c for c in contas if c["tipo"] == "BANK" and c.get("saldo") is not None]
+    contas_banco = [c for c in contas if c["tipo"] == "BANK" and c.get("saldo") is not None]
     cartoes = [c for c in contas if c["tipo"] == "CREDIT" and c.get("saldo") is not None]
-    if not bancos and not cartoes:
+    if not contas_banco and not cartoes:
         return ""
     linhas = ["💰 *Seus saldos*", ""]
-    for c in bancos:
+    for c in contas_banco:
         linhas.append(f"{c['nome']}: R$ {fmt_moeda(c['saldo'])}")
+    if len(contas_banco) > 1:
+        linhas.append(f"*Total em contas: R$ {fmt_moeda(sum(c['saldo'] for c in contas_banco))}*")
+    if contas_banco and cartoes:
+        linhas.append("")
     for c in cartoes:
         linhas.append(f"{c['nome']} (fatura aberta): R$ {fmt_moeda(c['saldo'])}")
+    if len(cartoes) > 1:
+        linhas.append(f"*Total em faturas: R$ {fmt_moeda(sum(c['saldo'] for c in cartoes))}*")
     quando = next((_atualizado_em(c.get("atualizado_iso")) for c in contas if c.get("atualizado_iso")), "")
     if quando:
         linhas.append(f"\n_{quando}_")
@@ -276,7 +284,7 @@ async def _ids_dos_itens(pluggy, user_phone: str) -> list[str]:
     import app.database as db
     from app.config import get_settings
 
-    ids: list[str] = []
+    ids: list[str] = list(itens.ler_ids(user_phone))   # bancos já vinculados ao usuário
     try:
         for it in await pluggy.listar_itens():
             if it.get("id"):
@@ -310,7 +318,9 @@ async def carregar_contas(pluggy, user_phone: str) -> list[dict]:
                 cd = c.get("creditData") or {}
                 contas.append({"id": c.get("id"), "item_id": item_id, "tipo": tipo, "nome": nome,
                                "saldo": c.get("balance"), "atualizado_iso": item.get("lastUpdatedAt"),
-                               "limite": cd.get("creditLimit"), "limite_disponivel": cd.get("availableCreditLimit")})
+                               "limite": cd.get("creditLimit"), "limite_disponivel": cd.get("availableCreditLimit"),
+                               "numero": c.get("number"),
+                               "banco_codigo": bancos.codigo_do_banco((c.get("bankData") or {}).get("transferNumber"))})
         except Exception as e:
             logger.warning(f"Falha ao ler contas do item {item_id}: {e}")
-    return contas
+    return bancos.aplicar_nomes(contas)

@@ -156,6 +156,32 @@ SCHEMAS: list[dict] = [
         }
     },
     {
+        "name": "minhas_contas",
+        "description": "Lista as contas e cartões conectados, numerados (ex.: Itaú conta, Itaú cartão, Nubank cartão). Use para 'contas', 'minhas contas', 'quais bancos tenho'.",
+        "parameters": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "definir_apelido",
+        "description": "Define o apelido de uma conta/cartão pelo número da lista de 'contas'. Só por comando explícito: 'apelido 2 Cartão da firma'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "indice": {"type": "integer", "description": "Número da conta na lista de 'contas'"},
+                "apelido": {"type": "string", "description": "Novo nome"}
+            },
+            "required": ["indice", "apelido"]
+        }
+    },
+    {
+        "name": "adicionar_banco",
+        "description": "Vincula um banco já conectado na Pluggy pelo código do item. Só por comando explícito: 'adicionar banco <código>'.",
+        "parameters": {
+            "type": "object",
+            "properties": {"item_id": {"type": "string", "description": "Código (id) do item na Pluggy"}},
+            "required": ["item_id"]
+        }
+    },
+    {
         "name": "listar_faturas_cartao",
         "description": "Lista as FATURAS FECHADAS do cartão de crédito mês a mês (fechamento, vencimento, total e se foi paga), direto do banco via Pluggy, e mostra a fatura aberta. Use para 'faturas', 'minhas faturas', 'faturas anteriores', 'histórico de faturas'.",
         "parameters": {"type": "object", "properties": {}}
@@ -222,7 +248,7 @@ SCHEMAS: list[dict] = [
 # Motivo: numa pergunta aberta como "como gastar 15 mil por mês", o modelo
 # interpretou como pedido de ação e sobrescreveu 8 limites de uma vez, sem
 # confirmação. Conselho/planejamento deve virar TEXTO, não escrita no banco.
-SOMENTE_DETERMINISTICAS: set[str] = {"definir_limite"}
+SOMENTE_DETERMINISTICAS: set[str] = {"definir_limite", "definir_apelido", "adicionar_banco"}
 
 # Versão dos schemas que é exposta ao Gemini (function calling).
 LLM_SCHEMAS: list[dict] = [s for s in SCHEMAS if s["name"] not in SOMENTE_DETERMINISTICAS]
@@ -326,26 +352,38 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
         case "sincronizar_banco":
                     account_id = args.get("account_id")
                     item_id = settings.default_item_id
+                    pluggy = PluggyService()   # dispara o Auth uma única vez
+                    atualizou_dados = False
 
                     if not account_id:
-                        padrao = db.get_pluggy_conta_padrao(user_phone)
-                        if not padrao:
-                            return {"mensagem": "⚠️ Nenhuma conta selecionada ainda. Digite 'listar contas' para ver as opções e escolher uma."}
-                        account_id = padrao["account_id"]
-                        item_id = padrao["item_id"] or item_id
+                        # Sem conta explícita: importa TODAS as contas conhecidas (e renova saldos/faturas).
+                        contas = []
+                        try:
+                            contas, _ = await dbk.garantir(lambda: pluggy, user_phone, forcar=True)
+                            atualizou_dados = True
+                        except Exception as e:
+                            logger.warning(f"Não consegui listar as contas na Pluggy ({e}); usando a conta padrão.")
+                        if len(contas) > 1:
+                            return {"mensagem": await dbk.sincronizar_todas(pluggy, user_phone, contas)}
 
-                    # Instancia o serviço (isso dispara o Auth)
-                    pluggy = PluggyService() 
-                    
-                    # Dispara o Transactions
+                        padrao = db.get_pluggy_conta_padrao(user_phone)
+                        if padrao:
+                            account_id = padrao["account_id"]
+                            item_id = padrao["item_id"] or item_id
+                        elif len(contas) == 1:
+                            account_id, item_id = contas[0]["id"], contas[0]["item_id"]
+                        else:
+                            return {"mensagem": "⚠️ Nenhuma conta selecionada ainda. Digite 'listar contas' para ver as opções e escolher uma."}
+
                     mensagem, _ = await pluggy.sync_user_transactions(user_phone, account_id, item_id)
                     # "sincronizar" também renova saldos e faturas guardados (best-effort: não atrapalha a resposta).
-                    try:
-                        await dbk.atualizar(lambda: pluggy, user_phone)
-                    except Exception as e:
-                        logger.warning(f"Não foi possível guardar saldos/faturas após sincronizar: {e}")
+                    if not atualizou_dados:
+                        try:
+                            await dbk.atualizar(lambda: pluggy, user_phone)
+                        except Exception as e:
+                            logger.warning(f"Não foi possível guardar saldos/faturas após sincronizar: {e}")
                     return {"mensagem": mensagem}
-    
+
         case "listar_gastos_detalhados":
             mes_arg = args.get("mes")
             pagina = int(args.get("pagina", 1))
@@ -803,6 +841,16 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 else:
                     due = fatura_vencimento(hoje.replace(day=1), dia_corte, dia_vencimento)
 
+            # Vários cartões (ou cartão pedido: "fatura nubank setembro"): um bloco por cartão, filtrado pela conta.
+            cartao_txt = (args.get("cartao") or "").strip()
+            try:
+                msg_cartoes = await dbk.mensagem_fatura_cartoes(PluggyService, user_phone, due, cartao_txt or None, pagina)
+            except Exception as e:
+                logger.warning(f"Fatura por cartão indisponível ({e}); usando o fluxo padrão.")
+                msg_cartoes = None
+            if msg_cartoes is not None:
+                return {"tipo_resposta_estruturada": "consultar_fatura", "mensagem": msg_cartoes}
+
             gastos = db.expenses_by_fatura(user_phone, due.isoformat(), dia_corte)
 
             if not gastos:
@@ -884,6 +932,23 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             return {
                 "mensagem": f"📅 *Fechamento do Mês Passado*\n\n💰 Receitas: R$ {_fmt_moeda(resumo['receitas'])}\n💸 Gastos Totais: R$ {_fmt_moeda(resumo['gastos'])}\n📉 Saldo: R$ {_fmt_moeda(resumo['saldo'])}"
             }
+
+        case "minhas_contas":
+            try:
+                return {"mensagem": await dbk.mensagem_contas(PluggyService, user_phone)}
+            except Exception as e:
+                logger.error(f"Falha ao listar contas: {e}")
+                return {"mensagem": "⚠️ Não consegui listar as contas agora. Tente novamente em instantes."}
+
+        case "definir_apelido":
+            return {"mensagem": dbk.definir_apelido(user_phone, int(args.get("indice") or 0), str(args.get("apelido") or ""))}
+
+        case "adicionar_banco":
+            try:
+                return {"mensagem": await dbk.adicionar_banco(PluggyService, user_phone, str(args.get("item_id") or ""))}
+            except Exception as e:
+                logger.error(f"Falha ao adicionar banco: {e}")
+                return {"mensagem": "⚠️ Não consegui adicionar o banco agora. Tente novamente em instantes."}
 
         case "listar_faturas_cartao":
             try:
