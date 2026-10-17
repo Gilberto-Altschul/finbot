@@ -319,6 +319,18 @@ def formatar_saldos(contas: list[dict]) -> str:
 
 
 # ── Acesso à Pluggy ──────────────────────────────────────────────────────────
+def _so_digitos(s: str | None) -> str:
+    return "".join(ch for ch in (s or "") if ch.isdigit())
+
+
+def _pode_descobrir_itens(user_phone: str) -> bool:
+    """Só os números listados em PLUGGY_FALLBACK_PHONES (ex.: o dono, antes de vincular o banco) podem
+    usar a descoberta automática de itens / item padrão do .env. Vazio = ninguém."""
+    import os
+    permitidos = {_so_digitos(p) for p in os.getenv("PLUGGY_FALLBACK_PHONES", "").split(",") if _so_digitos(p)}
+    return _so_digitos(user_phone) in permitidos
+
+
 async def _ids_dos_itens(pluggy, user_phone: str) -> list[str]:
     """Une os itens listados pela API, o item padrão do .env e o da conta escolhida pelo usuário."""
     import app.database as db
@@ -329,6 +341,10 @@ async def _ids_dos_itens(pluggy, user_phone: str) -> list[str]:
         # A tabela do usuário é a FONTE DA VERDADE: o item do .env e a listagem da Pluggy só servem para
         # descobrir o primeiro banco. Senão um item de teste do .env voltaria mesmo depois de removido.
         return list(dict.fromkeys(ids))
+    if not _pode_descobrir_itens(user_phone):
+        # Usuário novo: NÃO descobre bancos sozinho. A listagem da Pluggy traz os itens de TODA a aplicação
+        # (inclusive os do dono); cada pessoa precisa conectar o seu com "adicionar banco <código>".
+        return []
     try:
         for it in await pluggy.listar_itens():
             if it.get("id"):
