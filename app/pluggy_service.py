@@ -354,6 +354,24 @@ class PluggyService:
         logger.info(f"Status do item {item_id}: {data.get('status')}")
         return data.get("status")
 
+    def _inicio_janela(self, user_phone: str) -> date:
+        """Desde quando buscar na Pluggy. Número novo (nada importado ainda) começa no 1º dia do MÊS ATUAL,
+        sem puxar meses antigos. Depois disso a janela nunca recua além do mês da 1ª importação
+        (usuário antigo continua com os últimos JANELA_TRAS_DIAS dias)."""
+        hoje = date.today()
+        padrao = hoje - timedelta(days=JANELA_TRAS_DIAS)
+        try:
+            res = (db.get_db().table("finbot_expenses").select("purchase_date, pluggy_transaction_id")
+                   .ilike("user_phone", db._q(user_phone)).order("purchase_date").limit(500).execute())
+            datas = [str(r["purchase_date"])[:10] for r in (res.data or []) if r.get("pluggy_transaction_id") and r.get("purchase_date")]
+        except Exception as e:
+            logger.warning(f"Não consegui checar a 1ª importação ({e}); usando a janela padrão.")
+            return padrao
+        if not datas:
+            return hoje.replace(day=1)
+        primeira = date.fromisoformat(min(datas)).replace(day=1)
+        return max(padrao, primeira)
+
     async def sync_user_transactions(
         self, user_phone: str, account_id: str, item_id: str, billing_month_input: str | int | None = None,
         iniciar_revisao: bool = True,
@@ -375,7 +393,7 @@ class PluggyService:
         # disponíveis na Pluggy, sem perder o histórico recente de trás.
         params = {
             "accountId": account_id,
-            "dateFrom": (date.today() - timedelta(days=JANELA_TRAS_DIAS)).isoformat(),
+            "dateFrom": self._inicio_janela(user_phone).isoformat(),
             "dateTo": (date.today() + timedelta(days=60)).isoformat()
         }
         
