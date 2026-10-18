@@ -2,6 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # FinBot Categorizer — Motor Híbrido de Subcategorias e Inteligência de Merchants
 # ─────────────────────────────────────────────────────────────────────────────
+import contextvars
 import json
 import logging
 import app.database as db
@@ -11,6 +12,10 @@ from app.utils import _normalize, SISTEMA_CATEGORIAS
 from app.merchant import contem_termo, familia_ambigua
 
 logger = logging.getLogger(__name__)
+
+# De onde veio o último palpite: "llm" = a IA chutou um estabelecimento inédito (sem keyword nem histórico).
+# Quem chama (classificador) usa isso para PERGUNTAR em vez de gravar sozinho.
+ORIGEM_PALPITE: contextvars.ContextVar = contextvars.ContextVar("origem_palpite", default=None)
 
 
 # Termos curtos que viram falso positivo quando buscados como pedaço de outra palavra:
@@ -139,6 +144,7 @@ async def categorizar_gasto_hibrido(
     original de interromper e pedir confirmação humana.
     """
     desc_norm = _normalize(descricao)
+    ORIGEM_PALPITE.set(None)
 
     # Camada -1: Proteção Hardcoded para Família e Dependentes (Prioridade Máxima)
     if _tem_termo(desc_norm, _FAMILY_FORCE_TERMS):
@@ -257,7 +263,11 @@ async def categorizar_gasto_hibrido(
         cat = categoria_conhecida or data.get("categoria", "Outros")
         sub = data.get("subcategoria", "Outros")
 
-        if not eh_marketplace and cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"]:
+        # Palpite da IA para um lugar inédito NÃO é gravado como "aprendido": só vale depois que o usuário
+        # confirmar (senão um chute como "Salute" -> Saúde vira regra permanente sem ninguém ver).
+        if cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"] and not categoria_conhecida:
+            ORIGEM_PALPITE.set("llm")
+        elif cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"] and not eh_marketplace:
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)
 
         return cat, sub
