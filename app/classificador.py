@@ -128,3 +128,26 @@ async def classificar(user_phone: str, descricao: str,
         # Lugar inédito classificado só por chute da IA (ex.: "Salute Prime" -> Saúde): pergunta antes de valer.
         return Decisao(d.categoria, d.subcategoria, "revisar", CONF_DUVIDA, d.merchant_key, [(d.categoria, d.subcategoria)])
     return d
+
+
+# ── Receitas: categoria-pai sempre "Receitas", sem IA e sem pergunta ─────────
+_REGRAS_RECEITA = [
+    ("Salário", ("salario", "folha de pagamento", "proventos", "remuneracao", "pro labore", "prolabore")),
+    ("Rendimento", ("rendimento", "rendimentos", "juros", "dividendo", "dividendos", "jcp", "cdb", "resgate", "lci", "lca")),
+    ("Reembolso", ("estorno", "reembolso", "devolucao", "cashback", "reversao", "chargeback")),
+    ("Freelance e Bônus", ("freela", "freelance", "bonus", "premio", "comissao")),
+    ("Transferência Recebida", ("pix", "ted", "doc", "transferencia", "transf")),
+]
+
+
+def classificar_receita(descricao: str) -> Decisao:
+    """Toda entrada fica em Receitas (nunca categoria de gasto, ex.: "Família e Dependentes").
+    A subcategoria vem de palavras-chave simples; sem palavra, fica "Outros". Nunca pergunta, nunca chuta com IA."""
+    from app.utils import _normalize
+    palavras = set(_normalize(descricao or "").split())
+    sub = "Outros"
+    for nome, termos in _REGRAS_RECEITA:
+        if any((t in palavras) if " " not in t else (t in _normalize(descricao or "")) for t in termos):
+            sub = nome
+            break
+    return Decisao("Receitas", sub, "auto", CONF_REGRA, normalizar_merchant(descricao or ""), [])

@@ -9,8 +9,8 @@ import app.database as db
 from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
 from app.billing import _add_months
-from app.utils import _normalize, parse_mes_fatura
-from app.classificador import classificar, Decisao, tem_restaurante
+from app.utils import _normalize, parse_mes_fatura, get_lookup_prefix
+from app.classificador import classificar, classificar_receita, Decisao, tem_restaurante
 from app.merchant import normalizar_merchant, familia_ambigua
 from app import revisao
 from app import faturas as fat
@@ -439,6 +439,24 @@ class PluggyService:
                 faturas_pluggy = await self.listar_faturas(account_id)
             except Exception as e:
                 logger.warning(f"Faturas indisponíveis para a conta {account_id} ({e}); usando dia de corte.")
+        _cartoes_cache: list = []
+
+        async def _quita_fatura(descricao: str, valor: float, data_iso: str) -> bool:
+            """Carrega (1x por sincronização) os cartões do usuário com suas faturas e confere."""
+            if not _cartoes_cache:
+                key = get_lookup_prefix(user_phone)
+                contas = (db.get_db().table("finbot_contas").select("account_id, banco_nome, nome")
+                          .eq("user_key", key).eq("tipo", "CREDIT").execute().data or [])
+                for c in contas:
+                    try:
+                        bills = await self.listar_faturas(c["account_id"])
+                    except Exception:
+                        continue
+                    _cartoes_cache.append({"banco": c.get("banco_nome") or c.get("nome") or "", "bills": bills})
+                if not _cartoes_cache:
+                    _cartoes_cache.append({"banco": "", "bills": []})   # marca "já carregado, sem cartões"
+            return fat.pagamento_de_fatura(descricao, valor, date.fromisoformat(data_iso), _cartoes_cache)
+
         ciclos = fat.montar_ciclos(faturas_pluggy)
         if ciclos and account_id:
             try:
@@ -553,6 +571,15 @@ class PluggyService:
                 elif desc_lower_check.startswith(("tarifa", "anuidade")):
                     tipo = "expense"
 
+            # Quitação de fatura pela conta corrente: o gasto já está nas compras do cartão.
+            if tipo == "expense" and not eh_credito:
+                try:
+                    if await _quita_fatura(descricao, abs(raw_amount), (tx.get("date") or tx.get("transactionDate", ""))[:10]):
+                        logger.info(f"Ignorando pagamento de fatura do cartão (valor e banco conferem): {descricao}")
+                        continue
+                except Exception as e:
+                    logger.warning(f"Não consegui checar se '{descricao}' quita fatura ({e}); mantendo o lançamento.")
+
             categoria_pluggy = tx.get("category")
             categoria_dica = CATEGORIA_PLUGGY_PARA_PT.get(categoria_pluggy)
 
@@ -647,6 +674,8 @@ class PluggyService:
 
         grupos: dict[str, list[int]] = {}
         for idx, item in enumerate(preparadas):
+            if item["tipo"] == "income":   # receita: regra fixa em "Receitas", sem IA e sem pergunta
+                continue
             grupos.setdefault(_chave_grupo(item), []).append(idx)
 
         chaves_unicas = list(grupos.keys())
@@ -660,6 +689,9 @@ class PluggyService:
         for chave, decisao in zip(chaves_unicas, resultados_unicos):
             for idx in grupos[chave]:
                 resultados[idx] = decisao
+        for idx, item in enumerate(preparadas):
+            if item["tipo"] == "income":
+                resultados[idx] = classificar_receita(item["descricao"])
 
         # ── Fase 3: monta as linhas para inserção ────────────────────────────
         cache_sub_id: dict[str, int | None] = {}

@@ -384,3 +384,38 @@ async def carregar_contas(pluggy, user_phone: str) -> list[dict]:
         except Exception as e:
             logger.warning(f"Falha ao ler contas do item {item_id}: {e}")
     return bancos.aplicar_nomes(contas)
+
+
+# ── Pagamento da fatura pela conta corrente ─────────────────────────────────
+# O gasto já está nas compras do cartão; o boleto/Pix que quita a fatura não pode contar de novo.
+_PALAVRAS_SOLTAS = {"banco", "bank", "s", "a", "sa", "de", "do", "da", "e", "holding", "ltda", "cartao", "cartoes", "credito"}
+_APELIDOS_BANCO = {"nubank": {"nu", "nubank"}, "nu": {"nu", "nubank"}, "inter": {"inter"}, "itau": {"itau"},
+                   "bradesco": {"bradesco"}, "santander": {"santander"}, "c6": {"c6"}}
+
+
+def _palavras_banco(nome: str) -> set[str]:
+    from app.utils import _normalize
+    palavras = {p for p in _normalize(nome or "").split() if p not in _PALAVRAS_SOLTAS and len(p) >= 2}
+    extra = set()
+    for p in palavras:
+        extra |= _APELIDOS_BANCO.get(p, set())
+    return palavras | extra
+
+
+def pagamento_de_fatura(descricao: str, valor: float, data: date, cartoes: list[dict]) -> bool:
+    """True quando a saída da conta é a quitação de uma fatura: o texto cita o banco de um cartão do
+    usuário E o valor bate (±R$ 0,01) com um pagamento informado pela Pluggy (±3 dias) ou com o total
+    de uma fatura (±10 dias do vencimento). `cartoes` = [{"banco": "C6 Bank", "bills": [...]}]."""
+    from app.utils import _normalize
+    palavras_desc = set(_normalize(descricao or "").split())
+    for cartao in cartoes or []:
+        if not (_palavras_banco(cartao.get("banco", "")) & palavras_desc):
+            continue
+        bills = cartao.get("bills") or []
+        for dia, v in _pagamentos(bills):
+            if abs(v - valor) <= 0.01 and abs((data - dia).days) <= 3:
+                return True
+        for c in montar_ciclos(bills):
+            if c.total is not None and abs(float(c.total) - valor) <= 0.01 and abs((data - c.vencimento).days) <= 10:
+                return True
+    return False
