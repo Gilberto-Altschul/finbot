@@ -215,6 +215,14 @@ def resolver_payload(user_phone: str, payload: str) -> str | None:
     return n if est and est.get("qid") == qid else None
 
 
+def _como_inteiro(v) -> int | None:
+    """Converte para int só se for número de verdade (None, "None", "" -> None)."""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def responder(user_phone: str, texto: str) -> str:
     from app.ingestion import _resolver_categoria  # import tardio: ingestion também importa este módulo
     est = ler_estado(user_phone)
@@ -236,13 +244,20 @@ def responder(user_phone: str, texto: str) -> str:
         rotina.invalidar(user_phone)
         antes = rotina.perfil(user_phone)
     peso = 1 if est["familia"] else MIN_AMOSTRAS   # marketplace precisa se repetir; o resto aprende de 1 resposta
-    sub_id = db.get_subcategory_id_by_name(sub)
-    campos = {"category": cat, "subcategory": sub, "review_status": "confirmado", "confidence": 1.0}
-    if sub_id:
-        campos["subcategory_id"] = sub_id
-    for i in range(0, len(est["ids"]), 50):
-        (db.get_db().table("finbot_expenses").update(campos)
-         .in_("id", est["ids"][i:i + 50]).ilike("user_phone", db._q(user_phone)).execute())
+    etapa = "buscar subcategoria"
+    try:
+        sub_id = _como_inteiro(db.get_subcategory_id_by_name(sub))   # só número válido vai para a coluna bigint
+        campos = {"category": cat, "subcategory": sub, "review_status": "confirmado", "confidence": 1.0}
+        if sub_id:
+            campos["subcategory_id"] = sub_id
+        etapa = "atualizar lançamentos"
+        ids = [i for i in (_como_inteiro(x) for x in est["ids"]) if i]   # descarta None/"None"
+        for i in range(0, len(ids), 50):
+            (db.get_db().table("finbot_expenses").update(campos)
+             .in_("id", ids[i:i + 50]).ilike("user_phone", db._q(user_phone)).execute())
+    except Exception as exc:
+        raise RuntimeError(f"etapa '{etapa}' ({cat}/{sub}, sub_id={sub_id if etapa != 'buscar subcategoria' else '?'}, "
+                           f"ids={est['ids'][:5]}): {exc}") from exc
     registrar_resposta(user_phone, est["learn_key"], cat, sub, peso)
 
     n = len(est["ids"])
