@@ -125,11 +125,39 @@ def _dia_venc_tipico(ciclos: list[Ciclo]) -> int | None:
     return max(set(dias), key=lambda d: (dias.count(d), dias[::-1].index(d) * -1))
 
 
+def _pascoa(ano: int) -> date:
+    a, b, c = ano % 19, ano // 100, ano % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes, dia = divmod(h + l - 7 * m + 114, 31)
+    return date(ano, mes, dia + 1)
+
+
+def feriados_bancarios(ano: int) -> set[date]:
+    """Feriados nacionais em que o banco não funciona (fixos + Carnaval, Sexta Santa e Corpus Christi)."""
+    p = _pascoa(ano)
+    fixos = [(1, 1), (4, 21), (5, 1), (9, 7), (10, 12), (11, 2), (11, 15), (11, 20), (12, 25)]
+    moveis = [p - timedelta(days=48), p - timedelta(days=47), p - timedelta(days=2), p + timedelta(days=60)]
+    return {date(ano, m, d) for m, d in fixos} | set(moveis)
+
+
+def proximo_dia_util(d: date) -> date:
+    """Se cair em fim de semana ou feriado bancário, anda para o próximo dia útil (regra de vencimento do banco)."""
+    while d.weekday() >= 5 or d in feriados_bancarios(d.year):
+        d += timedelta(days=1)
+    return d
+
+
 def proximo_ciclo(ultimo: Ciclo, dia_venc: int | None = None) -> Ciclo:
     """Estima o ciclo seguinte: repete o dia de fechamento do último e o dia típico de vencimento."""
     base = _soma_meses(date(ultimo.vencimento.year, ultimo.vencimento.month, 1), 1)
     dia = min(dia_venc or ultimo.vencimento.day, calendar.monthrange(base.year, base.month)[1])
-    venc = base.replace(day=dia)
+    venc = proximo_dia_util(base.replace(day=dia))
     if ultimo.dia_fixo:
         return Ciclo(_fechamento_fixo(venc, ultimo.dia_fixo), venc, None, None,
                      estimado=True, fechamento_estimado=True, dia_fixo=ultimo.dia_fixo)

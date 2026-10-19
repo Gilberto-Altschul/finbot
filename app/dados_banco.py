@@ -21,7 +21,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-19d · cartão: janela por fatura"
+VERSAO = "2026-10-19e · cartão: janela por fatura + vencimento em dia útil"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -121,7 +121,7 @@ def vencimento_do_mes(user_phone: str, ano: int, mes: int, account_id: str | Non
                 if (ultimo.vencimento.year, ultimo.vencimento.month) == (ano, mes):
                     return ultimo.vencimento
             if dia:  # mês anterior ao histórico guardado: mantém o dia típico
-                return date(ano, mes, min(dia, monthrange(ano, mes)[1]))
+                return fat.proximo_dia_util(date(ano, mes, min(dia, monthrange(ano, mes)[1])))
     except Exception as e:
         logger.warning(f"vencimento_do_mes falhou: {e}")
     return None
