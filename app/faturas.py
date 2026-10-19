@@ -419,3 +419,8 @@ def pagamento_de_fatura(descricao: str, valor: float, data: date, cartoes: list[
             if c.total is not None and abs(float(c.total) - valor) <= 0.01 and abs((data - c.vencimento).days) <= 10:
                 return True
     return False
+
+
+def aplicar_piso_fatura(rows: list[dict], piso_iso: str) -> list[dict]:
+    """Tira lançamentos de CARTÃO de faturas anteriores ao piso (YYYY-MM-DD). Conta/débito não é afetado."""
+    return [r for r in rows if not (r.get("payment_method") == "credito" and str(r.get("billing_date"))[:10] < piso_iso)]

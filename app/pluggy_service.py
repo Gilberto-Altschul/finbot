@@ -354,6 +354,15 @@ class PluggyService:
         logger.info(f"Status do item {item_id}: {data.get('status')}")
         return data.get("status")
 
+    async def _eh_cartao(self, item_id: str, account_id: str) -> bool:
+        try:
+            for c in await self.listar_contas(item_id):
+                if c.get("id") == account_id:
+                    return c.get("type") == "CREDIT"
+        except Exception as e:
+            logger.warning(f"Não consegui saber se {account_id} é cartão ({e}).")
+        return False
+
     def _inicio_janela(self, user_phone: str) -> date:
         """Desde quando buscar na Pluggy. Número novo (nada importado ainda) começa no 1º dia do MÊS ATUAL,
         sem puxar meses antigos. Depois disso a janela nunca recua além do mês da 1ª importação
@@ -391,9 +400,15 @@ class PluggyService:
         # da compra), mas as seguintes nunca eram buscadas na Pluggy. Estende
         # a janela 60 dias pra frente pra capturar parcelas futuras já
         # disponíveis na Pluggy, sem perder o histórico recente de trás.
+        if fat._pode_descobrir_itens(user_phone):
+            inicio = date.today() - timedelta(days=JANELA_TRAS_DIAS)      # dono: histórico completo (120 dias)
+        elif await self._eh_cartao(item_id, account_id):
+            inicio = date.today() - timedelta(days=JANELA_TRAS_DIAS)      # cartão: parcelas antigas ainda abertas; o corte vem depois, por fatura
+        else:
+            inicio = self._inicio_janela(user_phone)
         params = {
             "accountId": account_id,
-            "dateFrom": self._inicio_janela(user_phone).isoformat(),
+            "dateFrom": inicio.isoformat(),
             "dateTo": (date.today() + timedelta(days=60)).isoformat()
         }
         
@@ -763,6 +778,29 @@ class PluggyService:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
             
+        # Cartão de quem não é o dono: só entra o que ainda pesa em fatura aberta/futura (inclui parcelas
+        # de compras antigas e as compras do ciclo aberto), sem despejar faturas já fechadas.
+        # Piso = 1ª fatura já importada deste cartão; se não há nenhuma, o mês da fatura aberta.
+        if account_id and not fat._pode_descobrir_itens(user_phone) and any(r["payment_method"] == "credito" for r in rows):
+            piso = None
+            try:
+                ja = (db.get_db().table("finbot_expenses").select("billing_date")
+                      .ilike("user_phone", db._q(user_phone)).eq("account_id", account_id)
+                      .order("billing_date").limit(1).execute().data or [])
+                if ja and ja[0].get("billing_date"):
+                    piso = str(ja[0]["billing_date"])[:10]
+            except Exception as e:
+                logger.warning(f"Não consegui ler o piso de fatura do cartão ({e}).")
+            if piso is None:
+                aberto = fat.ciclo_aberto(ciclos, date.today())
+                if aberto is not None:
+                    piso = aberto.vencimento.replace(day=1).isoformat()
+            if piso:
+                antes = len(rows)
+                rows = fat.aplicar_piso_fatura(rows, piso)
+                if len(rows) != antes:
+                    logger.info(f"Cartão {account_id}: {antes - len(rows)} lançamento(s) de faturas anteriores a {piso} não importados.")
+
         # Contar ANTES: inserir_gastos_em_lote criptografa user_phone dentro das rows.
         n_revisar = sum(1 for r in rows if r["review_status"] == "revisar")
         n_auto = len(rows) - n_revisar
