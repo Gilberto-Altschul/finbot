@@ -2,7 +2,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # FinBot Agent — o cérebro do sistema (Versão Unificada, Corrigida e Produção)
 # ─────────────────────────────────────────────────────────────────────────────
-#
 from __future__ import annotations
 
 import json
@@ -735,4 +734,4 @@ async def run(user_phone: str, user_message: str) -> str:
             reply = "⚠️ *Aviso do FinBot:* Minha cota diária de inteligência artificial gratuita foi atingida para hoje.\n\nMas você ainda pode registrar gastos digitando no padrão natural! Ex: `Padaria 15,90`"
 
     db.save_message(user_phone, "assistant", reply)
-    return reply
+    return reply

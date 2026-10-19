@@ -287,7 +287,8 @@ async def async_process_revisao(user_phone: str, resposta_usuario: str):
         await asyncio.to_thread(_send_whatsapp, user_phone, reply)
     except Exception as exc:
         logger.error(f"Erro ao processar revisão de {user_phone}: {exc}", exc_info=True)
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Não consegui aplicar essa categoria. Suas transações continuam salvas — tente de novo.")
+        detalhe = f"\n\n🔧 {type(exc).__name__}: {str(exc)[:300]}" if os.getenv("FINBOT_DEBUG") == "1" else ""
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Não consegui aplicar essa categoria. Suas transações continuam salvas — tente de novo." + detalhe)
 
 
 async def async_process_retomar_revisao(user_phone: str):
