@@ -4,6 +4,7 @@
 # O estado da conversa fica em finbot_user_connections (status + pending_transactions),
 # sem tabela nova e sem expirar: se o usuário sumir, nada se perde.
 import json
+import re
 import uuid
 import logging
 from dataclasses import dataclass, field
@@ -108,6 +109,15 @@ _COMANDOS_RESERVADOS = {
 }
 
 
+# Aberturas típicas de conversa/pergunta: nunca são resposta à revisão.
+_INICIOS_DE_CONVERSA = {
+    "oi", "olá", "ola", "bom", "boa", "obrigado", "obrigada", "valeu", "quanto", "quando", "qual",
+    "quais", "como", "onde", "quem", "por", "que", "o", "me", "meu", "minha", "gastei", "paguei",
+    "comprei", "recebi", "apagar", "excluir", "deletar", "cancelar", "editar", "alterar", "mudar",
+    "sim", "não", "nao", "ok", "teste",
+}
+
+
 def eh_resposta_de_revisao(texto: str, resolver) -> bool:
     """Evita capturar conversa normal: só números curtos ou palavras que o dicionário reconhece."""
     t = (texto or "").strip().lower()
@@ -120,7 +130,15 @@ def eh_resposta_de_revisao(texto: str, resolver) -> bool:
     # Só palavra EXATA do dicionário: com fuzzy, "saldo" virava "salão" e sequestrava o comando.
     from app.ingestion import resolver_exato
     achado = resolver_exato(t)
-    return bool(achado and achado[0] != "Outros")
+    if achado:
+        return achado[0] != "Outros"
+    # Frase curta e sem número ("lava rápido") com pergunta aberta é quase certamente a resposta:
+    # captura e, se não reconhecer, o responder pede de novo em vez de tratar como gasto novo.
+    palavras = t.split()
+    if (len(palavras) <= 3 and not re.search(r"\d|\?", t)
+            and palavras[0] not in _INICIOS_DE_CONVERSA):
+        return True
+    return False
 
 
 # ── Estado (finbot_user_connections) ─────────────────────────────────────────
@@ -232,7 +250,7 @@ def responder(user_phone: str, texto: str) -> str:
     acao, escolha = interpretar_resposta(texto, ops, _resolver_categoria)
 
     if acao == "invalida":
-        return "Não entendi 🤔 Responda com o número, uma palavra (ex: _mercado_) ou *0* para pular."
+        return "Não entendi essa categoria 🤔 Responda com o número, uma palavra que eu conheça (ex: _mercado_, _oficina_) ou *0* para pular."
 
     if acao == "pular":
         proxima = iniciar(user_phone, est["faltam"], est["pulados"] + [est["key"]])
