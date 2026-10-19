@@ -422,6 +422,11 @@ class PluggyService:
         )
         tx_resp.raise_for_status()
         transactions = tx_resp.json().get("results", [])
+        if not fat._pode_descobrir_itens(user_phone) and not await self._eh_cartao(item_id, account_id):
+            antes = len(transactions)
+            transactions = fat.filtrar_desde(transactions, inicio.isoformat())   # conta de usuário novo: nada antes do início
+            if len(transactions) != antes:
+                logger.info(f"Conta {account_id}: {antes - len(transactions)} lançamento(s) anteriores a {inicio} descartados.")
         
         # 4. Repassa o billing_date_override para o processamento
         return await self._process_transactions(

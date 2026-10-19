@@ -464,3 +464,15 @@ def piso_cartao_novo(ciclos: list["Ciclo"], hoje: date | None = None) -> str | N
     fechados = [c for c in ciclos if c.fechamento < hoje]
     alvo = fechados[-1] if fechados else ciclo_aberto(ciclos, hoje)
     return alvo.vencimento.replace(day=1).isoformat() if alvo is not None else None
+
+
+def filtrar_desde(transacoes: list[dict], inicio_iso: str) -> list[dict]:
+    """Rede de segurança da conta corrente de usuário novo: descarta o que for anterior ao início da janela,
+    mesmo que a Pluggy devolva (ela pode filtrar por outra data). Sem data legível, mantém."""
+    saida = []
+    for t in transacoes or []:
+        d = str(t.get("date") or t.get("transactionDate") or "")[:10]
+        if d and d < inicio_iso:
+            continue
+        saida.append(t)
+    return saida
