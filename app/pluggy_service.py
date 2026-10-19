@@ -19,7 +19,17 @@ logger = logging.getLogger(__name__)
 
 # Quantos dias para trás buscar na Pluggy. 45 dias cortava compras de faturas JÁ FECHADAS
 # (a fatura que venceu em 01/10 cobre compras desde 26/08). 120 cobre ~4 ciclos.
-JANELA_TRAS_DIAS = 120
+JANELA_TRAS_DIAS = 120   # padrão; conta corrente pode mudar com FINBOT_JANELA_DIAS (cartão nunca fica abaixo disto)
+
+
+def janela_dias() -> int:
+    """Quantos dias para trás buscar na CONTA CORRENTE (dono e usuário antigo). Env FINBOT_JANELA_DIAS, 1 a 365."""
+    import os
+    try:
+        v = int(os.getenv("FINBOT_JANELA_DIAS", "").strip() or JANELA_TRAS_DIAS)
+    except ValueError:
+        return JANELA_TRAS_DIAS
+    return max(1, min(v, 365))
 settings = get_settings()
 
 # Mapa das categorias oficiais da Pluggy (docs.pluggy.ai/docs/transaction-categories)
@@ -368,7 +378,7 @@ class PluggyService:
         MÊS ATUAL, sem puxar meses antigos. Depois disso a janela nunca recua além do mês da 1ª importação de conta
         (usuário antigo continua com os últimos JANELA_TRAS_DIAS dias). Cartão tem regra própria (piso por fatura)."""
         hoje = date.today()
-        padrao = hoje - timedelta(days=JANELA_TRAS_DIAS)
+        padrao = hoje - timedelta(days=janela_dias())
         try:
             res = (db.get_db().table("finbot_expenses").select("purchase_date, pluggy_transaction_id, payment_method")
                    .ilike("user_phone", db._q(user_phone)).order("purchase_date").limit(500).execute())
@@ -402,10 +412,12 @@ class PluggyService:
         # da compra), mas as seguintes nunca eram buscadas na Pluggy. Estende
         # a janela 60 dias pra frente pra capturar parcelas futuras já
         # disponíveis na Pluggy, sem perder o histórico recente de trás.
-        if fat._pode_descobrir_itens(user_phone):
-            inicio = date.today() - timedelta(days=JANELA_TRAS_DIAS)      # dono: histórico completo (120 dias)
-        elif await self._eh_cartao(item_id, account_id):
-            inicio = date.today() - timedelta(days=JANELA_TRAS_DIAS)      # cartão: parcelas antigas ainda abertas; o corte vem depois, por fatura
+        eh_cartao = await self._eh_cartao(item_id, account_id)
+        if eh_cartao:
+            # cartão: parcelas antigas ainda abertas; nunca abaixo de 120 dias. O corte vem depois, por fatura.
+            inicio = date.today() - timedelta(days=max(JANELA_TRAS_DIAS, janela_dias()))
+        elif fat._pode_descobrir_itens(user_phone):
+            inicio = date.today() - timedelta(days=janela_dias())          # dono: conta corrente com FINBOT_JANELA_DIAS (padrão 120)
         else:
             inicio = self._inicio_janela(user_phone)
         params = {
@@ -422,7 +434,7 @@ class PluggyService:
         )
         tx_resp.raise_for_status()
         transactions = tx_resp.json().get("results", [])
-        if not fat._pode_descobrir_itens(user_phone) and not await self._eh_cartao(item_id, account_id):
+        if not fat._pode_descobrir_itens(user_phone) and not eh_cartao:
             antes = len(transactions)
             transactions = fat.filtrar_desde(transactions, inicio.isoformat())   # conta de usuário novo: nada antes do início
             if len(transactions) != antes:
