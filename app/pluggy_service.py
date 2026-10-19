@@ -364,15 +364,17 @@ class PluggyService:
         return False
 
     def _inicio_janela(self, user_phone: str) -> date:
-        """Desde quando buscar na Pluggy. Número novo (nada importado ainda) começa no 1º dia do MÊS ATUAL,
-        sem puxar meses antigos. Depois disso a janela nunca recua além do mês da 1ª importação
-        (usuário antigo continua com os últimos JANELA_TRAS_DIAS dias)."""
+        """Desde quando buscar na Pluggy (CONTA CORRENTE). Número novo (nada importado ainda) começa no 1º dia do
+        MÊS ATUAL, sem puxar meses antigos. Depois disso a janela nunca recua além do mês da 1ª importação de conta
+        (usuário antigo continua com os últimos JANELA_TRAS_DIAS dias). Cartão tem regra própria (piso por fatura)."""
         hoje = date.today()
         padrao = hoje - timedelta(days=JANELA_TRAS_DIAS)
         try:
-            res = (db.get_db().table("finbot_expenses").select("purchase_date, pluggy_transaction_id")
+            res = (db.get_db().table("finbot_expenses").select("purchase_date, pluggy_transaction_id, payment_method")
                    .ilike("user_phone", db._q(user_phone)).order("purchase_date").limit(500).execute())
-            datas = [str(r["purchase_date"])[:10] for r in (res.data or []) if r.get("pluggy_transaction_id") and r.get("purchase_date")]
+            # Só conta corrente: parcela antiga de cartão (compra em agosto, fatura em novembro) não pode fazer a conta recuar.
+            datas = [str(r["purchase_date"])[:10] for r in (res.data or [])
+                     if r.get("pluggy_transaction_id") and r.get("purchase_date") and r.get("payment_method") != "credito"]
         except Exception as e:
             logger.warning(f"Não consegui checar a 1ª importação ({e}); usando a janela padrão.")
             return padrao
