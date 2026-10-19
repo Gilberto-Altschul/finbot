@@ -21,7 +21,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-19e · cartão: janela por fatura + vencimento em dia útil"
+VERSAO = "2026-10-19g · cartão novo: última fechada + aberta"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -347,14 +347,20 @@ def _creditos_da_fatura(user_phone: str, due: date) -> list[dict]:
 
 
 def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,
-                  detalhar: bool, pagina: int, page_size: int = 15, creditos: list[dict] | None = None) -> str:
+                  detalhar: bool, pagina: int, page_size: int = 15, creditos: list[dict] | None = None,
+                  fecha_em: date | None = None) -> str:
+    """`fecha_em` preenchido = fatura ainda ABERTA (fecha nessa data): mostra "compras até agora" e avisa que as
+    parcelas de compras anteriores só entram quando ela fecha, em vez de acusar diferença com o banco."""
     bruto = round(sum(float(g["amount"]) for g in gastos), 2)
     abatido = round(sum(abs(float(c["amount"])) for c in (creditos or [])), 2)
     total = round(bruto - abatido, 2)
-    msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 Total no FinBot: *R$ {fat.fmt_moeda(total)}*\n"
+    rotulo = "Compras até agora" if fecha_em else "Total no FinBot"
+    msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 {rotulo}: *R$ {fat.fmt_moeda(total)}*\n"
     if abatido:
         msg += f"↩️ Já abatidos créditos/estornos: R$ {fat.fmt_moeda(abatido)}\n"
-    if total_banco is not None:
+    if fecha_em:
+        msg += f"⏳ Fatura aberta: as parcelas de compras anteriores só entram quando ela fecha ({fecha_em.strftime('%d/%m')}).\n"
+    elif total_banco is not None:
         msg += f"🏦 Fatura no banco: R$ {fat.fmt_moeda(total_banco)}\n"
         dif = round(total_banco - total, 2)
         if abs(dif) > 0.01:
@@ -422,7 +428,14 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
             total_banco = None
         due_c = vencimento_do_mes(user_phone, due.year, due.month, c["id"]) or due   # cada cartão tem o seu vencimento
         creds = [x for x in creditos if x.get("account_id") == c["id"] or (len(cartoes) == 1 and not x.get("account_id"))]
-        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds))
+        fecha_em = None
+        try:
+            ab = fat.ciclo_aberto([ci for ci, _ in ler_faturas(user_phone, c["id"])], hoje_local())
+            if ab is not None and ab.fechamento >= hoje_local() and (ab.vencimento.year, ab.vencimento.month) == (due_c.year, due_c.month):
+                fecha_em = ab.fechamento
+        except Exception as e:
+            logger.warning(f"Não consegui saber se a fatura de {c['nome']} está aberta: {e}")
+        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds, fecha_em=fecha_em))
         if detalhar:
             try:
                 from app import tools as _tools   # import tardio: tools importa este módulo

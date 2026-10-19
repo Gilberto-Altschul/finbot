@@ -278,8 +278,9 @@ def formatar_lista_faturas(itens: list[tuple[Ciclo, str]], saldo_aberto: float |
         linhas.append("\n_* fechamento estimado (o banco não informou)_")
     aberto = ciclo_aberto([c for c, _ in itens], hoje)
     if aberto is not None and saldo_aberto is not None:
-        linhas.append(f"\n🟡 *Aberta agora:* R$ {fmt_moeda(saldo_aberto)} "
-                      f"(fecha ~{_dm(aberto.fechamento)}, vence ~{_dm(aberto.vencimento)})")
+        linhas.append(f"\n🟡 *Aberta agora:* R$ {fmt_moeda(saldo_aberto)} (saldo devedor do cartão; "
+                      f"fecha ~{_dm(aberto.fechamento)}, vence ~{_dm(aberto.vencimento)})\n"
+                      f"_As parcelas de compras anteriores só entram na fatura quando ela fecha._")
     return "\n".join(linhas)
 
 
@@ -293,7 +294,7 @@ def formatar_aberta(ciclos: list[Ciclo], saldo_aberto: float | None, hoje: date 
     if saldo_aberto is None:
         return "💳 Não consegui ler a fatura aberta do cartão agora."
     aberto = ciclo_aberto(ciclos, hoje)
-    msg = f"💳 *Fatura aberta:* R$ {fmt_moeda(saldo_aberto)}"
+    msg = f"💳 *Fatura aberta:* R$ {fmt_moeda(saldo_aberto)} (saldo devedor do cartão)"
     if aberto is not None:
         msg += (f"\nFecha{' por volta de' if aberto.estimado else ''} {_dm(aberto.fechamento)} · "
                 f"vence{' por volta de' if aberto.estimado else ''} {_dm(aberto.vencimento)}")
@@ -337,9 +338,11 @@ def formatar_saldos(contas: list[dict]) -> str:
     if contas_banco and cartoes:
         linhas.append("")
     for c in cartoes:
-        linhas.append(f"{c['nome']} (fatura aberta): R$ {fmt_moeda(c['saldo'])}")
+        linhas.append(f"{c['nome']} (saldo devedor): R$ {fmt_moeda(c['saldo'])}")
     if len(cartoes) > 1:
-        linhas.append(f"*Total em faturas: R$ {fmt_moeda(sum(c['saldo'] for c in cartoes))}*")
+        linhas.append(f"*Total nos cartões: R$ {fmt_moeda(sum(c['saldo'] for c in cartoes))}*")
+    if cartoes:
+        linhas.append("_Saldo devedor = fatura aberta + parcelas futuras. Digite *fatura* para ver as compras da fatura aberta._")
     quando = next((_atualizado_em(c.get("atualizado_iso")) for c in contas if c.get("atualizado_iso")), "")
     if quando:
         linhas.append(f"\n_{quando}_")
@@ -452,3 +455,12 @@ def pagamento_de_fatura(descricao: str, valor: float, data: date, cartoes: list[
 def aplicar_piso_fatura(rows: list[dict], piso_iso: str) -> list[dict]:
     """Tira lançamentos de CARTÃO de faturas anteriores ao piso (YYYY-MM-DD). Conta/débito não é afetado."""
     return [r for r in rows if not (r.get("payment_method") == "credito" and str(r.get("billing_date"))[:10] < piso_iso)]
+
+
+def piso_cartao_novo(ciclos: list["Ciclo"], hoje: date | None = None) -> str | None:
+    """Cartão sem nada importado: começa na ÚLTIMA fatura fechada (mesmo já paga), e assim traz também a aberta
+    e as parcelas futuras. Sem fatura fechada conhecida, começa na aberta. Devolve YYYY-MM-DD (dia 1 do mês de vencimento)."""
+    hoje = hoje or date.today()
+    fechados = [c for c in ciclos if c.fechamento < hoje]
+    alvo = fechados[-1] if fechados else ciclo_aberto(ciclos, hoje)
+    return alvo.vencimento.replace(day=1).isoformat() if alvo is not None else None

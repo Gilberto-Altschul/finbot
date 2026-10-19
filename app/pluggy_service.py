@@ -780,7 +780,7 @@ class PluggyService:
             
         # Cartão de quem não é o dono: só entra o que ainda pesa em fatura aberta/futura (inclui parcelas
         # de compras antigas e as compras do ciclo aberto), sem despejar faturas já fechadas.
-        # Piso = 1ª fatura já importada deste cartão; se não há nenhuma, o mês da fatura aberta.
+        # Piso = 1ª fatura já importada deste cartão; se não há nenhuma, a última fatura fechada.
         if account_id and not fat._pode_descobrir_itens(user_phone) and any(r["payment_method"] == "credito" for r in rows):
             piso = None
             try:
@@ -792,9 +792,7 @@ class PluggyService:
             except Exception as e:
                 logger.warning(f"Não consegui ler o piso de fatura do cartão ({e}).")
             if piso is None:
-                aberto = fat.ciclo_aberto(ciclos, date.today())
-                if aberto is not None:
-                    piso = aberto.vencimento.replace(day=1).isoformat()
+                piso = fat.piso_cartao_novo(ciclos, date.today())   # última fatura fechada + a aberta + parcelas futuras
             if piso:
                 antes = len(rows)
                 rows = fat.aplicar_piso_fatura(rows, piso)
