@@ -221,6 +221,28 @@ def _levenshtein(a: str, b: str) -> int:
     return previous_row[-1]
 
 
+_POR_NOME: dict[str, tuple[str, str]] = {}
+
+
+def resolver_exato(texto: str) -> tuple[str, str] | None:
+    """Palavra-chave exata OU nome exato de uma subcategoria ("Ferramentas e Software"), sem fuzzy."""
+    import unicodedata
+
+    def _normalize(x: str) -> str:   # minúsculas, sem acento, espaços simples
+        x = unicodedata.normalize("NFKD", x or "").encode("ascii", "ignore").decode()
+        return " ".join(x.lower().split())
+
+    t = (texto or "").strip().lower()
+    achado = SUBCATEGORIA_MAP.get(t)
+    if achado:
+        return achado
+    if not _POR_NOME:
+        for cat, sub in SUBCATEGORIA_MAP.values():
+            if sub and sub != "Outros":
+                _POR_NOME.setdefault(_normalize(sub), (cat, sub))
+    return _POR_NOME.get(_normalize(t))
+
+
 def _resolver_categoria(subcategoria_input: str) -> tuple[str, str] | None:
     """
     Resolve (categoria, subcategoria) a partir de uma palavra do usuário.
@@ -230,8 +252,8 @@ def _resolver_categoria(subcategoria_input: str) -> tuple[str, str] | None:
     """
     inp = subcategoria_input.strip().lower()
 
-    # Match exato
-    exato = SUBCATEGORIA_MAP.get(inp, None)
+    # Match exato (palavra-chave ou nome da subcategoria)
+    exato = resolver_exato(inp)
     if exato:
         return exato
 

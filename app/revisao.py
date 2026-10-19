@@ -111,15 +111,15 @@ _COMANDOS_RESERVADOS = {
 def eh_resposta_de_revisao(texto: str, resolver) -> bool:
     """Evita capturar conversa normal: só números curtos ou palavras que o dicionário reconhece."""
     t = (texto or "").strip().lower()
-    if not t or len(t) > 30:
+    if not t or len(t) > 40:
         return False
     if t.isdigit() or t in ("pular", "depois", "pula"):
         return True
     if t in _COMANDOS_RESERVADOS:
         return False
     # Só palavra EXATA do dicionário: com fuzzy, "saldo" virava "salão" e sequestrava o comando.
-    from app.ingestion import SUBCATEGORIA_MAP
-    achado = SUBCATEGORIA_MAP.get(t)
+    from app.ingestion import resolver_exato
+    achado = resolver_exato(t)
     return bool(achado and achado[0] != "Outros")
 
 
