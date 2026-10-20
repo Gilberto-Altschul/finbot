@@ -32,6 +32,21 @@ def _tem_termo(texto_norm: str, termos: list[str]) -> bool:
     return False
 
 
+def _keyword_casa(kw: str, desc_norm: str) -> bool:
+    """Keyword de subcategoria contra a descrição.
+    - "das" é o imposto do MEI, mas também é a preposição ("Sabor Das Massas"): só vale com contexto.
+    - Keyword curta (até 3 letras) só casa como palavra inteira ("gas" não pode casar dentro de "magazine").
+    - Keyword longa segue por substring, para "cafe" casar com "cafeteria"."""
+    if not kw:
+        return False
+    if kw == "das":
+        return re.search(r"(?<![a-z])(pgdas|das[\s-]+(mei|simples)|guia[\s-]+(do[\s-]+)?das)(?![a-z])", desc_norm) is not None
+    if len(kw) < 4:
+        borda = "a-z0-9" if any(c.isdigit() for c in kw) else "a-z"
+        return re.search(rf"(?<![{borda}]){re.escape(kw)}(?![{borda}])", desc_norm) is not None
+    return kw in desc_norm
+
+
 # Termos que SEMPRE devem disparar a pergunta ao usuário, independente de histórico ou banco.
 _AMBIGUOUS_TERMS = [
     # Dia a dia (padaria, café, lanche) e bares já têm categoria clara: não perguntam.
@@ -221,7 +236,7 @@ async def categorizar_gasto_hibrido(
 
         for sub in sorted_subs:
             keywords = sub.get("keywords", [])
-            if any(_normalize(kw) in desc_norm for kw in keywords) or _normalize(sub["name"]) in desc_norm:
+            if any(_keyword_casa(_normalize(kw), desc_norm) for kw in keywords) or _keyword_casa(_normalize(sub["name"]), desc_norm):
                 logger.info(f"Camada 2 (Subcategory Keyword) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
                 if not eh_marketplace:
                     db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])

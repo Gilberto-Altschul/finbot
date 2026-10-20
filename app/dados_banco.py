@@ -21,7 +21,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-19k · resposta de revisão por frase curta (lava rápido)"
+VERSAO = "2026-10-19l · diagnóstico de adicionar banco"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -457,8 +457,13 @@ async def adicionar_banco(pluggy_factory, user_phone: str, item_id: str) -> str:
     pluggy = pluggy_factory()
     try:
         await pluggy.obter_item(item_id)
-    except Exception:
-        return "⚠️ Não encontrei esse item na Pluggy. Confira o código e tente de novo."
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning(f"adicionar banco: item {item_id!r} recusado pela Pluggy (HTTP {status}): {e}")
+        if status in (401, 403) or (status and status >= 500):
+            return "⚠️ A Pluggy não respondeu direito agora. Tente de novo em alguns minutos."
+        return ("⚠️ Não encontrei esse item na Pluggy. Confira o código e tente de novo.\n"
+                "_Dica: o item precisa ter sido conectado pela aplicação do FinBot; itens criados em outra conta da Pluggy (ex.: o MeuPluggy de outra pessoa) não aparecem aqui._")
     itens_mod.registrar(user_phone, item_id)
     contas, _ = await garantir(lambda: pluggy, user_phone, forcar=True)
     novas = [c for c in contas if c.get("item_id") == item_id]
