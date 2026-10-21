@@ -324,7 +324,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     m_banco = re.fullmatch(r"adicionar banco\s+(\S+)", msg.strip(), flags=re.IGNORECASE)
     if m_banco:
         return {"tool": "adicionar_banco", "args": {"item_id": m_banco.group(1)}}
-    m_remover = re.fullmatch(r"remover banco\s+(\d+)", msg_norm)
+    m_remover = re.fullmatch(r"(?:remover|romover|excluir|desvincular|tirar)\s+(?:banco|conta)\s+(\d+)", msg_norm)
     if m_remover:
         return {"tool": "remover_banco", "args": {"indice": int(m_remover.group(1))}}
     # Qual versão do código está rodando (para conferir se a publicação valeu).
