@@ -3,6 +3,7 @@ import requests
 import base64
 import json   
 import logging
+import os
 import time
 from datetime import date, timedelta
 import app.database as db
@@ -20,6 +21,12 @@ logger = logging.getLogger(__name__)
 # Quantos dias para trás buscar na Pluggy. 45 dias cortava compras de faturas JÁ FECHADAS
 # (a fatura que venceu em 01/10 cobre compras desde 26/08). 120 cobre ~4 ciclos.
 JANELA_TRAS_DIAS = 120   # padrão; conta corrente pode mudar com FINBOT_JANELA_DIAS (cartão nunca fica abaixo disto)
+
+
+def _cartao_historico_completo(user_phone: str) -> bool:
+    """Por padrão TODOS (inclusive o dono) importam do cartão só a última fatura fechada + a aberta + parcelas
+    futuras. Só o dono, com FINBOT_CARTAO_HISTORICO=1, importa também as faturas mais antigas da janela."""
+    return os.getenv("FINBOT_CARTAO_HISTORICO") == "1" and fat._pode_descobrir_itens(user_phone)
 
 
 def janela_dias() -> int:
@@ -797,10 +804,10 @@ class PluggyService:
                 row["subcategory_id"] = subcategory_id
             rows.append(row)
             
-        # Cartão de quem não é o dono: só entra o que ainda pesa em fatura aberta/futura (inclui parcelas
+        # Cartão (por padrão de todos, inclusive o dono): só entra o que ainda pesa em fatura aberta/futura (inclui parcelas
         # de compras antigas e as compras do ciclo aberto), sem despejar faturas já fechadas.
         # Piso = 1ª fatura já importada deste cartão; se não há nenhuma, a última fatura fechada.
-        if account_id and not fat._pode_descobrir_itens(user_phone) and any(r["payment_method"] == "credito" for r in rows):
+        if account_id and not _cartao_historico_completo(user_phone) and any(r["payment_method"] == "credito" for r in rows):
             piso = None
             try:
                 ja = (db.get_db().table("finbot_expenses").select("billing_date")
