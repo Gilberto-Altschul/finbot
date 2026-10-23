@@ -319,7 +319,7 @@ async def cron_sync(background_tasks: BackgroundTasks, x_cron_secret: str = Head
         raise HTTPException(status_code=401, detail="Segredo inválido.")
     if cron_sync_mod.em_andamento():
         return {"status": "ja_em_andamento"}
-    background_tasks.add_task(cron_sync_mod.executar)
+    background_tasks.add_task(cron_sync_mod.executar_async)
     return {"status": "iniciado"}
 
 

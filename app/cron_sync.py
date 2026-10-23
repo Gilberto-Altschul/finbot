@@ -136,3 +136,22 @@ def executar() -> dict | None:
         return None
     finally:
         _trava.release()
+
+
+async def executar_async() -> dict | None:
+    """Versão para rodar NO MESMO event loop do servidor (BackgroundTasks com função async).
+    Necessário porque o cliente do Gemini guarda a sessão HTTP do loop onde foi criado;
+    asyncio.run() em outra thread cria um loop novo e quebra com 'attached to a different loop'."""
+    if not _trava.acquire(blocking=False):
+        logger.info("Cron: já há uma sincronização em andamento; ignorando.")
+        return None
+    try:
+        logger.info("Cron: iniciando sincronização de todos os usuários.")
+        resumo = await _rodar()
+        logger.info(f"Cron: concluído — {resumo}.")
+        return resumo
+    except Exception as e:
+        logger.error(f"Cron: erro geral ({e}).", exc_info=True)
+        return None
+    finally:
+        _trava.release()
