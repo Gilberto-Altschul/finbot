@@ -8,6 +8,7 @@ import re
 import uuid
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 
 import app.database as db
 import app.rotina as rotina
@@ -31,6 +32,7 @@ class Grupo:
     total: float = 0.0
     atual: tuple[str, str] = ("Outros", "Outros")
     familia: bool = False
+    datas: list[str] = field(default_factory=list)   # purchase_date (YYYY-MM-DD) de cada lançamento
 
     @property
     def n(self) -> int:
@@ -53,6 +55,8 @@ def agrupar_pendentes(rows: list[dict], pulados: set[str] | None = None) -> list
         g = grupos.setdefault(key, Grupo(key=key, learn_key=mk, descricao=r.get("description", ""), familia=familia))
         g.ids.append(r["id"])
         g.total += float(r.get("amount") or 0)
+        if r.get("purchase_date"):
+            g.datas.append(str(r["purchase_date"])[:10])
         if g.atual == ("Outros", "Outros") and r.get("category") not in (None, "Outros"):
             g.atual = (r["category"], r.get("subcategory") or "Outros")
     return sorted(grupos.values(), key=lambda g: -g.total)
@@ -76,11 +80,38 @@ def _brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def texto_pergunta(g: Grupo, opcoes: list[tuple[str, str]]) -> str:
-    cabeca = f"🤔 *{g.descricao}* — {_brl(g.total)}"
+def _fmt_data(iso: str, hoje: date | None = None) -> str:
+    """'2026-10-15' -> '15/10' (com o ano quando não é o ano corrente)."""
+    try:
+        d = date.fromisoformat(iso[:10])
+    except (ValueError, TypeError):
+        return ""
+    ano = (hoje or date.today()).year
+    return d.strftime("%d/%m") if d.year == ano else d.strftime("%d/%m/%Y")
+
+
+def fmt_datas(datas: list[str], hoje: date | None = None) -> str:
+    """Uma data -> '15/10'; várias -> '02/10 a 15/10'; sem data -> ''."""
+    validas = sorted({d[:10] for d in datas if d and _fmt_data(d, hoje)})
+    if not validas:
+        return ""
+    if len(validas) == 1:
+        return _fmt_data(validas[0], hoje)
+    return f"{_fmt_data(validas[0], hoje)} a {_fmt_data(validas[-1], hoje)}"
+
+
+def cabeca_pergunta(g: Grupo) -> str:
+    """'*Padaria X* — R$ 25,00 · 15/10' (vários lançamentos: '(3 lançamentos · 02/10 a 15/10)')."""
+    datas = fmt_datas(g.datas)
     if g.n > 1:
-        cabeca += f" ({g.n} lançamentos)"
-    linhas = [cabeca, ""]
+        extra = f" ({g.n} lançamentos" + (f" · {datas}" if datas else "") + ")"
+    else:
+        extra = f" · {datas}" if datas else ""
+    return f"*{g.descricao}* — {_brl(g.total)}{extra}"
+
+
+def texto_pergunta(g: Grupo, opcoes: list[tuple[str, str]]) -> str:
+    linhas = [f"🤔 {cabeca_pergunta(g)}", ""]
     for i, (c, s) in enumerate(opcoes, 1):
         linhas.append(f"*{i}* · {c} › {s}")
     linhas.append("✏️ ou digite uma palavra (ex: _mercado_, _uber_)")
@@ -182,7 +213,7 @@ def status_atual(user_phone: str) -> str | None:
 
 def _buscar_pendentes(user_phone: str) -> list[dict]:
     res = (db.get_db().table("finbot_expenses")
-           .select("id, description, amount, merchant_key, category, subcategory")
+           .select("id, description, amount, merchant_key, category, subcategory, purchase_date")
            .ilike("user_phone", db._q(user_phone))
            .eq("review_status", "revisar").eq("transaction_type", "expense")
            .limit(1000).execute())
@@ -203,7 +234,7 @@ def iniciar(user_phone: str, faltam: int = PERGUNTAS_POR_SESSAO, pulados: list[s
     g = grupos[0]
     ops = montar_opcoes(g, ler_historico(user_phone, g.learn_key).ranking)
     texto = texto_pergunta(g, ops)
-    cabeca = f"*{g.descricao}* — {_brl(g.total)}" + (f" ({g.n} lançamentos)" if g.n > 1 else "")
+    cabeca = cabeca_pergunta(g)
     _salvar_estado(user_phone, {
         "key": g.key, "learn_key": g.learn_key, "ids": g.ids, "familia": g.familia,
         "opcoes": [list(o) for o in ops], "faltam": faltam, "pulados": pulados or [],

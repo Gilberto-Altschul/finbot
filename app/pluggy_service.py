@@ -348,6 +348,12 @@ class PluggyService:
         resp.raise_for_status()
         return resp.json()
 
+    async def atualizar_item(self, item_id: str) -> dict:
+        """Pede à Pluggy para buscar dados novos no banco (PATCH /items/{id}). Assíncrono no lado deles."""
+        resp = requests.patch(f"{self.base_url}/items/{item_id}", headers=self.headers, json={}, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
     async def listar_contas(self, item_id: str):
         resp = requests.get(
             f"{self.base_url}/accounts",

@@ -307,6 +307,22 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/cron/sync", status_code=202)
+async def cron_sync(background_tasks: BackgroundTasks, x_cron_secret: str = Header(None)):
+    """Sincronização agendada de todos os usuários (silenciosa). Chamada pelo cron do Railway.
+    Exige o cabeçalho X-Cron-Secret igual à variável FINBOT_CRON_SECRET."""
+    import app.cron_sync as cron_sync_mod
+    segredo = os.getenv("FINBOT_CRON_SECRET")
+    if not segredo:
+        raise HTTPException(status_code=503, detail="FINBOT_CRON_SECRET não configurado.")
+    if not x_cron_secret or not hmac.compare_digest(x_cron_secret.encode(), segredo.encode()):
+        raise HTTPException(status_code=401, detail="Segredo inválido.")
+    if cron_sync_mod.em_andamento():
+        return {"status": "ja_em_andamento"}
+    background_tasks.add_task(cron_sync_mod.executar)
+    return {"status": "iniciado"}
+
+
 @app.post("/webhook/whatsapp")
 async def webhook(
     background_tasks: BackgroundTasks,
