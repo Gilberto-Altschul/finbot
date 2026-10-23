@@ -366,9 +366,26 @@ def get_top_maiores_gastos(user_phone: str, limit: int = 5) -> list[dict]:
         return []
 
 def get_daily_trend(user_phone: str, days: int = 7) -> list[dict]:
+    """Gasto por dia nos últimos `days` dias (inclui hoje), pela data da compra.
+    Lê finbot_expenses direto: o user_phone é criptografado de forma não determinística,
+    então uma RPC que compare igualdade nunca encontra o usuário (usamos o prefixo HMAC via _q)."""
     try:
-        res = get_db().rpc("expenses_daily_trend", {"p_phone": _s(user_phone), "p_days": days}).execute()
-        return res.data or []
+        from zoneinfo import ZoneInfo
+        hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        inicio = hoje - timedelta(days=max(1, days) - 1)
+        res = get_db().table("finbot_expenses") \
+            .select("amount, purchase_date") \
+            .ilike("user_phone", _q(user_phone)) \
+            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .gte("purchase_date", inicio.isoformat()) \
+            .lte("purchase_date", hoje.isoformat()) \
+            .limit(5000).execute()
+        por_dia: dict[str, float] = {}
+        for r in (res.data or []):
+            d = str(r["purchase_date"])[:10]
+            por_dia[d] = por_dia.get(d, 0.0) + float(r["amount"] or 0)
+        return [{"day": date.fromisoformat(d).strftime("%d/%m"), "total": round(v, 2)}
+                for d, v in sorted(por_dia.items())]
     except Exception as e:
         logger.error(f"Erro ao buscar tendência diária: {e}")
         return []
