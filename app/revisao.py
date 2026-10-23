@@ -33,6 +33,8 @@ class Grupo:
     atual: tuple[str, str] = ("Outros", "Outros")
     familia: bool = False
     datas: list[str] = field(default_factory=list)   # purchase_date (YYYY-MM-DD) de cada lançamento
+    contas: list[str] = field(default_factory=list)  # account_id de cada lançamento (None/ausente = digitado à mão)
+    origens: list[str] = field(default_factory=list) # nomes das contas, já resolvidos (ex.: "Nubank cartão")
 
     @property
     def n(self) -> int:
@@ -57,6 +59,8 @@ def agrupar_pendentes(rows: list[dict], pulados: set[str] | None = None) -> list
         g.total += float(r.get("amount") or 0)
         if r.get("purchase_date"):
             g.datas.append(str(r["purchase_date"])[:10])
+        if r.get("account_id") and r["account_id"] not in g.contas:
+            g.contas.append(r["account_id"])
         if g.atual == ("Outros", "Outros") and r.get("category") not in (None, "Outros"):
             g.atual = (r["category"], r.get("subcategory") or "Outros")
     return sorted(grupos.values(), key=lambda g: -g.total)
@@ -100,14 +104,34 @@ def fmt_datas(datas: list[str], hoje: date | None = None) -> str:
     return f"{_fmt_data(validas[0], hoje)} a {_fmt_data(validas[-1], hoje)}"
 
 
+def fmt_origens(origens: list[str]) -> str:
+    """Nome(s) da conta de origem: 'Nubank cartão'; duas: 'Nubank cartão, Itaú conta'; mais: '3 contas'."""
+    nomes = list(dict.fromkeys(o.strip() for o in origens if o and o.strip()))
+    if not nomes:
+        return ""
+    return ", ".join(nomes) if len(nomes) <= 2 else f"{len(nomes)} contas"
+
+
 def cabeca_pergunta(g: Grupo) -> str:
-    """'*Padaria X* — R$ 25,00 · 15/10' (vários lançamentos: '(3 lançamentos · 02/10 a 15/10)')."""
-    datas = fmt_datas(g.datas)
+    """'*Padaria X* — R$ 25,00 · 15/10 · Nubank cartão'
+    (vários lançamentos: '(3 lançamentos · 02/10 a 15/10 · Nubank cartão)')."""
+    partes = [p for p in (fmt_datas(g.datas), fmt_origens(g.origens)) if p]
+    detalhe = " · ".join(partes)
     if g.n > 1:
-        extra = f" ({g.n} lançamentos" + (f" · {datas}" if datas else "") + ")"
+        extra = f" ({g.n} lançamentos" + (f" · {detalhe}" if detalhe else "") + ")"
     else:
-        extra = f" · {datas}" if datas else ""
+        extra = f" · {detalhe}" if detalhe else ""
     return f"*{g.descricao}* — {_brl(g.total)}{extra}"
+
+
+def _nomes_das_contas(user_phone: str) -> dict[str, str]:
+    """account_id -> nome (apelido, se houver). Falha aqui não pode derrubar a revisão."""
+    try:
+        import app.dados_banco as dbk
+        return {c["id"]: c["nome"] for c in dbk.ler_contas(user_phone) if c.get("nome")}
+    except Exception as e:
+        logger.warning(f"Revisão: não consegui ler o nome das contas ({e}).")
+        return {}
 
 
 def texto_pergunta(g: Grupo, opcoes: list[tuple[str, str]]) -> str:
@@ -213,7 +237,7 @@ def status_atual(user_phone: str) -> str | None:
 
 def _buscar_pendentes(user_phone: str) -> list[dict]:
     res = (db.get_db().table("finbot_expenses")
-           .select("id, description, amount, merchant_key, category, subcategory, purchase_date")
+           .select("id, description, amount, merchant_key, category, subcategory, purchase_date, account_id")
            .ilike("user_phone", db._q(user_phone))
            .eq("review_status", "revisar").eq("transaction_type", "expense")
            .limit(1000).execute())
@@ -232,6 +256,9 @@ def iniciar(user_phone: str, faltam: int = PERGUNTAS_POR_SESSAO, pulados: list[s
             return (f"👍 Por hoje é isso. {len(rows)} lançamento(s) seguem como *a revisar* no seu painel.")
         return None
     g = grupos[0]
+    if g.contas:
+        nomes = _nomes_das_contas(user_phone)
+        g.origens = [nomes[a] for a in g.contas if a in nomes]
     ops = montar_opcoes(g, ler_historico(user_phone, g.learn_key).ranking)
     texto = texto_pergunta(g, ops)
     cabeca = cabeca_pergunta(g)
