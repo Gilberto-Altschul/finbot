@@ -11,7 +11,8 @@ from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
 from app.billing import _add_months
 from app.utils import _normalize, parse_mes_fatura, get_lookup_prefix
-from app.classificador import classificar, classificar_receita, Decisao, tem_restaurante
+from app.classificador import classificar, classificar_receita, Decisao
+from app.taxonomia import A_CLASSIFICAR, traduzir
 from app.merchant import normalizar_merchant, familia_ambigua
 from app import revisao
 from app import faturas as fat
@@ -704,19 +705,16 @@ class PluggyService:
                                    valor: float | None, data: str | None) -> Decisao:
             async with semaforo:
                 try:
-                    fallback = (categoria_dica, "Outros") if categoria_dica else None
+                    fallback = traduzir(categoria_dica, "Outros") if categoria_dica else None   # dica da Pluggy na taxonomia v2
                     return await classificar(user_phone, descricao, fallback=fallback, valor=valor, data=data)
                 except Exception as e:
                     logger.warning(f"Falha ao classificar '{descricao}': {e}")
-                    return Decisao(categoria_dica or "Outros", "Outros", "revisar", 0.0,
-                                   normalizar_merchant(descricao), [])
+                    return Decisao(*A_CLASSIFICAR, "revisar", 0.0, normalizar_merchant(descricao), [])
 
         def _chave_grupo(item: dict) -> str:
-            # Marketplace: a decisão depende da descrição exata. Restaurante: depende de valor e dia.
+            # Marketplace: a decisão depende da descrição exata.
             # Demais: "PADARIA X 123" e "PADARIA X 456" são o mesmo estabelecimento.
             d = item["descricao"]
-            if tem_restaurante(d):
-                return f"{normalizar_merchant(d)}|{item['purchase_date_str']}|{abs(item['raw_amount'])}"
             return _normalize(d) if familia_ambigua(d) else normalizar_merchant(d)
 
         grupos: dict[str, list[int]] = {}

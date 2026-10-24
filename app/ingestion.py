@@ -6,16 +6,14 @@ import app.database as db
 import asyncio
 from dataclasses import dataclass
 import app.revisao as revisao
-from app.classificador import classificar, tem_restaurante
+from app.classificador import classificar
 from app.merchant import normalizar_merchant, familia_ambigua
 
 logger = logging.getLogger(__name__)
 
 # Categorias válidas para o usuário escolher
-CATEGORIAS_VALIDAS = [
-    "Alimentação", "Transporte", "Lazer", "Moradia", "Saúde",
-    "Vestuário e Beleza", "Educação", "Pets", "Financeiro", "Presentes e Doações", "Extra", "Outros"
-]
+from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS, A_CLASSIFICAR, traduzir
+CATEGORIAS_VALIDAS = CATEGORIAS_DESPESA   # taxonomia v2
 
 # Mapa de subcategorias → (categoria, subcategoria)
 # O usuário digita palavras do dia a dia e o sistema resolve a hierarquia
@@ -225,6 +223,20 @@ def _levenshtein(a: str, b: str) -> int:
     return previous_row[-1]
 
 
+# Palavras de dia a dia que o usuário digita (e as que vinham da taxonomia antiga) -> nome oficial da taxonomia v2.
+SUBCATEGORIA_MAP = {palavra: traduzir(*par) for palavra, par in SUBCATEGORIA_MAP.items()}
+# Palavras cuja tradução automática do par antigo seria genérica demais, e palavras que só existem na v2.
+SUBCATEGORIA_MAP.update({
+    "imposto": ("Impostos", "Outros Impostos"), "ipva": ("Impostos", "IPVA"), "iptu": ("Impostos", "IPTU"),
+    "hotel": ("Viagens", "Hospedagem"), "hospedagem": ("Viagens", "Hospedagem"), "viagem": ("Viagens", "Outros em Viagem"),
+    "passagem": ("Viagens", "Passagens"), "cambio": ("Viagens", "Câmbio e Remessas"), "wise": ("Viagens", "Câmbio e Remessas"),
+    "juros": ("Tarifas e Juros", "Juros e Multas"), "multa": ("Tarifas e Juros", "Juros e Multas"), "iof": ("Tarifas e Juros", "IOF e Câmbio"),
+    "emprestimo": ("Dívidas e Financiamentos", "Empréstimos"), "empréstimo": ("Dívidas e Financiamentos", "Empréstimos"),
+    "financiamento": ("Dívidas e Financiamentos", "Empréstimos"),
+    "delivery": ("Alimentação", "Delivery"), "ifood": ("Alimentação", "Delivery"),
+    "marketplace": ("Outros", "Compras Online"), "mercado livre": ("Outros", "Compras Online"), "amazon": ("Outros", "Compras Online"),
+})
+
 _POR_NOME: dict[str, tuple[str, str]] = {}
 
 
@@ -241,8 +253,8 @@ def resolver_exato(texto: str) -> tuple[str, str] | None:
     if achado:
         return achado
     if not _POR_NOME:
-        for cat, sub in SUBCATEGORIA_MAP.values():
-            if sub and sub != "Outros":
+        for cat, subs in SUBCATEGORIAS.items():   # nome exato de qualquer subcategoria da taxonomia v2
+            for sub in subs:
                 _POR_NOME.setdefault(_normalize(sub), (cat, sub))
     return _POR_NOME.get(_normalize(t))
 
@@ -329,9 +341,9 @@ async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImp
         if tx_id in ids_existentes or tx_id in ids_no_lote:
             continue
 
-        fallback = (tx.category, tx.subcategory) if tx.category and tx.category != "Outros" else None
+        fallback = traduzir(tx.category, tx.subcategory) if tx.category and tx.category != "Outros" else None   # PDF/IA -> taxonomia v2
         chave = normalizar_merchant(tx.description)
-        comum = familia_ambigua(tx.description) is None and not tem_restaurante(tx.description)
+        comum = familia_ambigua(tx.description) is None
         if comum and chave in cache_decisao:
             dec = cache_decisao[chave]
         else:

@@ -15,6 +15,7 @@ from typing import Any
 import app.database as db
 from app.billing import fatura_vencimento, fatura_label, parcelas
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
+from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS, categoria_valida
 from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
@@ -71,7 +72,7 @@ SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "valor": {"type": "number"},
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]},
+                "categoria": {"type": "string", "enum": CATEGORIAS_DESPESA},
                 "subcategoria": {"type": "string"},
                 "descricao": {"type": "string"},
                 "beneficiario": {"type": "string"},
@@ -125,7 +126,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]},
+                "categoria": {"type": "string", "enum": CATEGORIAS_DESPESA},
                 "subcategoria": {"type": "string", "description": "Opcional. Nome da subcategoria dentro da categoria (ex: 'Viagem', 'Streaming', 'Restaurante') para detalhar só ela."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM."}
             },
@@ -203,7 +204,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações"]}
+                "categoria": {"type": "string", "enum": CATEGORIAS_DESPESA}
             },
             "required": ["categoria"]
         }
@@ -235,7 +236,7 @@ SCHEMAS: list[dict] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "categoria": {"type": "string", "enum": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações", "Outros"]},
+                "categoria": {"type": "string", "enum": CATEGORIAS_DESPESA},
                 "valor": {"type": "number", "description": "O valor do limite para a categoria."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM. Se omitido, usa o mês atual."}
             },
@@ -1246,17 +1247,15 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
                 found_in_db = False
 
                 # 1. Tenta encontrar se o valor digitado é na verdade o nome de uma CATEGORIA
-                res_all_cats = db.get_db().table("finbot_categories").select("name").execute()
-                for c in (res_all_cats.data or []):
-                    if _normalize(c["name"]) == target_norm:
-                        nova_cat = c["name"]
-                        # Preserva a subcategoria já existente (ex: "Restaurante")
-                        # em vez de resetar pra "Geral" — o usuário só pediu pra
-                        # mudar a CATEGORIA-pai, a subcategoria continua válida.
-                        # Só cai pra "Geral" se realmente não havia nenhuma antes.
-                        nova_sub = tx_atual["subcategory"] or "Geral"
-                        found_in_db = True
-                        break
+                #    (nome oficial ou como se costuma chamar: "lazer" -> "Lazer e Cultura").
+                cat_oficial = categoria_valida(target_val)
+                if cat_oficial:
+                    nova_cat = cat_oficial
+                    # Só mudou a CATEGORIA-pai: mantém a subcategoria se ela existir nessa categoria;
+                    # senão, a primeira da categoria (o par precisa existir na taxonomia).
+                    subs_da_categoria = SUBCATEGORIAS.get(cat_oficial, [])
+                    nova_sub = tx_atual["subcategory"] if tx_atual["subcategory"] in subs_da_categoria else (subs_da_categoria[0] if subs_da_categoria else tx_atual["subcategory"])
+                    found_in_db = True
 
                 if not found_in_db:
                     # 2. Busca todas as subcategorias para checar nome e keywords

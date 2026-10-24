@@ -10,6 +10,7 @@ import re
 from app.llm import call_llm
 from app.utils import _normalize, SISTEMA_CATEGORIAS
 from app.merchant import contem_termo, familia_ambigua
+from app.taxonomia import A_CLASSIFICAR, COMPRAS_ONLINE, traduzir
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +48,9 @@ def _keyword_casa(kw: str, desc_norm: str) -> bool:
     return kw in desc_norm
 
 
-# Termos que SEMPRE devem disparar a pergunta ao usuário, independente de histórico ou banco.
+# Marketplaces: vendem de tudo, não dá para inferir categoria pela loja. Taxonomia v2: vão para
+# Outros > Compras Online (sem pergunta). Restaurante/bar/café/padaria são sempre Alimentação.
 _AMBIGUOUS_TERMS = [
-    # Dia a dia (padaria, café, lanche) e bares já têm categoria clara: não perguntam.
-    # Restaurante pode ser rotina ou lazer: o contexto (valor/dia) decide em app/classificador.py.
-    "restaurante", "restaurant", "bistro", "gastronomia", "churrascaria", "pizzaria",
-    # Marketplaces genéricos — vendem de tudo, não dá para inferir categoria pela loja
     "mercadolivre", "mercado livre", "amazon", "shopee", "aliexpress",
     "magazine luiza", "magalu", "americanas.com", "submarino", "shein",
 ]
@@ -62,14 +60,14 @@ _HEALTH_FORCE_TERMS = [
     "plano de saude", "convenio", "unimed", "bradesco saude", "sulamerica", "amil", "odontoprev", "hapvida"
 ]
 
-# Termos que forçam a categoria Transporte para Seguro Automóvel
+# Termos que forçam Seguros > Seguro Auto
 _AUTO_FORCE_TERMS = [
     "seguro auto", "seguro automovel", "seguro veiculo", "porto seguro", "azul seguros", "tokio marine", "allianz"
 ]
 
 # Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
 _CLOTHING_FORCE_TERMS = [
-    "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "shein", "loja de roupa", "lingerie",
+    "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "loja de roupa", "lingerie",
     "manicure", "pedicure", "salao", "cabelo", "estetica", "barbearia", "beleza", "cosmetico"
 ]
 
@@ -91,6 +89,8 @@ def _montar_taxonomia_prompt(categoria_restrita: str | None = None) -> str:
         por_categoria: dict[str, list[str]] = {}
         for row in (res.data or []):
             cat = row["finbot_categories"]["name"]
+            if cat in ("Receitas", "Transferências", "Investimentos"):   # o movimento decide; o categorizador só trata gastos
+                continue
             if categoria_restrita and cat != categoria_restrita:
                 continue
             por_categoria.setdefault(cat, []).append(row["name"])
@@ -98,7 +98,7 @@ def _montar_taxonomia_prompt(categoria_restrita: str | None = None) -> str:
         return "\n".join(linhas)
     except Exception as e:
         logger.error(f"Erro ao montar taxonomia dinâmica para o prompt: {e}")
-        return "- Outros: Outros"  # fallback mínimo, não deve travar a categorização
+        return "- Outros: Compras Online, A classificar"  # fallback mínimo, não deve travar a categorização
 
 
 _taxonomia_cache: dict[str | None, str] = {}
@@ -120,14 +120,18 @@ def _system_categorizer(categoria_restrita: str | None = None, permitir_pergunta
     else:
         instrucao_categoria = "Escolha a categoria E a subcategoria mais adequadas."
 
+    # `permitir_perguntar` fica só por compatibilidade: na taxonomia v2 a IA nunca "pergunta"; na dúvida real usa
+    # Outros > A classificar e o bot pergunta ao usuário depois.
     instrucao_ambiguidade = (
-        "\nIMPORTANTE: Se a descrição contiver termos como 'Restaurante', 'Bar', 'Café', 'Padaria', 'Pub' ou 'Lanche', "
-        'e a categoria NÃO for conhecida previamente, você DEVE retornar obrigatoriamente:\n'
-        '{"categoria": "Perguntar", "subcategoria": "Perguntar"}\n'
-        if permitir_perguntar else
-        "\nMesmo que a descrição pareça ambígua (ex: 'Restaurante', 'Bar', 'Café'), escolha a subcategoria MAIS PROVÁVEL "
-        "dentro da lista oficial — não há usuário disponível para confirmar agora, então uma estimativa razoável é "
-        "melhor do que não categorizar.\n"
+        "\nREGRAS DE DESEMPATE (cada gasto tem UMA categoria correta; vale a intenção, não a forma de pagamento):\n"
+        "- Comer fora (restaurante, bar, café, padaria, delivery) é SEMPRE Alimentação.\n"
+        "- Plano de saúde (de pessoa ou de pet) é Saúde; seguro de carro, vida, casa ou celular é Seguros.\n"
+        "- Imposto ou tributo (IPTU, IPVA, IR, DAS, INSS) é Impostos, mesmo se for da casa ou do carro.\n"
+        "- Hotel, passagem, câmbio e despesa de viagem são Viagens.\n"
+        "- Parcela de empréstimo ou financiamento é Dívidas e Financiamentos; juros, IOF, multa e tarifa são Tarifas e Juros.\n"
+        "- Marketplace (Mercado Livre, Amazon, Shopee) é Outros > Compras Online.\n"
+        "- Se realmente não der para saber, responda {\"categoria\": \"Outros\", \"subcategoria\": \"A classificar\"}; "
+        "é melhor do que chutar.\n"
     )
 
     return f"""
@@ -138,7 +142,7 @@ Você é o motor de classificação interna do FinBot. Sua única tarefa é ler 
 SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA (lista oficial, vinda do banco de dados — não invente nomes fora desta lista):
 {_get_taxonomia_prompt_cached(categoria_restrita)}
 
-ATENÇÃO: NUNCA use a categoria 'Pessoal' ou 'Outros' se houver uma opção melhor na lista acima.
+ATENÇÃO: use 'Outros' só quando nenhuma outra categoria servir. Receitas, transferências e investimentos não fazem parte desta lista.
 {instrucao_ambiguidade}
 Responda EXCLUSIVAMENTE com um JSON no formato estrito, usando exatamente os nomes da lista acima:
 {{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria"}}
@@ -173,16 +177,20 @@ async def categorizar_gasto_hibrido(
 
     # Camada -1.2: Proteção Hardcoded para Seguro Automóvel (Vai para Transporte)
     if _tem_termo(desc_norm, _AUTO_FORCE_TERMS):
-        logger.info(f"Camada -1.2 (Auto Priority) detectada: '{descricao}'. Categorizando como Transporte.")
-        return "Transporte", "Seguro Auto"
+        logger.info(f"Camada -1.2 (Auto Priority) detectada: '{descricao}'. Categorizando como Seguros.")
+        return "Seguros", "Seguro Auto"
 
     # Camada -1.3: Proteção Hardcoded para Vestuário e Beleza
     if _tem_termo(desc_norm, _CLOTHING_FORCE_TERMS):
         logger.info(f"Camada -1.3 (Clothing Priority) detectada: '{descricao}'. Categorizando como Vestuário e Beleza.")
-        if "manicure" in desc_norm or "pedicure" in desc_norm or "unha" in desc_norm:
-            sub = "Manicure"
-        elif any(x in desc_norm for x in ["salao", "barbearia", "barba", "cabelo", "estetica", "beleza"]):
-            sub = "Cabeleireiro"
+        if "manicure" in desc_norm or "pedicure" in desc_norm or "unha" in desc_norm or "estetica" in desc_norm:
+            sub = "Manicure e Estética"
+        elif any(x in desc_norm for x in ["salao", "barbearia", "barba", "cabelo", "beleza"]):
+            sub = "Cabeleireiro e Barbearia"
+        elif "calcado" in desc_norm or "tenis" in desc_norm or "sapato" in desc_norm:
+            sub = "Calçado"
+        elif "cosmetico" in desc_norm:
+            sub = "Cosméticos"
         else:
             sub = "Roupa"
         return "Vestuário e Beleza", sub
@@ -195,12 +203,9 @@ async def categorizar_gasto_hibrido(
     # ambiguidade, para "cod bar"/"codigo de barras" não disparar falso positivo
     # no termo "bar" (ex: "VIVO-SP TELESP CELULAR-COD BAR" não é um bar).
     desc_norm_sem_ruido = re.sub(r"\bcod(igo)?\s*bar(ra)?[a-z]*\b", "", desc_norm)
-    ambiguo = _tem_termo(desc_norm_sem_ruido, _AMBIGUOUS_TERMS)
-    if ambiguo and not permitir_melhor_esforco:
-        logger.info(f"Camada 0 (Ambiguidade) detectada: '{descricao}'. Forçando interrupção para pergunta.")
-        return "Perguntar", "Perguntar"
-    elif ambiguo:
-        logger.info(f"Camada 0 (Ambiguidade) detectada mas ignorada (modo melhor-esforço): '{descricao}'.")
+    if _tem_termo(desc_norm_sem_ruido, _AMBIGUOUS_TERMS):
+        logger.info(f"Camada 0 (Marketplace) detectada: '{descricao}'. Categorizando como Outros > Compras Online.")
+        return COMPRAS_ONLINE
     
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
     # Se além da categoria já existe uma subcategoria-dica de uma resolução
@@ -247,8 +252,8 @@ async def categorizar_gasto_hibrido(
     # Camada 2.5: Sugestão da extração inicial (PDF/Gemini) — só é confiável se a
     # subcategoria sugerida REALMENTE existir na taxonomia oficial (o extrator de
     # PDF usa texto livre para subcategoria, então pode sugerir algo inventado).
-    if fallback and fallback[0] != "Outros":
-        fb_categoria, fb_subcategoria = fallback
+    if fallback and traduzir(*fallback) != A_CLASSIFICAR:
+        fb_categoria, fb_subcategoria = traduzir(*fallback)
         if (not categoria_conhecida or fb_categoria == categoria_conhecida) and db.get_subcategory_id_by_name(fb_subcategoria):
             logger.info(f"Camada 2.5 (PDF Fallback, validado) utilizada: {descricao} -> {fb_categoria}/{fb_subcategoria}")
             return fb_categoria, fb_subcategoria
@@ -275,17 +280,18 @@ async def categorizar_gasto_hibrido(
             content = match.group(0)
 
         data = json.loads(content)
-        cat = categoria_conhecida or data.get("categoria", "Outros")
-        sub = data.get("subcategoria", "Outros")
+        cat, sub = traduzir(categoria_conhecida or data.get("categoria"), data.get("subcategoria"))   # só nome da taxonomia v2
+        if categoria_conhecida and cat != categoria_conhecida:
+            cat, sub = A_CLASSIFICAR
 
         # Palpite da IA para um lugar inédito NÃO é gravado como "aprendido": só vale depois que o usuário
         # confirmar (senão um chute como "Salute" -> Saúde vira regra permanente sem ninguém ver).
-        if cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"] and not categoria_conhecida:
+        if (cat, sub) != A_CLASSIFICAR and not categoria_conhecida:
             ORIGEM_PALPITE.set("llm")
-        elif cat not in ["Outros", "Perguntar"] and sub not in ["Outros", "Perguntar"] and not eh_marketplace:
+        elif (cat, sub) != A_CLASSIFICAR and not eh_marketplace:
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)
 
         return cat, sub
     except Exception as e:
         logger.error(f"Erro na Camada 3 (LLM): {e}")
-        return (categoria_conhecida, "Outros") if categoria_conhecida else ("Outros", "Outros")
+        return A_CLASSIFICAR

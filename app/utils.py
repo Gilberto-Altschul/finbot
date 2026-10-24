@@ -6,7 +6,7 @@ from datetime import date
 from cryptography.fernet import Fernet
 from app.config import get_settings
 
-SISTEMA_CATEGORIAS = ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Vestuário e Beleza", "Educação", "Financeiro", "Pets", "Empresa", "Família e Dependentes", "Presentes e Doações", "Receitas"]
+from app.taxonomia import CATEGORIAS as SISTEMA_CATEGORIAS   # taxonomia v2 (app/taxonomia.py)
 
 def _fmt(value: float) -> str:
     """Formata valores para o padrão R$ 0,00"""

@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import app.database as db
-import app.rotina as rotina
 from app.merchant import normalizar_merchant
 from app.merchant_stats import ler_historico, registrar_resposta, MIN_AMOSTRAS
+from app.taxonomia import A_CLASSIFICAR
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class Grupo:
     ids: list[int] = field(default_factory=list)
     descricao: str = ""
     total: float = 0.0
-    atual: tuple[str, str] = ("Outros", "Outros")
+    atual: tuple[str, str] = A_CLASSIFICAR
     familia: bool = False
     datas: list[str] = field(default_factory=list)   # purchase_date (YYYY-MM-DD) de cada lançamento
     contas: list[str] = field(default_factory=list)  # account_id de cada lançamento (None/ausente = digitado à mão)
@@ -61,22 +61,17 @@ def agrupar_pendentes(rows: list[dict], pulados: set[str] | None = None) -> list
             g.datas.append(str(r["purchase_date"])[:10])
         if r.get("account_id") and r["account_id"] not in g.contas:
             g.contas.append(r["account_id"])
-        if g.atual == ("Outros", "Outros") and r.get("category") not in (None, "Outros"):
-            g.atual = (r["category"], r.get("subcategory") or "Outros")
+        par = (r.get("category"), r.get("subcategory"))
+        if g.atual == A_CLASSIFICAR and par[0] and par != A_CLASSIFICAR:
+            g.atual = (par[0], par[1] or A_CLASSIFICAR[1])
     return sorted(grupos.values(), key=lambda g: -g.total)
-
-
-_ALTERNATIVAS = {("Alimentação", "Restaurante"): ("Lazer", "Restaurante lazer")}
 
 
 def montar_opcoes(g: Grupo, ranking: list[tuple[str, str, int]]) -> list[tuple[str, str]]:
     """Até 3 botões: primeiro o que ELE já usou nesse lugar, depois o palpite do sistema."""
     ops = [(c, s) for c, s, _ in ranking]
-    if g.atual[0] != "Outros" and g.atual not in ops:
+    if g.atual != A_CLASSIFICAR and g.atual not in ops:
         ops.append(g.atual)
-    alt = _ALTERNATIVAS.get(g.atual)   # restaurante: a outra face da dúvida (rotina x lazer)
-    if alt and alt not in ops:
-        ops.append(alt)
     return ops[:3]
 
 
@@ -151,7 +146,7 @@ def interpretar_resposta(texto: str, opcoes: list[tuple[str, str]], resolver) ->
     if t.isdigit() and 1 <= int(t) <= len(opcoes):
         return "escolha", opcoes[int(t) - 1]
     achado = resolver(t)  # palavra do dia a dia; "99" fora do intervalo cai aqui (Uber 99)
-    if achado and achado[0] != "Outros":
+    if achado and achado != A_CLASSIFICAR:
         return "escolha", achado
     return "invalida", None
 
@@ -186,7 +181,7 @@ def eh_resposta_de_revisao(texto: str, resolver) -> bool:
     from app.ingestion import resolver_exato
     achado = resolver_exato(t)
     if achado:
-        return achado[0] != "Outros"
+        return achado != A_CLASSIFICAR
     # Frase curta e sem número ("lava rápido") com pergunta aberta é quase certamente a resposta:
     # captura e, se não reconhecer, o responder pede de novo em vez de tratar como gasto novo.
     palavras = t.split()
@@ -315,10 +310,6 @@ def responder(user_phone: str, texto: str) -> str:
         return proxima or "Ok, deixei para depois. ✅"
 
     cat, sub = escolha
-    eh_refeicao = sub in (rotina.SUB_ROTINA, rotina.SUB_LAZER)
-    if eh_refeicao:
-        rotina.invalidar(user_phone)
-        antes = rotina.perfil(user_phone)
     peso = 1 if est["familia"] else MIN_AMOSTRAS   # marketplace precisa se repetir; o resto aprende de 1 resposta
     etapa = "buscar subcategoria"
     try:
@@ -338,11 +329,6 @@ def responder(user_phone: str, texto: str) -> str:
 
     n = len(est["ids"])
     confirmacao = f"✅ Anotado: {cat} › {sub}." + (f" Reclassifiquei {n} lançamentos." if n > 1 else "")
-    if eh_refeicao:
-        rotina.invalidar(user_phone)
-        depois = rotina.perfil(user_phone)
-        if depois != antes:   # só informa, não pergunta: o usuário foi consistente o bastante para o bot aprender
-            confirmacao += f"\n💡 Aprendi: {depois.descricao()}. Não pergunto mais nesses casos."
     proxima = iniciar(user_phone, est["faltam"] - 1, est["pulados"])
     return f"{confirmacao}\n\n{proxima}" if proxima else confirmacao + " Tudo revisado! 🎉"
 

@@ -16,6 +16,7 @@ from app.categorizer import categorizar_gasto_hibrido
 import app.tools as tool_registry
 from app.llm import call_llm
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
+from app.taxonomia import A_CLASSIFICAR, ATALHOS, detectar_categoria, traduzir
 from app.pluggy_service import PluggyService
 from app.config import get_settings
 
@@ -66,13 +67,19 @@ PERSONALIDADE:
 
 REGRAS IMPORTANTES:
 - Registre gastos SEM pedir confirmação — o usuário quer agilidade
-- EXCEÇÃO CRÍTICA: Se o local for um Restaurante, Bar, Café ou Padaria, você NÃO PODE registrar direto. Pergunte: "Este gasto foi Alimentação (refeição comum) ou Lazer (saída social)?"
+- Comer fora (restaurante, bar, café, padaria, delivery) é SEMPRE Alimentação. Nunca pergunte se foi rotina ou lazer.
 - Sempre informe o total acumulado (da categoria para gastos ou total do mês para receitas) após um registro.
 - COMPARAÇÕES: Se o usuário solicitar uma comparação entre períodos (ex: "compara maio e junho"), você DEVE chamar as ferramentas (como resumo_mensal ou listar_gastos_detalhados) para *TODOS* os períodos mencionados *em uma única resposta contendo múltiplas chamadas de ferramentas*. Sempre passe o argumento 'mes' no formato 'YYYY-MM' e argumentos de dia (dia_inicio/dia_fim) APENAS como números inteiros. NUNCA pergunte se deve buscar os dados do segundo período; assuma que sim e proceda com a coleta de todas as informações necessárias para a comparação.
 - PLANEJAMENTO E CONSELHOS: Se o usuário pedir uma sugestão, plano ou distribuição de orçamento (ex: "como gastar 15 mil por mês", "me ajuda a montar um orçamento"), responda APENAS com texto, sugerindo uma divisão por categoria. NUNCA registre, altere ou exclua nada por conta própria nesses casos. Termine perguntando se ele quer aplicar a sugestão — ele aplica com o comando "limite <categoria> <valor>".
 - RESPOSTA DE COMPARAÇÕES/ANÁLISES (mensagem via WhatsApp, seja concisa): destaque só o total de cada período, a diferença (R$ e %) e, no máximo, as 2-3 categorias que mais mudaram. NÃO liste todas as categorias de ambos os períodos, nem transação por transação — o usuário pode pedir o detalhe de uma categoria específica depois, se quiser.
 - QUANDO / DATAS: Se o usuário perguntar quando algo foi pago ou o dia de um gasto, use 'listar_categoria' (se souber a categoria) ou 'listar_gastos_detalhados' para encontrar a data exata nos dados retornados.
-- SAÚDE vs FINANCEIRO: Planos de Saúde ou Convênios DEVEM ser registrados na categoria 'Saúde'. A categoria 'Financeiro' é para taxas e seguros de bens (vida/casa). Seguros de automóvel pertencem à categoria 'Transporte'.
+- REGRAS DE DESEMPATE (cada gasto tem uma única categoria correta):
+  * Plano de saúde (de pessoa ou de pet) fica em 'Saúde'. Seguros (auto, vida, casa, celular) ficam em 'Seguros'.
+  * Imposto ou tributo (IPTU, IPVA, IR, DAS, INSS) fica em 'Impostos', mesmo que seja da casa ou do carro.
+  * Hotel, passagem, câmbio e despesas de viagem ficam em 'Viagens'.
+  * Parcela de empréstimo ou financiamento fica em 'Dívidas e Financiamentos'; juros, IOF, multas e tarifas ficam em 'Tarifas e Juros'. Compra parcelada no cartão não é dívida.
+  * Compra em marketplace (Mercado Livre, Amazon, Shopee) vai para 'Outros' › 'Compras Online'. Na dúvida real, use 'Outros' › 'A classificar'.
+  * Gasto do pet entra pela natureza dele (ração em Alimentação, veterinário em Saúde) e é marcado para o pet.
 
 CATEGORIAS E SUBCATEGORIAS (lista oficial, vinda do banco de dados):
 {_montar_taxonomia_agent()}
@@ -240,20 +247,24 @@ async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
         return (
             "📁 *Guia de Categorias e Exemplos (Keywords)*\n"
             "Use esses termos para facilitar a organização:\n\n"
-            "🏠 *Moradia:* Aluguel (QuintoAndar), Condomínio, Energia (Enel), Água, Gás, Internet (Claro/Vivo), Celular, Faxina, Reforma (Leroy), Mobília\n\n"
-            "🍔 *Alimentação:* Mercado (Assaí/Extra), Feira, Delivery (iFood/Rappi), Restaurante, Padaria, Café\n"
-            "_(Em restaurantes eu aprendo se é rotina ou lazer pelo valor, pelo dia e pelas suas respostas.)_\n\n"
-            "🚗 *Transporte:* Apps (Uber/99), Combustível (Posto), Público (Metrô), Estacionamento, Manutenção, Passagem Aérea\n\n"
-            "💊 *Saúde:* Plano (Unimed/Amil), Farmácia (Raia), Médico/Exame, Academia (Smartfit), Terapia, Nutrição (Whey)\n\n"
-            "🎬 *Lazer:* Streaming (Netflix), Cinema/Shows, Viagem (Airbnb/Booking), Bar/Balada, Jogos (Steam), Restaurante lazer\n\n"
-            "👕 *Vestuário/Beleza:* Roupas (Zara/Renner), Calçados (Nike), Salão/Barbearia, Cosméticos\n\n"
-            "📚 *Educação:* Escola, Cursos Online (Udemy/Alura), Material, Idiomas\n\n"
-            "💳 *Financeiro:* Empréstimo, Seguros (Porto), Investimento (XP/BTG), Impostos (IPTU/IPVA), Tarifas, Apostas (Bets)\n\n"
-            "🐾 *Pets:* Ração (Petz/Cobasi), Veterinário, Petshop, Plano Pet\n\n"
-            "👨‍👩‍👧 *Família:* Mesada, Pensão, Apoio Familiar, Emergência\n\n"
+            "🏠 *Moradia:* Aluguel, Condomínio, Energia/Água/Gás (Enel/Sabesp), Internet e TV, Celular, Reforma, Móveis e Utensílios, Faxina\n\n"
+            "🍔 *Alimentação:* Mercado (Assaí/Extra), Feira, Padaria e Café, Restaurante, Delivery (iFood/Rappi), Bar\n\n"
+            "🚗 *Transporte:* Apps (Uber/99), Combustível, Transporte Público, Estacionamento e Pedágio, Manutenção do Veículo\n\n"
+            "✈️ *Viagens:* Passagens, Hospedagem (Airbnb/Booking), Câmbio e Remessas (Wise), Outros em Viagem\n\n"
+            "💊 *Saúde:* Plano de Saúde (Unimed/Amil), Farmácia, Consultas e Exames (inclui veterinário), Terapia, Academia (Smartfit)\n\n"
+            "👕 *Vestuário e Beleza:* Roupa (Zara/Renner), Calçado, Cabeleireiro e Barbearia, Manicure e Estética, Cosméticos\n\n"
+            "🎬 *Lazer e Cultura:* Streaming e Assinaturas, Cinema/Shows/Eventos, Jogos e Hobbies, Parques e Passeios\n\n"
+            "📚 *Educação:* Escola e Faculdade, Cursos Online (Udemy/Alura), Livros e Material, Idiomas\n\n"
+            "👨‍👩‍👧 *Família e Dependentes:* Mesada, Pensão, Apoio Familiar\n\n"
             "🎁 *Presentes e Doações:* Presentes, Doações, Dízimo e Ofertas\n\n"
-            "💼 *Empresa:* MEI, Impostos PJ, Escritório, Marketing, Pró-labore\n\n"
-            "💰 *Receitas:* Salário, Freelance e Bônus, Rendimento, Reembolso, Transferência Recebida"
+            "🛡️ *Seguros:* Auto, Vida, Residencial, Outros\n\n"
+            "🏛️ *Impostos:* IPVA, IPTU, Imposto de Renda, INSS, DAS/Simples, Outros\n\n"
+            "🏦 *Dívidas e Financiamentos:* Empréstimos, Financiamento de Veículo ou Imobiliário, Parcelamento de Fatura\n\n"
+            "💳 *Tarifas e Juros:* Tarifas Bancárias, Anuidade, IOF e Câmbio, Juros e Multas\n\n"
+            "💼 *Trabalho e Negócio:* Ferramentas e Software, Contabilidade, Folha e Pró-labore, Fornecedores, Marketing e Escritório\n\n"
+            "📦 *Outros:* Compras Online (Mercado Livre/Amazon), A classificar\n\n"
+            "💰 *Receitas:* Salário e Pró-labore, Freelance e Bônus, Aposentadoria e Benefícios, Rendimentos, Reembolso, Transferências de Terceiros\n\n"
+            "🔁 *Transferências e 📈 Investimentos* não contam como gasto nem como receita."
         )
 
     if tool_name == "direct_reply":
@@ -371,13 +382,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 
                 valor_limit = float(raw_val)
                 
-                cat_final = "Outros"
-                for c in SISTEMA_CATEGORIAS:
-                    c_norm = _normalize(c)
-                    # Melhora a detecção para categorias com nomes longos (ex: família detecta Família e Dependentes)
-                    if c_norm in msg_norm or any(part in msg_norm and len(part) > 3 for part in c_norm.split()):
-                        cat_final = c
-                        break
+                cat_final = detectar_categoria(msg_norm) or "Outros"   # nome oficial ou atalho ("família", "lazer")
                 
                 # Identifica o mês de referência
                 mes_ref = date.today().strftime("%Y-%m")
@@ -441,15 +446,8 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 return {"tool": "registrar_receita", "args_receita": args_receita}
 
             cat, sub = await categorizar_gasto_hibrido(user_phone, desc_raw)
-            if cat != "Perguntar" and cat not in SISTEMA_CATEGORIAS:
-                cat = "Outros"
+            cat, sub = traduzir(cat, sub)   # só sai nome da taxonomia v2 (sem pergunta: comer fora é sempre Alimentação)
 
-            if cat == "Perguntar":
-                return {
-                    "tool": "direct_reply", 
-                    "args": {"mensagem": f"Hum, vi que você digitou '*{desc_raw}*'.\n\nEste gasto foi *Alimentação* (refeição comum) ou *Lazer* (saída social)?"}
-                }
-                
             args = {"valor": valor, "categoria": cat, "subcategoria": sub, "descricao": desc_raw, "payment_method": method}
             if data_raw:
                 try:
@@ -469,34 +467,6 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     if any(k in msg_norm for k in ["compara", "diferenca", "analise", "evolucao", "porque", "por que", "dias", "primeiros", "ultimos", "quando", "que dia", "zerado", "vazio", "errado"]):
         return None
     
-    # 0. Contexto: Resposta à pergunta de ambiguidade (Alimentação vs Lazer)
-    # Se o usuário respondeu apenas a categoria após a nossa pergunta, recuperamos o gasto original.
-    intent_alimentacao = any(x in msg_norm for x in ["alimentacao", "refeicao", "comum", "dia a dia"])
-    intent_lazer = any(x in msg_norm for x in ["lazer", "social", "saida", "especial"])
-
-    if intent_alimentacao or intent_lazer:
-        history = db.get_history(user_phone, limit=2)
-        if history:
-            last_reply = history[-1]
-            # Verifica se a última mensagem do assistente foi a pergunta de ambiguidade, ignorando formatação
-            content_norm = _normalize(last_reply.get("content", ""))
-            if last_reply["role"] == "assistant" and "este gasto foi" in content_norm and ("alimentacao" in content_norm or "lazer" in content_norm):
-                # Recupera a mensagem do usuário que gerou a dúvida (ex: "cafe 8")
-                if len(history) >= 2:
-                    # Também limpamos o timestamp da mensagem anterior do histórico se necessário
-                    prev_user_msg = re.sub(r"\[.*\]\s+.*:\s+", "", history[-2]["content"]).strip()
-                    m_prev = _EXPENSE_RE.match(prev_user_msg)
-                    if m_prev:
-                        desc_raw = m_prev.group("desc").strip()
-                        valor = float(m_prev.group("valor").replace(",", "."))
-                        method = _parse_method(m_prev.group("method"))
-                        cat_escolhida = "Alimentação" if intent_alimentacao else "Lazer"
-                        
-                        return {
-                            "tool": "registrar_gasto",
-                            "args": {"valor": valor, "categoria": cat_escolhida, "subcategoria": desc_raw.capitalize(), "descricao": desc_raw, "payment_method": method}
-                        }
-
     # 3. Detecção de Mês por extenso (Evita chamadas desnecessárias à LLM)
     target_month = None
     mes_encontrado = None
@@ -517,8 +487,8 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 if any(k in msg_norm for k in ["extrato", "lista", "listar", "ver"]):
                     return {"tool": "listar_gastos_detalhados", "args": {"mes": target_month or str(date.today().month), "pagina": 1}}
 
-                for cat in SISTEMA_CATEGORIAS:
-                    if _normalize(cat) in msg_norm:
+                cat = detectar_categoria(msg_norm)
+                if cat:
                         # Se sobrar bastante texto além da categoria, do mês e de
                         # palavras de preenchimento comuns, o usuário provavelmente
                         # está pedindo uma SUBCATEGORIA específica dentro da
@@ -528,7 +498,9 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                         # extrair categoria + subcategoria juntos via function
                         # calling (veja o parâmetro 'subcategoria' de
                         # listar_categoria em tools.py).
-                        resto = msg_norm.replace(_normalize(cat), " ")
+                        resto = msg_norm
+                        for termo in [_normalize(cat)] + [a for a, c in ATALHOS.items() if c == cat]:
+                            resto = resto.replace(termo, " ")
                         if mes_encontrado:
                             resto = resto.replace(mes_encontrado, " ")
                         for palavra in ["gastos", "gasto", "em", "de", "do", "da", "no", "na", "quanto", "quais", "foram", "mostra", "mostre", "listar", "lista", "ver", "me", "os", "as"]:
@@ -602,10 +574,9 @@ async def run(user_phone: str, user_message: str) -> str:
             # Força o uso do categorizador híbrido para garantir que as regras de proteção
             # (como Família e Saúde) prevaleçam sobre a intuição da LLM.
             c, s = await categorizar_gasto_hibrido(user_phone, args_pt.get("descricao", user_message))
-            if c != "Perguntar":
-                if c not in SISTEMA_CATEGORIAS: c = "Outros"
-                args_pt["categoria"] = c
-                args_pt["subcategoria"] = s
+            c, s = traduzir(c, s)   # nunca grava nome fora da taxonomia v2
+            args_pt["categoria"] = c
+            args_pt["subcategoria"] = s
 
         call["args"] = args_pt  # mantém o args_pt normalizado também na rodada registrada p/ o histórico do modelo
         return await tool_registry.execute(call["name"], args_pt, user_phone)
@@ -710,20 +681,12 @@ async def run(user_phone: str, user_message: str) -> str:
         
         msg_norm = _normalize(user_message)
         if "por que" in msg_norm or "estourou" in msg_norm or "motivo" in msg_norm:
-            categoria_detectada = "Outros"
-            for cat in SISTEMA_CATEGORIAS:
-                if _normalize(cat) in msg_norm:
-                    categoria_detectada = cat
-                    break
+            categoria_detectada = detectar_categoria(msg_norm) or "Outros"
             result_raw = await tool_registry.execute("diagnosticar_estouro", {"categoria": categoria_detectada}, user_phone)
             reply = result_raw.get("mensagem", "Cota de IA excedida. Tente novamente mais tarde.")
         elif "gastos" in msg_norm:
             # Se a IA esgotar e você pedir gastos, ele intercepta aqui e força o caminho matemático puro!
-            categoria_detectada = None
-            for cat in SISTEMA_CATEGORIAS:
-                if _normalize(cat) in msg_norm:
-                    categoria_detectada = cat
-                    break
+            categoria_detectada = detectar_categoria(msg_norm)
             if categoria_detectada:
                 reply = await _fast_path("listar_categoria", {"categoria": categoria_detectada}, user_phone)
             else:
