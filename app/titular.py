@@ -6,8 +6,8 @@ Três caminhos, nesta ordem:
   2. Comando no WhatsApp: "meu nome é Fulano da Silva" (ou "meus nomes" para ver o que está cadastrado).
   3. Dica: depois de "sincronizar", se nenhum nome estiver cadastrado, o bot lembra do comando.
 
-A regra que USA o nome mora no banco (finbot_movimento, migration 007). Aqui só se grava o nome e se pede
-a reclassificação do histórico do usuário (finbot_reclassificar_movimento, migration 008).
+A regra que USA o nome mora no banco (finbot_movement, migrations 007/008). Aqui só se grava o nome e se pede
+a reclassificação do histórico do usuário (finbot_reclassify_movement, migration 008).
 """
 from __future__ import annotations
 
@@ -51,8 +51,8 @@ def nome_valido(nome: str) -> bool:
 
 
 def nomes_cadastrados(user_phone: str) -> list[str]:
-    res = db.get_db().table(T_ALIASES).select("nome").eq("user_key", get_lookup_prefix(user_phone)).execute()
-    return sorted({r["nome"] for r in (res.data or []) if r.get("nome")})
+    res = db.get_db().table(T_ALIASES).select("name").eq("user_key", get_lookup_prefix(user_phone)).execute()
+    return sorted({r["name"] for r in (res.data or []) if r.get("name")})
 
 
 def tem_nome(user_phone: str) -> bool:
@@ -73,14 +73,14 @@ def _gravar(user_phone: str, nomes: list[str]) -> list[str]:
             novos.append(n); ja.add(_normalize(n))
     if novos:
         db.get_db().table(T_ALIASES).upsert(
-            [{"user_key": get_lookup_prefix(user_phone), "nome": n} for n in novos], on_conflict="user_key,nome").execute()
+            [{"user_key": get_lookup_prefix(user_phone), "name": n} for n in novos], on_conflict="user_key,nome").execute()
     return novos
 
 
 def reclassificar(user_phone: str) -> int:
     """Recalcula o movimento do histórico do usuário (usa a função do banco). Devolve quantas linhas mudaram."""
     try:
-        res = db.get_db().rpc("finbot_reclassificar_movimento", {"p_user_key": get_lookup_prefix(user_phone)}).execute()
+        res = db.get_db().rpc("finbot_reclassify_movement", {"p_user_key": get_lookup_prefix(user_phone)}).execute()
         dado = res.data
         if isinstance(dado, list):
             dado = dado[0] if dado else 0

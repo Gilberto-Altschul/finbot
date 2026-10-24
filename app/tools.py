@@ -456,7 +456,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 res = db.get_db().table("finbot_expenses") \
                     .select("category, subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
-                    .eq("movimento", "receita") \
+                    .eq("movement", "income") \
                     .gte("billing_date", start_date) \
                     .lte("billing_date", end_date) \
                     .order("billing_date", desc=True) \
@@ -625,7 +625,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
                     .ilike("category", cat_target.strip()) \
-                    .eq("movimento", "despesa") \
+                    .eq("movement", "expense") \
                     .gte("billing_date", start_date) \
                     .lte("billing_date", end_date)
 
@@ -1043,7 +1043,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("subcategory, description, amount")\
                     .ilike("user_phone", db._q(user_phone))\
                     .ilike("category", cat_target.strip())\
-                    .eq("movimento", "despesa")\
+                    .eq("movement", "expense")\
                     .gte("billing_date", start_date)\
                     .lte("billing_date", end_date).execute()
 
@@ -1079,7 +1079,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("description, amount")\
                     .ilike("user_phone", db._q(user_phone))\
                     .eq("category", cat_target)\
-                    .eq("movimento", "despesa")\
+                    .eq("movement", "expense")\
                     .gte("billing_date", start_date)\
                     .lte("billing_date", end_date)\
                     .order("amount", desc=True).limit(3).execute()
