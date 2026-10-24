@@ -21,6 +21,7 @@ import app.database as db
 import app.pdf_import as pdf_import
 import app.ingestion as ingestion
 import app.revisao as revisao
+import app.titular as titular
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -386,6 +387,12 @@ async def webhook(
                 logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
                 background_tasks.add_task(_process, user_phone, user_message)
             return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 2.4: COMANDO "meu nome é ..." — cadastra o nome do titular (Pix entre contas próprias) ──
+    if titular.eh_comando(user_message):
+        reply = await asyncio.to_thread(titular.responder, user_phone, user_message)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+        return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──
     if revisao.eh_comando_revisar(user_message):

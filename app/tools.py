@@ -18,6 +18,7 @@ from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
 from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
+from app import titular
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -369,7 +370,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                         except Exception as e:
                             logger.warning(f"Não consegui listar as contas na Pluggy ({e}); usando a conta padrão.")
                         if len(contas) > 1:
-                            return {"mensagem": await dbk.sincronizar_todas(pluggy, user_phone, contas)}
+                            return {"mensagem": titular.anexar_dica(user_phone, await dbk.sincronizar_todas(pluggy, user_phone, contas))}
 
                         padrao = db.get_pluggy_conta_padrao(user_phone)
                         if padrao:
@@ -387,7 +388,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                             await dbk.atualizar(lambda: pluggy, user_phone)
                         except Exception as e:
                             logger.warning(f"Não foi possível guardar saldos/faturas após sincronizar: {e}")
-                    return {"mensagem": mensagem}
+                    return {"mensagem": titular.anexar_dica(user_phone, mensagem)}
 
         case "listar_gastos_detalhados":
             mes_arg = args.get("mes")
@@ -455,7 +456,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 res = db.get_db().table("finbot_expenses") \
                     .select("category, subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
-                    .ilike("transaction_type", "income") \
+                    .eq("movimento", "receita") \
                     .gte("billing_date", start_date) \
                     .lte("billing_date", end_date) \
                     .order("billing_date", desc=True) \
@@ -624,7 +625,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("subcategory, description, amount, purchase_date, billing_date") \
                     .ilike("user_phone", db._q(user_phone)) \
                     .ilike("category", cat_target.strip()) \
-                    .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+                    .eq("movimento", "despesa") \
                     .gte("billing_date", start_date) \
                     .lte("billing_date", end_date)
 
@@ -1042,7 +1043,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("subcategory, description, amount")\
                     .ilike("user_phone", db._q(user_phone))\
                     .ilike("category", cat_target.strip())\
-                    .or_("transaction_type.is.null,transaction_type.not.ilike.income")\
+                    .eq("movimento", "despesa")\
                     .gte("billing_date", start_date)\
                     .lte("billing_date", end_date).execute()
 
@@ -1078,7 +1079,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .select("description, amount")\
                     .ilike("user_phone", db._q(user_phone))\
                     .eq("category", cat_target)\
-                    .eq("transaction_type", "expense")\
+                    .eq("movimento", "despesa")\
                     .gte("billing_date", start_date)\
                     .lte("billing_date", end_date)\
                     .order("amount", desc=True).limit(3).execute()

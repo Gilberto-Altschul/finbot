@@ -411,6 +411,7 @@ async def carregar_contas(pluggy, user_phone: str) -> list[dict]:
                                "saldo": c.get("balance"), "atualizado_iso": item.get("lastUpdatedAt"),
                                "limite": cd.get("creditLimit"), "limite_disponivel": cd.get("availableCreditLimit"),
                                "numero": c.get("number"),
+                               "titular": c.get("owner"), "documento": c.get("taxNumber"),
                                "banco_codigo": bancos.codigo_do_banco((c.get("bankData") or {}).get("transferNumber"))})
         except Exception as e:
             logger.warning(f"Falha ao ler contas do item {item_id}: {e}")

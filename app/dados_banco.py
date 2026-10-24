@@ -15,13 +15,13 @@ import app.database as db
 from app import faturas as fat
 from calendar import monthrange
 
-from app import bancos, itens as itens_mod, revisao
+from app import bancos, itens as itens_mod, revisao, titular
 from app.utils import get_lookup_prefix, _normalize
 
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-23d · banco e conta na pergunta de revisão"
+VERSAO = "2026-10-24b · movimento + nome do titular"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -174,6 +174,7 @@ async def atualizar(pluggy_factory, user_phone: str) -> int:
             historico.append({"user_key": key, "account_id": c["id"], "saldo": c["saldo"], "capturado_em": agora})
     # `apelido` NÃO está em `linhas` de propósito: o upsert preserva o que o usuário definiu.
     db.get_db().table(T_CONTAS).upsert(linhas, on_conflict="user_key,account_id").execute()
+    titular.registrar(user_phone, contas)     # nome do titular (pessoa física) → reconhece Pix entre contas próprias
     vistos: dict[str, tuple] = {}
     for c in contas:
         if c.get("item_id") and (c["item_id"] not in vistos or c.get("banco_codigo")):
