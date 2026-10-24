@@ -168,7 +168,7 @@ def monthly_total(user_phone: str, mes_ref: str | None = None, dia_inicio: int =
         res = get_db().table("finbot_expenses") \
             .select("amount") \
             .ilike("user_phone", _q(user_phone)) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .eq("movement", "expense") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
         return round(sum(float(item["amount"]) for item in (res.data or [])), 2)
@@ -188,7 +188,7 @@ def monthly_income_total(user_phone: str, mes_ref: str | None = None, dia_inicio
         res = get_db().table("finbot_expenses") \
             .select("amount") \
             .ilike("user_phone", _q(user_phone)) \
-            .ilike("transaction_type", "income") \
+            .eq("movement", "income") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
         return round(sum(float(item["amount"]) for item in (res.data or [])), 2)
@@ -207,7 +207,7 @@ def category_total(user_phone: str, category: str, mes_ref: str | None = None) -
             .select("amount") \
             .ilike("user_phone", _q(user_phone)) \
             .ilike("category", category.strip()) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .eq("movement", "expense") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
         return round(sum(float(item["amount"]) for item in (res.data or [])), 2)
@@ -227,7 +227,7 @@ def monthly_by_category(user_phone: str, mes_ref: str | None = None, dia_inicio:
         res = get_db().table("finbot_expenses") \
             .select("category, amount") \
             .ilike("user_phone", _q(user_phone)) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .eq("movement", "expense") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
         
@@ -356,7 +356,7 @@ def get_top_maiores_gastos(user_phone: str, limit: int = 5) -> list[dict]:
 
         res = get_db().table("finbot_expenses").select("description, amount, category") \
             .ilike("user_phone", _q(user_phone)) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .eq("movement", "expense") \
             .gte("billing_date", start) \
             .lte("billing_date", end) \
             .order("amount", desc=True).limit(limit).execute()
@@ -376,7 +376,7 @@ def get_daily_trend(user_phone: str, days: int = 7) -> list[dict]:
         res = get_db().table("finbot_expenses") \
             .select("amount, purchase_date") \
             .ilike("user_phone", _q(user_phone)) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
+            .eq("movement", "expense") \
             .gte("purchase_date", inicio.isoformat()) \
             .lte("purchase_date", hoje.isoformat()) \
             .limit(5000).execute()
@@ -401,9 +401,9 @@ def get_resumo_mes_anterior(user_phone: str) -> dict:
         end = fim_mes_passado.isoformat()
         
         res_exp = get_db().table("finbot_expenses").select("amount") \
-            .ilike("user_phone", _q(user_phone)).or_("transaction_type.is.null,transaction_type.not.ilike.income").gte("billing_date", start).lte("billing_date", end).execute()
+            .ilike("user_phone", _q(user_phone)).eq("movement", "expense").gte("billing_date", start).lte("billing_date", end).execute()
         res_inc = get_db().table("finbot_expenses").select("amount") \
-            .ilike("user_phone", _q(user_phone)).ilike("transaction_type", "income").gte("billing_date", start).lte("billing_date", end).execute()
+            .ilike("user_phone", _q(user_phone)).eq("movement", "income").gte("billing_date", start).lte("billing_date", end).execute()
             
         g = sum(float(x["amount"]) for x in (res_exp.data or []))
         r = sum(float(x["amount"]) for x in (res_inc.data or []))
@@ -433,7 +433,7 @@ def get_expenses_by_category_current_month(user_phone: str, category: str) -> li
         res = get_db().table("finbot_expenses").select("subcategory, description, amount") \
             .ilike("user_phone", _q(user_phone)) \
             .ilike("category", category) \
-            .not_.ilike("transaction_type", "income") \
+            .eq("movement", "expense") \
             .gte("billing_date", start).lte("billing_date", end).execute()
         return res.data or []
     except Exception as e:
@@ -566,7 +566,7 @@ def limpar_pdf_pendente(user_phone: str) -> None:
         logger.error(f"Erro em limpar_pdf_pendente: {e}")
 
 def filtrar_transacoes_existentes(user_phone: str, tx_ids: list[str]) -> set[str]:
-    """Retorna um conjunto de IDs que já existem no banco para evitar duplicatas em lote."""
+    """Retorna um conjunto de IDs que já existem no banco (de QUALQUER usuário) para evitar duplicatas em lote."""
     if not tx_ids:
         return set()
 
@@ -577,9 +577,10 @@ def filtrar_transacoes_existentes(user_phone: str, tx_ids: list[str]) -> set[str
         batch_size = 50
         for i in range(0, len(tx_ids), batch_size):
             batch = tx_ids[i:i + batch_size]
+            # SEM filtro de usuário: o mesmo lançamento da Pluggy não pode existir sob dois números
+            # (ex.: o mesmo Itaú vinculado a duas pessoas). O índice único do banco é a segunda defesa.
             res = get_db().table("finbot_expenses") \
                 .select("pluggy_transaction_id") \
-                .ilike("user_phone", _q(user_phone)) \
                 .in_("pluggy_transaction_id", batch).execute()
             
             if res.data:
