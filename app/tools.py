@@ -134,6 +134,18 @@ SCHEMAS: list[dict] = [
         }
     },
     {
+        "name": "gastos_beneficiario",
+        "description": "Gastos do mês de um BENEFICIÁRIO (para quem foi o gasto), independente da categoria. Use para 'gastos com o pet', 'quanto gastei com os pets', 'gastos dos filhos'. Só 'pet' é preenchido automaticamente hoje.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "beneficiario": {"type": "string", "enum": ["pet", "children", "family", "home", "self"], "description": "pet = animais de estimação; children = filhos; family = família; home = casa; self = próprio usuário."},
+                "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM."}
+            },
+            "required": ["beneficiario"]
+        }
+    },
+    {
         "name": "listar_gastos_detalhados",
         "description": "Lista todas as transações individuais (extrato detalhado/item por item). Use para 'ver gastos', 'extrato', 'lista de compras' ou 'o que eu gastei'.",
         "parameters": {
@@ -602,6 +614,42 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     "status": "🔴" if pct > 100 else "⚠️" if pct >= 80 else "✅"
                 })
             return {"mes": mes, "limites": processed}
+
+        case "gastos_beneficiario":
+            ben = (args.get("beneficiario") or "").strip().lower()
+            rotulos = {"pet": ("🐾", "Pets"), "children": ("🧒", "Filhos"), "family": ("👪", "Família"), "home": ("🏠", "Casa"), "self": ("🙋", "Você")}
+            if ben not in rotulos:
+                return {"mensagem": "🤷‍♂️ Não entendi o beneficiário. Ex: 'gastos com o pet'."}
+            emoji, nome = rotulos[ben]
+            hoje = date.today()
+            parsed = _parse_month_year(args.get("mes"))
+            if parsed:
+                hoje = date(parsed[0], parsed[1], 1)
+            ini = hoje.replace(day=1).isoformat()
+            fim = hoje.replace(day=monthrange(hoje.year, hoje.month)[1]).isoformat()
+            itens = db.get_expenses_by_beneficiary(user_phone, ben, ini, fim)
+            if not itens:
+                extra = "\nℹ️ Hoje só os gastos de pet são identificados automaticamente." if ben != "pet" else ""
+                return {"mensagem": f"📭 Nenhum gasto de {nome} em {hoje.strftime('%m/%Y')}.{extra}"}
+            total = sum(float(i["amount"]) for i in itens)
+            por_cat: dict[str, float] = {}
+            for i in itens:
+                chave = f"{i.get('category') or 'Outros'} › {i.get('subcategory') or 'Outros'}"
+                por_cat[chave] = por_cat.get(chave, 0.0) + float(i["amount"])
+            linhas_cat = [f" • *{k}*: R$ {_fmt_moeda(v)} ({round(v / total * 100) if total > 0 else 0}%)"
+                          for k, v in sorted(por_cat.items(), key=lambda x: x[1], reverse=True)]
+            linhas = []
+            for i in itens[:8]:
+                dt_val = i.get("purchase_date") or i.get("billing_date")
+                dt_fmt = f"{dt_val[8:10]}/{dt_val[5:7]}" if dt_val else "??"
+                linhas.append(f" • {dt_fmt} | {i['description']}: R$ {_fmt_moeda(float(i['amount']))}")
+            msg = (f"{emoji} *Gastos com {nome} ({hoje.strftime('%m/%Y')})*\n\n"
+                   f"💸 *Total:* R$ {_fmt_moeda(total)} em {len(itens)} transaç{'ão' if len(itens) == 1 else 'ões'}\n\n"
+                   f"🔍 *Por categoria:*\n" + "\n".join(linhas_cat) +
+                   "\n\n🧾 *Últimos lançamentos:*\n" + "\n".join(linhas))
+            if len(itens) > 8:
+                msg += f"\n… e mais {len(itens) - 8}."
+            return {"mensagem": msg, "total": total, "beneficiario": ben, "mes": hoje.strftime("%Y-%m")}
 
         case "listar_categoria":
             cat_target = args.get("categoria", "").strip()

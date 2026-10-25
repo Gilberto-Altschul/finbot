@@ -13,6 +13,7 @@ from calendar import monthrange
 from supabase import create_client, Client
 from app.config import get_settings
 from app.utils import _normalize, criptografar_telefone, get_lookup_prefix, descriptografar_telefone
+from app.taxonomia import traduzir
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,12 @@ def save_expense(user_phone: str, valor: float, category: str, description: str,
     try:
         _get_or_create_user_connection(user_phone)
         dt = expense_date or date.today()
+        category, subcategoria = traduzir(category, subcategoria)   # só grava nome da taxonomia v2
         row = {
             "user_phone": _s(user_phone),
             "amount": abs(valor),
             "category": category,
-            "subcategory": subcategoria or "Outros",
+            "subcategory": subcategoria,
             "description": description,
             "beneficiario": beneficiario,
             "transaction_type": transaction_type,
@@ -134,11 +136,12 @@ def save_expense_credit(user_phone: str, valor: float, category: str, descriptio
     try:
         _get_or_create_user_connection(user_phone)
         dt_fat = fatura_date or date.today()
+        category, subcategoria = traduzir(category, subcategoria)   # só grava nome da taxonomia v2
         row = {
             "user_phone": _s(user_phone),
             "amount": abs(valor),
             "category": category,
-            "subcategory": subcategoria or "Outros",
+            "subcategory": subcategoria,
             "description": description,
             "beneficiario": beneficiario,
             "transaction_type": "expense",
@@ -439,6 +442,21 @@ def get_expenses_by_category_current_month(user_phone: str, category: str) -> li
     except Exception as e:
         logger.error(f"Erro ao buscar gastos por category: {e}")
         return []
+
+def get_expenses_by_beneficiary(user_phone: str, beneficiary: str, start: str, end: str) -> list[dict]:
+    """Despesas do mês (por mês de cobrança) de um beneficiário: self | family | children | pet | home."""
+    try:
+        res = get_db().table("finbot_expenses").select("category, subcategory, description, amount, purchase_date, billing_date") \
+            .ilike("user_phone", _q(user_phone)) \
+            .eq("beneficiary", beneficiary) \
+            .eq("movement", "expense") \
+            .gte("billing_date", start).lte("billing_date", end) \
+            .order("billing_date", desc=True).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"Erro ao buscar gastos por beneficiário: {e}")
+        return []
+
 
 def get_category_emojis() -> dict[str, str]:
     try:
@@ -800,4 +818,4 @@ def limpar_transacoes_pendentes(user_phone: str) -> None:
         }
         get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
     except Exception as e:
-        logger.error(f"Erro em limpar_transacoes_pendentes: {e}")
+        logger.error(f"Erro em limpar_transacoes_pendentes: {e}")

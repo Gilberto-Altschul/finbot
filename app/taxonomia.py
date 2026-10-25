@@ -51,7 +51,7 @@ SUBCATEGORIAS = {
     'Trabalho e Negócio': ['Ferramentas e Software', 'Contabilidade e Serviços', 'Folha e Pró-labore', 'Fornecedores', 'Marketing e Escritório'],
     'Outros': ['Compras Online', 'A classificar'],
     'Receitas': ['Salário e Pró-labore', 'Freelance e Bônus', 'Aposentadoria e Benefícios', 'Rendimentos', 'Reembolso e Estorno', 'Transferências de Terceiros', 'Outras Receitas'],
-    'Transferências': ['Entre Contas Próprias', 'Pagamento de Fatura', 'Empréstimo a Terceiros', 'Verificação (≤ R$ 1)'],
+    'Transferências': ['Entre Contas Próprias', 'Pagamento de Fatura', 'Empréstimo a Terceiros', 'Verificação (≤ R$ 1)', 'Estorno Compensado'],
     'Investimentos': ['Aporte em Investimento', 'Resgate de Investimento'],
 }
 

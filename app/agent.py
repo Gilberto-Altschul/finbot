@@ -476,6 +476,10 @@ async def _classify(message: str, user_phone: str) -> dict | None:
             mes_encontrado = m_nome
             break
 
+    # 3.5 Beneficiário: "gastos com o pet / pets / cachorro / gato" (o pet não é categoria, é para quem foi o gasto)
+    if re.search(r"\b(pet|pets|cachorro|cachorra|cachorros|gato|gatos|bichinho|bichinhos)\b", msg_norm) and re.search(r"\b(gast\w*|quanto|total|resumo)\b", msg_norm):
+        return {"tool": "gastos_beneficiario", "args": {"beneficiario": "pet", **({"mes": target_month} if target_month else {})}}
+
     # 4. Roteamento de Ferramentas via Keywords
     for keyword, tool_name in _KEYWORD_TOOLS.items():
         if _normalize(keyword) in msg_norm:
@@ -598,7 +602,7 @@ async def run(user_phone: str, user_message: str) -> str:
             intent_analitica = any(k in _normalize(user_message) for k in ["compara", "diferenca", "analise", "evolucao", "porque", "por que", "quando", "que dia", "dias", "primeiros", "ultimos", "tendencia", "zerado", "vazio", "errado"])
             
             # 2. Contexto: se o usuário deu uma resposta curta a um processo analítico anterior
-            ferramentas_leitura = {"resumo_mensal", "listar_categoria", "listar_gastos_detalhados", "maiores_gastos", "tendencia_semanal", "consultar_fatura"}
+            ferramentas_leitura = {"resumo_mensal", "listar_categoria", "gastos_beneficiario", "listar_gastos_detalhados", "maiores_gastos", "tendencia_semanal", "consultar_fatura"}
             chamou_leitura = any(tr["name"] in ferramentas_leitura for tr in tool_results)
             if not intent_analitica and chamou_leitura and len(user_message) <= 10:
                 msg_norm = _normalize(user_message)
@@ -697,4 +701,4 @@ async def run(user_phone: str, user_message: str) -> str:
             reply = "⚠️ *Aviso do FinBot:* Minha cota diária de inteligência artificial gratuita foi atingida para hoje.\n\nMas você ainda pode registrar gastos digitando no padrão natural! Ex: `Padaria 15,90`"
 
     db.save_message(user_phone, "assistant", reply)
-    return reply
+    return reply
