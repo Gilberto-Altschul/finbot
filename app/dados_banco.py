@@ -22,7 +22,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-26e · faturas futuras"
+VERSAO = "2026-10-26f · detalhe das parcelas previstas"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -350,7 +350,7 @@ def _creditos_da_fatura(user_phone: str, due: date) -> list[dict]:
 
 def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,
                   detalhar: bool, pagina: int, page_size: int = 15, creditos: list[dict] | None = None,
-                  fecha_em: date | None = None, previstas: tuple[float, int] | None = None) -> str:
+                  fecha_em: date | None = None, previstas: tuple | None = None) -> str:
     """`fecha_em` preenchido = fatura ainda ABERTA (fecha nessa data): mostra "compras até agora" e avisa que as
     parcelas de compras anteriores só entram quando ela fecha, em vez de acusar diferença com o banco."""
     bruto = round(sum(float(g["amount"]) for g in gastos), 2)
@@ -370,8 +370,13 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
         dif = round(total_banco - total, 2)
         if abs(dif) > 0.01:
             msg += f"⚠️ Diferença de R$ {fat.fmt_moeda(abs(dif))} (compras ainda não sincronizadas ou ajustes do banco)\n"
+    prev_itens = previstas[2] if previstas and len(previstas) > 2 else []
+    if detalhar and pagina == 1 and prev_itens:
+        msg += "\n📅 *Parcelas previstas (ainda não lançadas):*\n"
+        for desc, valor, n, tot in prev_itens:
+            msg += f" • {desc[:28].strip()} ({n}/{tot}): R$ {fat.fmt_moeda(valor)}\n"
     if not gastos:
-        return msg + "Nenhum lançamento nesta fatura até agora."
+        return msg + ("\n" if prev_itens and detalhar else "") + "Nenhum lançamento nesta fatura até agora."
     por_cat: dict[str, float] = {}
     for g in gastos:
         por_cat[g.get("category") or "Outros"] = por_cat.get(g.get("category") or "Outros", 0.0) + float(g["amount"])
@@ -443,9 +448,10 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
         previstas = None
         if total_banco is None or fecha_em:   # fatura ainda aberta/futura: as parcelas que o banco ainda não lançou entram como previsão
             try:
-                previstas = parcelas_proj.previstas_do_mes(
-                    [x for x in db.get_active_installments(user_phone) if x.get("account_id") == c["id"]],
-                    date(due_c.year, due_c.month, 1), hoje_local())
+                meus = [x for x in db.get_active_installments(user_phone) if x.get("account_id") == c["id"]]
+                mes_c = date(due_c.year, due_c.month, 1)
+                tot_p, n_p = parcelas_proj.previstas_do_mes(meus, mes_c, hoje_local())
+                previstas = (tot_p, n_p, parcelas_proj.previstas_detalhe(meus, mes_c, hoje_local()))
             except Exception as e:
                 logger.warning(f"Parcelas previstas indisponíveis para {c['nome']}: {e}")
         blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds, fecha_em=fecha_em,
@@ -541,6 +547,7 @@ def formatar_faturas_futuras(meses: list[tuple[date, list[dict]]]) -> str:
             linhas.append(f"🧾 Total do mês: *R$ {fat.fmt_moeda(round(soma, 2))}*")
         geral += soma
     linhas.append(f"\n💰 Total no período: *R$ {fat.fmt_moeda(round(geral, 2))}*")
+    linhas.append("🔎 Para ver as linhas de uma fatura: *fatura c6 dezembro* (use o nome do cartão e o mês).")
     linhas.append("_Valores com “previsto” são estimativas: só incluem parcelas já conhecidas, não compras novas nem assinaturas._")
     return "\n".join(linhas)
 

@@ -56,6 +56,7 @@ def projetar(compras: list[dict], hoje: date | None = None) -> dict:
         if atual is None or (bm, int(n)) > (atual["mes"], atual["n"]):
             series[chave] = {"descricao": c.get("description") or "", "valor": float(c["amount"]), "n": int(n), "total": int(t), "mes": bm}
     meses: dict[date, list] = {}
+    detalhe: dict[date, list] = {}
     saida = []
     for s in series.values():
         faltam = s["total"] - s["n"]
@@ -68,11 +69,13 @@ def projetar(compras: list[dict], hoje: date | None = None) -> dict:
             if m <= mes_atual and m < s["mes"]:
                 continue
             meses.setdefault(m, []).append(s["valor"])
+            detalhe.setdefault(m, []).append((s["descricao"], s["valor"], s["n"] + i, s["total"]))
         ultimo = _soma_meses(s["mes"], faltam)
         if ultimo >= mes_atual:
             saida.append({"descricao": s["descricao"], "valor": s["valor"], "faltam": faltam, "atual": s["n"], "total": s["total"], "ultimo_mes": ultimo})
     lista = sorted(((m, round(sum(v), 2), len(v)) for m, v in meses.items() if m >= mes_atual))
-    return {"meses": lista, "series": sorted(saida, key=lambda x: (x["ultimo_mes"], -x["valor"])), "total": round(sum(x[1] for x in lista), 2)}
+    return {"meses": lista, "series": sorted(saida, key=lambda x: (x["ultimo_mes"], -x["valor"])), "total": round(sum(x[1] for x in lista), 2),
+            "detalhe": {m: sorted(v, key=lambda x: -x[1]) for m, v in detalhe.items()}}
 
 
 def previstas_do_mes(compras: list[dict], mes: date, hoje: date | None = None) -> tuple[float, int]:
@@ -81,6 +84,11 @@ def previstas_do_mes(compras: list[dict], mes: date, hoje: date | None = None) -
         if m == mes:
             return tot, n
     return 0.0, 0
+
+
+def previstas_detalhe(compras: list[dict], mes: date, hoje: date | None = None) -> list[tuple]:
+    """[(descrição, valor, nº da parcela, total de parcelas)] previstas para `mes`, da maior para a menor."""
+    return projetar(compras, hoje)["detalhe"].get(mes, [])
 
 
 def _brl(v: float) -> str:
