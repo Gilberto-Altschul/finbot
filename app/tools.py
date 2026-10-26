@@ -1040,6 +1040,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             status_emoji = "🟢" if saldo >= 0 else "🔴"
             return {"mensagem": f"{status_emoji} *Seu Saldo Atual:* R$ {_fmt_moeda(saldo)}\n_(Total de Entradas menos despesas em conta corrente)_"}
 
+        case "faturas_futuras":
+            return {"mensagem": dbk.faturas_futuras(user_phone)}
+
         case "listar_parcelamentos":
             compras = db.get_active_installments(user_phone)
             if not compras: return {"mensagem": "💳 Você não possui compras parceladas activas atualmente."}

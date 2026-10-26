@@ -129,6 +129,14 @@ _RECEITA_KEYWORDS: dict[str, list[str]] = {
 }
 
 _KEYWORD_TOOLS = {
+    # --- PREVISÃO (antes de "faturas", que casa por substring) ---
+    "faturas futuras": "faturas_futuras",
+    "fatura futura": "faturas_futuras",
+    "proximas faturas": "faturas_futuras",
+    "próximas faturas": "faturas_futuras",
+    "faturas previstas": "faturas_futuras",
+    "previsao de fatura": "faturas_futuras",
+    "previsão de fatura": "faturas_futuras",
     # --- AUDITORIA E EXTRATOS ---
     "extrato": "listar_gastos_detalhados",
     "lista": "listar_gastos_detalhados",
@@ -241,7 +249,7 @@ def _format_output(result: Any, tool_name: str, user_phone: str) -> str:
 
 async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     if tool_name == "ajuda":
-        return "💡 *FinBot — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
+        return "💡 *FinBot — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'faturas futuras'_\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
     
     if tool_name == "listar_menu_categorias":
         return (

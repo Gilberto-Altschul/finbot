@@ -22,7 +22,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-26d · parcelas com sobra na 1ª"
+VERSAO = "2026-10-26e · faturas futuras"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -514,3 +514,64 @@ MSG_CONECTAR_BANCO = (
     "Depois é só digitar *saldo* ou *sincronizar*.\n"
     "_(Em breve: um link para conectar direto por aqui.)_"
 )
+
+
+# ── previsão das próximas faturas ────────────────────────────────────────────
+_MESES_LONGOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def formatar_faturas_futuras(meses: list[tuple[date, list[dict]]]) -> str:
+    """meses: [(1º dia do mês, [{nome, vence, lancado, previsto, banco}])]. `banco` (float) = total já fechado pelo banco."""
+    if not meses:
+        return "📅 Não encontrei faturas futuras para mostrar."
+    linhas = ["📅 *Faturas futuras* (previsão)"]
+    geral = 0.0
+    for mes, cartoes in meses:
+        linhas.append(f"\n*{_MESES_LONGOS[mes.month - 1].capitalize()}/{mes.year}*")
+        soma = 0.0
+        for c in cartoes:
+            if c.get("banco") is not None:
+                total, nota = c["banco"], "fechada no banco"
+            else:
+                total = round(c["lancado"] + c["previsto"], 2)
+                nota = f"lançado R$ {fat.fmt_moeda(c['lancado'])} + previsto R$ {fat.fmt_moeda(c['previsto'])}" if c["previsto"] else "lançado até agora"
+            soma += total
+            linhas.append(f"💳 {c['nome']} · vence {c['vence'].strftime('%d/%m')}: *R$ {fat.fmt_moeda(total)}* _({nota})_")
+        if len(cartoes) > 1:
+            linhas.append(f"🧾 Total do mês: *R$ {fat.fmt_moeda(round(soma, 2))}*")
+        geral += soma
+    linhas.append(f"\n💰 Total no período: *R$ {fat.fmt_moeda(round(geral, 2))}*")
+    linhas.append("_Valores com “previsto” são estimativas: só incluem parcelas já conhecidas, não compras novas nem assinaturas._")
+    return "\n".join(linhas)
+
+
+def faturas_futuras(user_phone: str, quantos: int = 6) -> str:
+    hoje = hoje_local()
+    cartoes = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
+    if not cartoes:
+        return "💳 Não achei cartões de crédito conectados."
+    try:
+        parcelas = db.get_active_installments(user_phone)
+    except Exception as e:
+        logger.warning(f"Parcelas indisponíveis para a previsão: {e}")
+        parcelas = []
+    por_mes: dict[date, list[dict]] = {}
+    for c in cartoes:
+        ciclos = [ci for ci, _ in ler_faturas(user_phone, c["id"])]
+        meus = [x for x in parcelas if x.get("account_id") == c["id"]]
+        base = date(hoje.year, hoje.month, 1)
+        for i in range(quantos + 1):
+            mes = parcelas_proj._soma_meses(base, i)
+            due = vencimento_do_mes(user_phone, mes.year, mes.month, c["id"])
+            if due is None or due < hoje:
+                continue
+            gastos = [g for g in _gastos_da_fatura(user_phone, mes) if g.get("account_id") == c["id"]]
+            creds = [x for x in _creditos_da_fatura(user_phone, mes) if x.get("account_id") == c["id"]]
+            lancado = round(sum(float(g["amount"]) for g in gastos) - sum(abs(float(x["amount"])) for x in creds), 2)
+            prev, _n = parcelas_proj.previstas_do_mes(meus, mes, hoje)
+            banco = None
+            ci = next((k for k in ciclos if (k.vencimento.year, k.vencimento.month) == (mes.year, mes.month)), None)
+            if ci is not None and not ci.estimado and ci.total is not None and ci.fechamento < hoje:
+                banco = ci.total
+            por_mes.setdefault(mes, []).append({"nome": c["nome"], "vence": due, "lancado": lancado, "previsto": prev, "banco": banco})
+    return formatar_faturas_futuras(sorted(por_mes.items())[:quantos])
