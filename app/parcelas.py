@@ -28,6 +28,19 @@ def _soma_meses(m: date, n: int) -> date:
     return date(m.year + k // 12, k % 12 + 1, 1)
 
 
+def valor_demais_parcelas(primeira: float, total: int) -> float:
+    """Só se conhece a 1ª parcela. Quando o banco põe a sobra do arredondamento nela (ex.: 98,35 + 5 x 98,33 = 590,00),
+    as demais valem `primeira - r` centavos, com 0 < r < total, desde que o total da compra seja em reais inteiros.
+    Sem esse padrão (ou se r=0 já fecha), devolve a própria 1ª parcela."""
+    p = round(primeira * 100)
+    if total <= 1 or (total * p) % 100 == 0:
+        return primeira
+    for r in range(1, total):
+        if (total * (p - r) + r) % 100 == 0:
+            return round((p - r) / 100, 2)
+    return primeira
+
+
 def projetar(compras: list[dict], hoje: date | None = None) -> dict:
     """compras: linhas de finbot_expenses com description, amount, installment_of, installment_total, billing_date.
     Devolve {"meses": [(date, total, n_parcelas)], "series": [{descricao, valor, faltam, atual, total, ultimo_mes}], "total": float}."""
@@ -48,6 +61,8 @@ def projetar(compras: list[dict], hoje: date | None = None) -> dict:
         faltam = s["total"] - s["n"]
         if faltam <= 0:
             continue
+        if s["n"] == 1:
+            s = {**s, "valor": valor_demais_parcelas(s["valor"], s["total"])}
         for i in range(1, faltam + 1):
             m = _soma_meses(s["mes"], i)
             if m <= mes_atual and m < s["mes"]:
