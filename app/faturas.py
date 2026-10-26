@@ -186,6 +186,33 @@ def ciclo_da_compra(d: date, ciclos: list[Ciclo], hoje: date | None = None) -> t
     return c, hoje > c.fechamento
 
 
+def ciclo_da_transacao(d: date, bill_id: str | None, pendente: bool, ciclos: list[Ciclo],
+                       hoje: date | None = None) -> tuple[Ciclo, bool] | None:
+    """
+    Fatura de UMA transação do cartão, preferindo o que o banco informa à data:
+      1. billId da Pluggy que bate com uma fatura -> é essa fatura (as parcelas 2+ vêm datadas no FECHAMENTO do ciclo
+         anterior, então só a data as mandaria para a fatura errada);
+      2. sem billId e ainda PENDENTE, mas a data cai num ciclo que já fechou -> ela não entrou naquela fatura (o banco a
+         deixou para a seguinte: compras logo após o corte e parcelas dos meses seguintes datadas no dia do fechamento);
+      3. caso contrário, a regra por data (ciclo_da_compra).
+    """
+    if not ciclos:
+        return None
+    hoje = hoje or date.today()
+    if bill_id:
+        for c in ciclos:
+            if c.bill_id and c.bill_id == bill_id:
+                return c, hoje > c.fechamento
+    achado = ciclo_da_compra(d, ciclos, hoje)
+    if achado is None or bill_id or not pendente:
+        return achado
+    c, fechada = achado
+    if not fechada or c.estimado or c.fechamento_estimado:
+        return achado
+    seguinte = next((x for x in ciclos if x.vencimento > c.vencimento), None) or proximo_ciclo(c, _dia_venc_tipico(ciclos))
+    return seguinte, hoje > seguinte.fechamento
+
+
 def ciclo_aberto(ciclos: list[Ciclo], hoje: date | None = None) -> Ciclo | None:
     """Fatura que está acumulando compras agora (primeiro fechamento >= hoje)."""
     if not ciclos:

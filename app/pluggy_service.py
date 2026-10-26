@@ -548,7 +548,8 @@ class PluggyService:
             ciclo_info = None
             if eh_credito and ciclos and purchase_date_str:
                 try:
-                    ciclo_info = fat.ciclo_da_compra(date.fromisoformat(purchase_date_str), ciclos)
+                    ciclo_info = fat.ciclo_da_transacao(date.fromisoformat(purchase_date_str), tx_bill_id,
+                                                       tx.get("status") == "PENDING", ciclos)
                 except ValueError:
                     ciclo_info = None
             if ciclo_info is not None:
