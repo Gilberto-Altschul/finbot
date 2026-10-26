@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone, timedelta
 
 import app.database as db
 from app import faturas as fat
+from app import parcelas as parcelas_proj
 from calendar import monthrange
 
 from app import bancos, itens as itens_mod, revisao, titular
@@ -21,7 +22,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-26a · fatura por billId"
+VERSAO = "2026-10-26c · parcelas previstas na fatura"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -349,7 +350,7 @@ def _creditos_da_fatura(user_phone: str, due: date) -> list[dict]:
 
 def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,
                   detalhar: bool, pagina: int, page_size: int = 15, creditos: list[dict] | None = None,
-                  fecha_em: date | None = None) -> str:
+                  fecha_em: date | None = None, previstas: tuple[float, int] | None = None) -> str:
     """`fecha_em` preenchido = fatura ainda ABERTA (fecha nessa data): mostra "compras até agora" e avisa que as
     parcelas de compras anteriores só entram quando ela fecha, em vez de acusar diferença com o banco."""
     bruto = round(sum(float(g["amount"]) for g in gastos), 2)
@@ -359,6 +360,9 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
     msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 {rotulo}: *R$ {fat.fmt_moeda(total)}*\n"
     if abatido:
         msg += f"↩️ Já abatidos créditos/estornos: R$ {fat.fmt_moeda(abatido)}\n"
+    if previstas and previstas[0] > 0:
+        msg += (f"📅 Parcelas previstas ainda não lançadas: R$ {fat.fmt_moeda(previstas[0])} ({previstas[1]})\n"
+                f"💰 Total com a previsão: *R$ {fat.fmt_moeda(round(total + previstas[0], 2))}*\n")
     if fecha_em:
         msg += f"⏳ Fatura aberta: as parcelas de compras anteriores só entram quando ela fecha ({fecha_em.strftime('%d/%m')}).\n"
     elif total_banco is not None:
@@ -436,7 +440,16 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
                 fecha_em = ab.fechamento
         except Exception as e:
             logger.warning(f"Não consegui saber se a fatura de {c['nome']} está aberta: {e}")
-        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds, fecha_em=fecha_em))
+        previstas = None
+        if total_banco is None or fecha_em:   # fatura ainda aberta/futura: as parcelas que o banco ainda não lançou entram como previsão
+            try:
+                previstas = parcelas_proj.previstas_do_mes(
+                    [x for x in db.get_active_installments(user_phone) if x.get("account_id") == c["id"]],
+                    date(due_c.year, due_c.month, 1), hoje_local())
+            except Exception as e:
+                logger.warning(f"Parcelas previstas indisponíveis para {c['nome']}: {e}")
+        blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds, fecha_em=fecha_em,
+                                    previstas=previstas))
         if detalhar:
             try:
                 from app import tools as _tools   # import tardio: tools importa este módulo

@@ -20,6 +20,7 @@ from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
 from app import titular
+from app import parcelas as parcelas_proj
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -1042,8 +1043,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
         case "listar_parcelamentos":
             compras = db.get_active_installments(user_phone)
             if not compras: return {"mensagem": "💳 Você não possui compras parceladas activas atualmente."}
-            linhas = [f" • {c['description']}: R$ {_fmt_moeda(float(c['amount']))} ({c.get('installment_of', 1)}/{c.get('installment_total', 1)}x)" for c in compras]
-            return {"mensagem": "💳 *Suas Compras Parceladas Ativas:*\n\n" + "\n".join(linhas)}
+            return {"mensagem": parcelas_proj.mensagem(compras)}
 
         case "diagnosticar_estouro":
             cat_target = args.get("categoria", "").strip()

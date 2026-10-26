@@ -417,7 +417,7 @@ def get_resumo_mes_anterior(user_phone: str) -> dict:
 
 def get_active_installments(user_phone: str) -> list[dict]:
     try:
-        res = get_db().table("finbot_expenses").select("description, amount, installment_of, installment_total") \
+        res = get_db().table("finbot_expenses").select("description, amount, installment_of, installment_total, billing_date, account_id") \
             .ilike("user_phone", _q(user_phone)) \
             .not_.is_("installment_of", "null") \
             .order("purchase_date", desc=True).execute()
