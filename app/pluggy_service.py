@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import app.database as db
 from app.config import get_settings
 from app.categorizer import categorizar_gasto_hibrido
+from app import mcc as mcc_mod
 from app.billing import _add_months
 from app.utils import _normalize, parse_mes_fatura, get_lookup_prefix
 from app.classificador import classificar, classificar_receita, Decisao
@@ -635,6 +636,7 @@ class PluggyService:
             preparadas.append({
                 "tx": tx, "descricao": descricao, "raw_amount": raw_amount,
                 "tipo": tipo, "categoria_dica": categoria_dica, "is_forecast": is_forecast,
+                "mcc": credit_card_metadata.get("payeeMCC"),
                 "eh_credito": eh_credito, "purchase_date_str": purchase_date_str,
                 "ciclo_info": ciclo_info,
                 "installment_number": credit_card_metadata.get("installmentNumber"),
@@ -703,10 +705,12 @@ class PluggyService:
         semaforo = asyncio.Semaphore(8)
 
         async def _classificar_uma(descricao: str, categoria_dica: str | None,
-                                   valor: float | None, data: str | None) -> Decisao:
+                                   valor: float | None, data: str | None, mcc=None) -> Decisao:
             async with semaforo:
                 try:
-                    fallback = traduzir(categoria_dica, "Outros") if categoria_dica else None   # dica da Pluggy na taxonomia v2
+                    fallback = mcc_mod.por_mcc(mcc)   # MCC da bandeira: tipo do estabelecimento, mais confiável que a categoria da Pluggy
+                    if fallback is None and categoria_dica:
+                        fallback = traduzir(categoria_dica, "Outros")   # dica da Pluggy na taxonomia v2
                     return await classificar(user_phone, descricao, fallback=fallback, valor=valor, data=data)
                 except Exception as e:
                     logger.warning(f"Falha ao classificar '{descricao}': {e}")
@@ -727,7 +731,8 @@ class PluggyService:
         chaves_unicas = list(grupos.keys())
         resultados_unicos = await asyncio.gather(*[
             _classificar_uma(preparadas[grupos[c][0]]["descricao"], preparadas[grupos[c][0]]["categoria_dica"],
-                             preparadas[grupos[c][0]]["raw_amount"], preparadas[grupos[c][0]]["purchase_date_str"])
+                             preparadas[grupos[c][0]]["raw_amount"], preparadas[grupos[c][0]]["purchase_date_str"],
+                             preparadas[grupos[c][0]].get("mcc"))
             for c in chaves_unicas
         ])
 

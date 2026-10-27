@@ -68,7 +68,7 @@ _AUTO_FORCE_TERMS = [
 # Termos que forçam a categoria Vestuário e Beleza para evitar 'Pessoal'
 _CLOTHING_FORCE_TERMS = [
     "roupa", "vestuario", "calcado", "tenis", "sapato", "zara", "renner", "cea", "riachuelo", "loja de roupa", "lingerie",
-    "manicure", "pedicure", "salao", "cabelo", "estetica", "barbearia", "beleza", "cosmetico"
+    "manicure", "pedicure", "salao", "cabelo", "estetica", "barbearia", "beleza", "cosmetico", "zerezes"
 ]
 
 # Termos que forçam a categoria Família e Dependentes
@@ -263,10 +263,22 @@ async def categorizar_gasto_hibrido(
     # Camada 3: LLM decide a subcategoria — restrita à categoria já conhecida, se houver
     logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao} (categoria conhecida: {categoria_conhecida})")
     try:
+        mensagem = f"Classifique a descrição: '{descricao}'"
+        dica = None
+        if not categoria_conhecida:
+            # Lugar inédito: o que a web diz sobre ele ajuda a IA a acertar (ex.: "ZEREZES SHOPPING ELDOR" = ótica).
+            try:
+                from app import pesquisa_web
+                dica = await pesquisa_web.descrever(descricao)
+            except Exception as e:
+                logger.warning(f"Pesquisa web falhou: {e}")
+                dica = None
+            if dica:
+                mensagem += f"\nO que a busca na web diz sobre esse estabelecimento: {dica}"
         response = await call_llm(
             system=_system_categorizer(categoria_restrita=categoria_conhecida, permitir_perguntar=not permitir_melhor_esforco),
             history=[],
-            message=f"Classifique a descrição: '{descricao}'",
+            message=mensagem,
             tools=[]
         )
         content = response.get("content", "").strip()
@@ -286,7 +298,9 @@ async def categorizar_gasto_hibrido(
 
         # Palpite da IA para um lugar inédito NÃO é gravado como "aprendido": só vale depois que o usuário
         # confirmar (senão um chute como "Salute" -> Saúde vira regra permanente sem ninguém ver).
-        if (cat, sub) != A_CLASSIFICAR and not categoria_conhecida:
+        # Exceção: se a web identificou o estabelecimento (dica), a classificação não é chute no escuro — vale direto
+        # e fica aprendida (o usuário corrige com "acertar" se discordar), sem pergunta.
+        if (cat, sub) != A_CLASSIFICAR and not categoria_conhecida and not dica:
             ORIGEM_PALPITE.set("llm")
         elif (cat, sub) != A_CLASSIFICAR and not eh_marketplace:
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)

@@ -96,6 +96,17 @@ def main():
             print(f"{d} | {float(t.get('amountInAccountCurrency') or t.get('amount') or 0):>8.2f} | {str(t.get('type')):<6} | {parc:>7} | "
                   f"{str(m.get('creditCardDate') or t.get('creditCardDate') or '-')[:10]:>14} | {str(m.get('billId') or '-')[:8]:<8} | "
                   f"{str(t.get('status') or '-'):<7} | {(t.get('description') or '')[:14]}")
+        # MCC (tipo do estabelecimento) e categoria da propria Pluggy: vem preenchido?
+        com_mcc = [t for t in txs if (t.get("creditCardMetadata") or {}).get("payeeMCC")]
+        com_cat = [t for t in txs if t.get("category")]
+        print(f"\n--- MCC: {len(com_mcc)} de {len(txs)} transacoes com payeeMCC preenchido; {len(com_cat)} com category da Pluggy ---")
+        vistos = {}
+        for t in txs:
+            k = (t.get("description") or "")[:22]
+            vistos.setdefault(k, ((t.get("creditCardMetadata") or {}).get("payeeMCC"), t.get("category")))
+        print("descricao              | payeeMCC | categoria Pluggy")
+        for k, (mcc, cat) in list(vistos.items())[:40]:
+            print(f"{k:<22} | {str(mcc or '-'):<8} | {cat or '-'}")
         # campos que a Pluggy manda (nomes), para ver se ha algo de fatura que o FinBot nao usa
         if txs:
             exemplo = next((t for t in txs if (t.get("creditCardMetadata") or {}).get("totalInstallments")), txs[0])
