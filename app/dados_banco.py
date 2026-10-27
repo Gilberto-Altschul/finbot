@@ -16,6 +16,7 @@ from app import faturas as fat
 from app import parcelas as parcelas_proj
 from app import fluxo as fluxo_mod
 from app import previsao as previsao_mod
+from app import demo as demo_mod
 from calendar import monthrange
 
 from app import bancos, itens as itens_mod, revisao, titular
@@ -24,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-27h · webhook do WhatsApp com assinatura da Twilio"
+VERSAO = "2026-10-27i · modo demonstração"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -157,6 +158,8 @@ def esta_em_dia(contas: list[dict], hoje: date | None = None) -> bool:
 # ── escrita ──────────────────────────────────────────────────────────────────
 async def atualizar(pluggy_factory, user_phone: str) -> int:
     """Busca na Pluggy e grava contas, histórico de saldo e faturas. Devolve nº de contas gravadas."""
+    if demo_mod.eh_telefone_demo(user_phone):   # demonstração: nunca fala com a Pluggy (nem vincula o item real)
+        raise RuntimeError("modo demonstração: sem banco conectado")
     pluggy = pluggy_factory()
     contas = await fat.carregar_contas(pluggy, user_phone)
     if not contas:
@@ -206,6 +209,8 @@ async def atualizar(pluggy_factory, user_phone: str) -> int:
 async def garantir(pluggy_factory, user_phone: str, forcar: bool = False) -> tuple[list[dict], bool]:
     """Devolve (contas, desatualizado). Busca na Pluggy só se o dado não for de hoje (ou forcar)."""
     guardadas = ler_contas(user_phone)
+    if demo_mod.eh_telefone_demo(user_phone):
+        return guardadas, False
     if not forcar and esta_em_dia(guardadas):
         return guardadas, False
     try:

@@ -275,6 +275,10 @@ LLM_SCHEMAS: list[dict] = [s for s in SCHEMAS if s["name"] not in SOMENTE_DETERM
 
 async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
     logger.info(f"Executando handler nativo: {name} com args {args}")
+    from app import demo as _demo
+    if _demo.eh_telefone_demo(user_phone) and name in ("sincronizar_banco", "adicionar_banco", "remover_banco"):
+        return {"mensagem": "🎭 No modo demonstração não há banco conectado: os dados já são fictícios. "
+                            "Digite *sair do demo* para voltar aos dados reais."}
 
     def _clean_int(val: Any, default: int) -> int:
         """Extrai apenas os dígitos de uma string para garantir que '9 dias' vire 9."""

@@ -23,6 +23,7 @@ import app.ingestion as ingestion
 import app.revisao as revisao
 import app.titular as titular
 import app.seguranca as seguranca
+import app.demo as demo_mod
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -139,16 +140,21 @@ def _content_sid(n_botoes: int) -> str:
     return _CONTENT_SIDS[n_botoes]
 
 
+BANNER_DEMO = "🎭 _Modo demonstração · dados fictícios_\n\n"
+
+
 def _enviar_quick_reply(to: str, cabeca: str, botoes: list[tuple[str, str]]) -> None:
     variaveis = {"1": cabeca.replace("\n", " ")}
     for i, (bid, titulo) in enumerate(botoes):
         variaveis[str(2 + 2 * i)], variaveis[str(3 + 2 * i)] = titulo, bid
-    _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=to,
+    _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(to),
                             content_sid=_content_sid(len(botoes)), content_variables=json.dumps(variaveis))
 
 
 def _send_whatsapp(to: str, body: str) -> None:
     """Envia texto; se o final da mensagem for uma pergunta de revisão, troca por botões."""
+    if body and demo_mod.eh_telefone_demo(to):
+        body = BANNER_DEMO + body   # modo demonstração: avisa em toda resposta que os dados são fictícios
     if USAR_BOTOES and body and "ou digite uma palavra" in body:
         try:
             est = revisao.ler_estado(to)
@@ -169,6 +175,7 @@ def _send_whatsapp(to: str, body: str) -> None:
 
 
 def _send_whatsapp_texto(to: str, body: str) -> None:
+    to = demo_mod.telefone_real(to)   # o usuário de demonstração é só uma chave: a mensagem vai ao número real
     if not body or not str(body).strip():
         logger.error(f"Erro: corpo de mensagem vazio para {to}. Abortando envio.")
         return
@@ -357,8 +364,17 @@ async def webhook(
         return Response(content="<Response/>", media_type="text/xml")
 
     processed_messages.append(MessageSid)
-    user_phone = From.strip()
+    real_phone = From.strip()
     user_message = Body.strip()
+
+    # Modo demonstração: "modo demo" / "sair do demo" / "limpar demo" valem sempre, ligado ou não.
+    cmd_demo = demo_mod.comando(user_message)
+    if cmd_demo:
+        resposta = await asyncio.to_thread(demo_mod.executar, real_phone, cmd_demo)
+        await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
+        return Response(content="<Response/>", media_type="text/xml")
+    await asyncio.to_thread(demo_mod.limpar_se_expirou, real_phone)   # demo vencido: desliga e apaga os dados fictícios
+    user_phone = demo_mod.efetivo(real_phone)   # = real_phone, ou o usuário sintético se o modo demo estiver ligado
 
     # Toque em botão da revisão: o id vem em ButtonPayload ("r:<qid>:<n>"), o Body é só o título.
     if ButtonPayload and ButtonPayload.startswith("r:"):

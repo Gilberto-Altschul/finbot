@@ -30,6 +30,8 @@ def url_publica(request_url: str, headers: dict, caminho: str) -> str:
     senão monta pelo proxy (X-Forwarded-Proto/Host), porque atrás do Railway o app enxerga http://."""
     base = (os.environ.get("FINBOT_PUBLIC_URL") or "").strip().rstrip("/")
     if base:
+        if not base.lower().startswith(("http://", "https://")):
+            base = "https://" + base  # variável salva sem o esquema: assume https (é o que a Twilio chama)
         return base + caminho
     h = {k.lower(): v for k, v in headers.items()}
     host = h.get("x-forwarded-host") or h.get("host")

@@ -18,7 +18,7 @@ from app import utils
 
 # Entradas que podem se repetir (vale para a categoria OU a subcategoria). Transferência de terceiros só vale se
 # a MESMA pessoa aparecer em 2+ meses com valor parecido (regra geral abaixo): uma transferência avulsa não conta.
-SUBCATEGORIAS_RECORRENTES = {"salario", "salário", "freelance e bonus", "freelance e bônus",
+SUBCATEGORIAS_RECORRENTES = {"salario", "salário", "salario e pro-labore", "salário e pró-labore", "freelance e bonus", "freelance e bônus",
                              "aposentadoria e beneficios", "aposentadoria e benefícios", "aposentadoria", "beneficios inss",
                              "transferencias de terceiros", "transferências de terceiros",
                              "transferencia recebida", "transferência recebida"}
