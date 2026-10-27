@@ -23,7 +23,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-27e · fluxo com contas fixas e gastos do dia a dia"
+VERSAO = "2026-10-27f · fluxo: só boleto/débito automático como conta fixa; Pix recorrente"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]

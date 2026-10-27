@@ -16,10 +16,17 @@ from datetime import date, timedelta
 
 from app import utils
 
-# Entradas recorrentes confiáveis (vale para a categoria OU a subcategoria da linha). Transferência de terceiros
-# (Pix de familiares) fica de fora de propósito: costuma ser eventual.
+# Entradas que podem se repetir (vale para a categoria OU a subcategoria). Transferência de terceiros só vale se
+# a MESMA pessoa aparecer em 2+ meses com valor parecido (regra geral abaixo): uma transferência avulsa não conta.
 SUBCATEGORIAS_RECORRENTES = {"salario", "salário", "freelance e bonus", "freelance e bônus",
-                             "aposentadoria e beneficios", "aposentadoria e benefícios", "aposentadoria", "beneficios inss"}
+                             "aposentadoria e beneficios", "aposentadoria e benefícios", "aposentadoria", "beneficios inss",
+                             "transferencias de terceiros", "transferências de terceiros",
+                             "transferencia recebida", "transferência recebida"}
+# Conta fixa = pagamento que se repete igual: boleto, débito automático, mensalidade. Compra de débito e Pix
+# enviado NÃO são conta fixa (supermercado, posto, farmácia): vão para a média diária.
+_PALAVRAS_FIXA = ("boleto", "debito automatico", "deb aut", "mensalidade", "tarifa", "seguro", "financiamento")
+_PREFIXOS_NAO_FIXA = ("compra", "pix", "transferencia", "saque")
+_TOLERANCIA_FIXA = 0.05
 _TOLERANCIA = 0.15      # o valor pode variar até 15% em relação à mediana e ainda ser "o mesmo" lançamento
 MIN_SAIDA_FIXA = 200.0  # conta fixa recorrente só vale a partir daqui (abaixo disso é padaria, não aluguel)
 TETO_EXCEPCIONAL = 3000.0  # gasto único acima disso não entra na média diária (compra pontual)
@@ -50,8 +57,8 @@ def _chave(desc: str) -> str:
     return utils._normalize(desc)[:24]
 
 
-def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: str, minimo: float = 0.0
-                 ) -> tuple[list[Evento], set[str]]:
+def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: str, minimo: float = 0.0,
+                 tolerancia: float = _TOLERANCIA) -> tuple[list[Evento], set[str]]:
     """Mesma descrição em 2+ meses diferentes, valor parecido. Próxima data = última ocorrência + 1 mês
     (mesmo dia). Retorna (eventos dentro do horizonte, chaves detectadas — mesmo as fora do horizonte)."""
     fim = hoje + timedelta(days=dias)
@@ -71,7 +78,7 @@ def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: 
     for chave, itens in grupos.items():
         itens.sort()
         mediana = statistics.median(v for _d, v, _n in itens)
-        parecidos = [x for x in itens if mediana and abs(x[1] - mediana) <= mediana * _TOLERANCIA]
+        parecidos = [x for x in itens if mediana and abs(x[1] - mediana) <= mediana * tolerancia]
         if len({(d.year, d.month) for d, _v, _n in parecidos}) < 2:
             continue
         chaves.add(chave)
@@ -96,7 +103,13 @@ def saidas_recorrentes(despesas: list[dict], hoje: date, dias: int, minimo: floa
                        ) -> tuple[list[Evento], set[str]]:
     """Contas fixas pagas pela conta (aluguel, condomínio, internet...). Retorna (eventos, chaves para
     tirá-las da média diária)."""
-    return _recorrentes(despesas, hoje, dias, -1, "conta fixa", minimo)
+    fixas = []
+    for r in despesas:
+        d = utils._normalize(r.get("description") or "")
+        if d.startswith(_PREFIXOS_NAO_FIXA) or not any(p in d for p in _PALAVRAS_FIXA):
+            continue
+        fixas.append(r)
+    return _recorrentes(fixas, hoje, dias, -1, "conta fixa", minimo, _TOLERANCIA_FIXA)
 
 
 def ritmo_diario(despesas: list[dict], excluir: set[str], hoje: date, janela: int = JANELA_RITMO) -> float:
