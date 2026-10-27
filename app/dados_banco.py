@@ -23,7 +23,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-27c · fluxo de caixa projetado"
+VERSAO = "2026-10-27e · fluxo com contas fixas e gastos do dia a dia"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -597,7 +597,7 @@ def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dic
     try:
         ini = (hoje - timedelta(days=dias)).isoformat()
         res = (db.get_db().table("finbot_expenses")
-               .select("description, amount, subcategory, purchase_date, billing_date, payment_method")
+               .select("description, amount, category, subcategory, purchase_date, billing_date, payment_method")
                .ilike("user_phone", db._q(user_phone)).eq("transaction_type", "income")
                .gte("billing_date", ini).execute())
         return [r for r in (res.data or []) if r.get("payment_method") != "credito"]
@@ -606,8 +606,24 @@ def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dic
         return []
 
 
+def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 95) -> list[dict]:
+    """Gastos pagos pela conta (débito/Pix/boleto), sem cartão. Pagamento de fatura e transferência entre contas
+    próprias já vêm como 'transferencia' (movement) e não entram."""
+    try:
+        ini = (hoje - timedelta(days=dias)).isoformat()
+        res = (db.get_db().table("finbot_expenses")
+               .select("description, amount, purchase_date, billing_date, payment_method")
+               .ilike("user_phone", db._q(user_phone)).eq("movement", "expense")
+               .gte("purchase_date", ini).execute())
+        return [r for r in (res.data or []) if r.get("payment_method") != "credito"]
+    except Exception as e:
+        logger.warning(f"Despesas de conta indisponíveis para o fluxo de caixa: {e}")
+        return []
+
+
 def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
-    """Saldo das contas correntes projetado dia a dia: faturas a vencer (saídas) e entradas recorrentes."""
+    """Saldo das contas correntes projetado dia a dia: faturas a vencer, contas fixas, entradas recorrentes
+    e o ritmo médio dos gastos do dia a dia."""
     hoje = hoje_local()
     contas = [c for c in ler_contas(user_phone) if c["tipo"] == "BANK" and c.get("saldo") is not None]
     if not contas:
@@ -619,5 +635,9 @@ def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
             if total > 0:
                 eventos.append(fluxo_mod.Evento(c["vence"], f"{c['nome']} (fatura)", -total))
     eventos += fluxo_mod.entradas_recorrentes(_receitas_recentes(user_phone, hoje), hoje, dias)
+    despesas = _despesas_conta_recentes(user_phone, hoje)
+    fixas, chaves_fixas = fluxo_mod.saidas_recorrentes(despesas, hoje, dias)
+    eventos += fixas
+    ritmo = fluxo_mod.ritmo_diario(despesas, chaves_fixas, hoje)
     saldo = round(sum(c["saldo"] for c in contas), 2)
-    return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias))
+    return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias, ritmo))
