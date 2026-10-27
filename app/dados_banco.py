@@ -15,6 +15,7 @@ import app.database as db
 from app import faturas as fat
 from app import parcelas as parcelas_proj
 from app import fluxo as fluxo_mod
+from app import previsao as previsao_mod
 from calendar import monthrange
 
 from app import bancos, itens as itens_mod, revisao, titular
@@ -23,7 +24,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-27f · fluxo: só boleto/débito automático como conta fixa; Pix recorrente"
+VERSAO = "2026-10-27g · previsão de fechamento do mês"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -612,7 +613,7 @@ def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 95) -> lis
     try:
         ini = (hoje - timedelta(days=dias)).isoformat()
         res = (db.get_db().table("finbot_expenses")
-               .select("description, amount, purchase_date, billing_date, payment_method")
+               .select("description, amount, category, purchase_date, billing_date, payment_method")
                .ilike("user_phone", db._q(user_phone)).eq("movement", "expense")
                .gte("purchase_date", ini).execute())
         return [r for r in (res.data or []) if r.get("payment_method") != "credito"]
@@ -641,3 +642,27 @@ def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
     ritmo = fluxo_mod.ritmo_diario(despesas, chaves_fixas, hoje)
     saldo = round(sum(c["saldo"] for c in contas), 2)
     return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias, ritmo))
+
+
+def previsao_mes(user_phone: str) -> str:
+    """Quanto o mês deve fechar, por categoria: realizado + o que ainda deve sair até o último dia."""
+    hoje = hoje_local()
+    mes_ref = hoje.strftime("%Y-%m")
+    fim_mes = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
+    restam = (fim_mes - hoje).days
+    realizado = {r["category"]: r["total"] for r in db.monthly_by_category(user_phone, mes_ref)}
+    despesas = _despesas_conta_recentes(user_phone, hoje)
+    fixas, chaves = fluxo_mod.saidas_recorrentes(despesas, hoje, restam)
+    restante = {c: v * restam for c, v in previsao_mod.ritmo_por_categoria(despesas, chaves, hoje).items()}
+    for e in fixas:
+        cat = previsao_mod.categoria_da_conta_fixa(despesas, e.descricao)
+        restante[cat] = restante.get(cat, 0.0) + abs(e.valor)
+    try:
+        for c in _faturas_projetadas(user_phone, 1).get(date(hoje.year, hoje.month, 1), []):
+            if c.get("banco") is None and c.get("previsto", 0) > 0:
+                restante["Parcelas previstas (cartão)"] = restante.get("Parcelas previstas (cartão)", 0.0) + c["previsto"]
+    except Exception as e:
+        logger.warning(f"Parcelas previstas indisponíveis para a previsão do mês: {e}")
+    limites = {b["category"]: b["amount"] for b in db.get_all_budgets(user_phone, mes_ref)}
+    anterior = db.get_resumo_mes_anterior(user_phone).get("gastos") or None
+    return previsao_mod.formatar(previsao_mod.montar(realizado, restante, limites), hoje, fim_mes, anterior)

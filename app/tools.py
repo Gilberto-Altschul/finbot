@@ -1042,6 +1042,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
         case "faturas_futuras":
             return {"mensagem": dbk.faturas_futuras(user_phone)}
+        case "previsao_mes":
+            return {"mensagem": dbk.previsao_mes(user_phone)}
         case "fluxo_caixa":
             return {"mensagem": dbk.fluxo_caixa(user_phone)}
 
