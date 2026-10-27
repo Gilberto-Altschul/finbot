@@ -22,6 +22,7 @@ import app.pdf_import as pdf_import
 import app.ingestion as ingestion
 import app.revisao as revisao
 import app.titular as titular
+import app.seguranca as seguranca
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -208,6 +209,11 @@ async def _process(user_phone: str, user_message: str) -> None:
 
 async def async_process_pdf_extract(user_phone: str, media_url: str, senha_fornecida: str = None):
     try:
+        if not seguranca.midia_twilio_ok(media_url):
+            # Nunca manda as credenciais da Twilio para um endereço que não seja da Twilio.
+            logger.error("PDF ignorado: o endereço da mídia não é da Twilio.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Não consegui abrir esse arquivo. Envie o PDF de novo.")
+            return
         start_time = time.perf_counter()
         auth_string = f"{settings.twilio_account_sid}:{settings.twilio_auth_token}"
         encoded_auth = base64.b64encode(auth_string.encode()).decode()
@@ -326,7 +332,9 @@ async def cron_sync(background_tasks: BackgroundTasks, x_cron_secret: str = Head
 
 @app.post("/webhook/whatsapp")
 async def webhook(
+    request: Request,
     background_tasks: BackgroundTasks,
+    x_twilio_signature: str = Header(default=""),
     From: str = Form(...),
     Body: str = Form(...),
     MessageSid: str = Form(...),
@@ -335,6 +343,15 @@ async def webhook(
     MediaContentType0: str = Form(None),
     ButtonPayload: str = Form(None)
 ):
+    # Só a Twilio pode chamar este endereço: confere a assinatura antes de qualquer coisa (inclusive antes de
+    # registrar o MessageSid). Desligar só em emergência: FINBOT_VALIDAR_TWILIO=0.
+    if seguranca.validacao_ligada():
+        form = await request.form()
+        url = seguranca.url_publica(str(request.url), dict(request.headers), "/webhook/whatsapp")
+        if not seguranca.assinatura_valida(url, {k: v for k, v in form.items()}, x_twilio_signature, settings.twilio_auth_token):
+            logger.warning(f"Webhook do WhatsApp rejeitado: assinatura inválida (url usada: {url}).")
+            raise HTTPException(status_code=403, detail="assinatura inválida")
+
     if MessageSid in processed_messages:
         logger.warning(f"Mensagem duplicada ignorada: {MessageSid}")
         return Response(content="<Response/>", media_type="text/xml")
@@ -432,4 +449,4 @@ async def webhook_pluggy(request: Request, x_webhook_secret: str = Header(defaul
 
     logger.info(f"Webhook da Pluggy recebido: {str(payload.get('event', 'desconhecido'))[:60]}")
     # TODO (etapa 1, passo 2): gravar o evento em pluggy_events e processar em segundo plano.
-    return {"status": "success"}
+    return {"status": "success"}
