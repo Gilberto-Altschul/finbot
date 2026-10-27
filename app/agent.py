@@ -137,6 +137,10 @@ _KEYWORD_TOOLS = {
     "faturas previstas": "faturas_futuras",
     "previsao de fatura": "faturas_futuras",
     "previsão de fatura": "faturas_futuras",
+    "fluxo de caixa": "fluxo_caixa",
+    "fluxo": "fluxo_caixa",
+    "projecao de saldo": "fluxo_caixa",
+    "projeção de saldo": "fluxo_caixa",
     # --- AUDITORIA E EXTRATOS ---
     "extrato": "listar_gastos_detalhados",
     "lista": "listar_gastos_detalhados",
@@ -249,7 +253,7 @@ def _format_output(result: Any, tool_name: str, user_phone: str) -> str:
 
 async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     if tool_name == "ajuda":
-        return "💡 *FinBot — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'faturas futuras'_\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
+        return "💡 *FinBot — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'faturas futuras'_\n• _'fluxo'_ (saldo projetado)\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
     
     if tool_name == "listar_menu_categorias":
         return (

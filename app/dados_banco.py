@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone, timedelta
 import app.database as db
 from app import faturas as fat
 from app import parcelas as parcelas_proj
+from app import fluxo as fluxo_mod
 from calendar import monthrange
 
 from app import bancos, itens as itens_mod, revisao, titular
@@ -22,7 +23,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-27b · is_forecast acompanha o fechamento"
+VERSAO = "2026-10-27c · fluxo de caixa projetado"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -553,10 +554,17 @@ def formatar_faturas_futuras(meses: list[tuple[date, list[dict]]]) -> str:
 
 
 def faturas_futuras(user_phone: str, quantos: int = 6) -> str:
-    hoje = hoje_local()
     cartoes = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
     if not cartoes:
         return "💳 Não achei cartões de crédito conectados."
+    return formatar_faturas_futuras(sorted(_faturas_projetadas(user_phone, quantos).items())[:quantos])
+
+
+def _faturas_projetadas(user_phone: str, quantos: int = 6) -> dict[date, list[dict]]:
+    """{1º dia do mês: [{nome, vence, lancado, previsto, banco}]} das faturas ainda a vencer (compartilhado por
+    'faturas futuras' e 'fluxo')."""
+    hoje = hoje_local()
+    cartoes = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
     try:
         parcelas = db.get_active_installments(user_phone)
     except Exception as e:
@@ -581,4 +589,35 @@ def faturas_futuras(user_phone: str, quantos: int = 6) -> str:
             if ci is not None and not ci.estimado and ci.total is not None and ci.fechamento < hoje:
                 banco = ci.total
             por_mes.setdefault(mes, []).append({"nome": c["nome"], "vence": due, "lancado": lancado, "previsto": prev, "banco": banco})
-    return formatar_faturas_futuras(sorted(por_mes.items())[:quantos])
+    return por_mes
+
+
+def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dict]:
+    """Entradas (não de cartão) dos últimos meses, para detectar salário e outras recorrências."""
+    try:
+        ini = (hoje - timedelta(days=dias)).isoformat()
+        res = (db.get_db().table("finbot_expenses")
+               .select("description, amount, subcategory, purchase_date, billing_date, payment_method")
+               .ilike("user_phone", db._q(user_phone)).eq("transaction_type", "income")
+               .gte("billing_date", ini).execute())
+        return [r for r in (res.data or []) if r.get("payment_method") != "credito"]
+    except Exception as e:
+        logger.warning(f"Receitas indisponíveis para o fluxo de caixa: {e}")
+        return []
+
+
+def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
+    """Saldo das contas correntes projetado dia a dia: faturas a vencer (saídas) e entradas recorrentes."""
+    hoje = hoje_local()
+    contas = [c for c in ler_contas(user_phone) if c["tipo"] == "BANK" and c.get("saldo") is not None]
+    if not contas:
+        return fluxo_mod.formatar(None, sem_contas=True)
+    eventos: list[fluxo_mod.Evento] = []
+    for itens in _faturas_projetadas(user_phone, 3 + dias // 30).values():
+        for c in itens:
+            total = c["banco"] if c.get("banco") is not None else round(c["lancado"] + c["previsto"], 2)
+            if total > 0:
+                eventos.append(fluxo_mod.Evento(c["vence"], f"{c['nome']} (fatura)", -total))
+    eventos += fluxo_mod.entradas_recorrentes(_receitas_recentes(user_phone, hoje), hoje, dias)
+    saldo = round(sum(c["saldo"] for c in contas), 2)
+    return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias))
