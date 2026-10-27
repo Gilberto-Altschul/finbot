@@ -669,7 +669,7 @@ class PluggyService:
                 if alvo_fatura and not billing_date_override:
                     for k in range(0, len(existentes_orig), 100):
                         gravados = (db.get_db().table("finbot_expenses")
-                                    .select("pluggy_transaction_id, billing_date, account_id")
+                                    .select("pluggy_transaction_id, billing_date, account_id, is_forecast")
                                     .in_("pluggy_transaction_id", existentes_orig[k:k + 100]).execute().data or [])
                         for r in gravados:
                             # só mexe no que é desta conta (ou ainda sem conta) e cuja fatura difere da régua real
@@ -679,7 +679,9 @@ class PluggyService:
                             if not it:
                                 continue
                             alvo = it["ciclo_info"][0].mes_ref.isoformat()
-                            if str(r.get("billing_date") or "")[:10] == alvo:
+                            # Fatura certa E já fechada/aberta como antes: nada a fazer. Se só a "previsão" mudou (a fatura
+                            # fechou desde o último sync), atualiza o is_forecast — antes ele ficava true para sempre.
+                            if str(r.get("billing_date") or "")[:10] == alvo and bool(r.get("is_forecast")) == bool(it["is_forecast"]):
                                 continue
                             (db.get_db().table("finbot_expenses")
                              .update({"billing_date": alvo, "is_forecast": it["is_forecast"]})

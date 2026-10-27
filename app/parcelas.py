@@ -28,6 +28,15 @@ def _soma_meses(m: date, n: int) -> date:
     return date(m.year + k // 12, k % 12 + 1, 1)
 
 
+_SUFIXO_PARCELA = re.compile(r"\s*\(?\b(?:parcela\s*)?\d{1,2}\s*(?:/|de)\s*\d{1,2}\)?\s*$", re.I)
+
+
+def _sem_sufixo_parcela(descricao: str | None) -> str:
+    """Alguns bancos (Nubank) escrevem a parcela na própria descrição ("Amazonmktplc*Ankerinno 2/3"). Sem tirar isso,
+    cada parcela virava uma "compra" diferente e a projeção somava de novo parcelas que já estão gravadas."""
+    return _SUFIXO_PARCELA.sub("", descricao or "").strip()
+
+
 def valor_demais_parcelas(primeira: float, total: int) -> float:
     """Só se conhece a 1ª parcela. Quando o banco põe a sobra do arredondamento nela (ex.: 98,35 + 5 x 98,33 = 590,00),
     as demais valem `primeira - r` centavos, com 0 < r < total, desde que o total da compra seja em reais inteiros.
@@ -51,7 +60,7 @@ def projetar(compras: list[dict], hoje: date | None = None) -> dict:
         n, t, bm = c.get("installment_of"), c.get("installment_total"), _mes(c.get("billing_date"))
         if not n or not t or t <= 1 or bm is None:
             continue
-        chave = (_norm(c.get("description"))[:24], int(t), round(float(c["amount"])))
+        chave = (_norm(_sem_sufixo_parcela(c.get("description")))[:24], int(t), round(float(c["amount"])))
         atual = series.get(chave)
         if atual is None or (bm, int(n)) > (atual["mes"], atual["n"]):
             series[chave] = {"descricao": c.get("description") or "", "valor": float(c["amount"]), "n": int(n), "total": int(t), "mes": bm}
