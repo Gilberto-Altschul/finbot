@@ -50,6 +50,24 @@ def _limpar(tab: dict) -> None:
         tab.pop(next(iter(tab)))
 
 
+def link_whatsapp() -> str:
+    """https://wa.me/<número do FinBot> (o mesmo número de onde o bot responde). Vazio se não der para saber."""
+    try:
+        from app.config import get_settings
+        numero = "".join(ch for ch in str(get_settings().twilio_whatsapp_number or "") if ch.isdigit())
+    except Exception:
+        return ""
+    return f"https://wa.me/{numero}" if numero else ""
+
+
+def _com_whatsapp(pagina: str) -> str:
+    """Troca o marcador do link do WhatsApp; sem número, o botão some."""
+    link = link_whatsapp()
+    if link:
+        return pagina.replace("__WA__", html.escape(link, quote=True))
+    return pagina.replace("<a href=\"__WA__\"", "<a hidden href=\"#\"")
+
+
 def eh_comando(texto: str | None) -> bool:
     return _normalize(texto or "").strip(" .!?") in ("painel", "abrir painel", "meu painel", "painel web", "finflow")
 
@@ -172,8 +190,8 @@ def pagina(finflow_sessao: str | None = Cookie(default=None)):
         raise HTTPException(status_code=503, detail="painel indisponível")
     if not telefone_da_sessao(finflow_sessao):
         logger.info("Painel: acesso sem sessão (cookie ausente, bloqueado ou sessão vencida).")
-        return HTMLResponse(_PAGINA_SEM_SESSAO, status_code=401, headers={"Cache-Control": "no-store"})
-    return HTMLResponse(_PAGINA, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(_com_whatsapp(_PAGINA_SEM_SESSAO), status_code=401, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(_com_whatsapp(_PAGINA), headers={"Cache-Control": "no-store"})
 
 
 @router.get("/painel/api/resumo")
@@ -198,6 +216,12 @@ def api_previsao(finflow_sessao: str | None = Cookie(default=None)):
     return _json(previsao.para_painel(*dados_banco.previsao_dados(usuario)))
 
 
+@router.get("/painel/saiu", response_class=HTMLResponse)
+def saiu():
+    """Tela de despedida (pública): sem sessão ela só informa, não é erro."""
+    return HTMLResponse(_com_whatsapp(_PAGINA_SAIU), headers={"Cache-Control": "no-store"})
+
+
 @router.post("/painel/sair")
 def sair(request: Request, finflow_sessao: str | None = Cookie(default=None)):
     _SESSOES.pop(finflow_sessao or "", None)
@@ -216,7 +240,10 @@ _PAGINA_EXPIRADA = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"u
 _PAGINA_SEM_SESSAO = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Sessão não encontrada</h1>"
     "<p>Mande <b>painel</b> no WhatsApp para receber um link novo. Se você acabou de abrir um link e caiu aqui, abra o link no navegador do celular (Chrome ou Safari), "
-    "não no navegador interno de outro aplicativo, e permita cookies.</p></main></body></html>")
+    "não no navegador interno de outro aplicativo, e permita cookies.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:12px;background:#0E6B57;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
+_PAGINA_SAIU = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Você saiu do painel</h1>"
+    "<p>Seus dados continuam guardados. Para entrar de novo, mande <b>painel</b> no WhatsApp e abra o link novo.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:12px;background:#0E6B57;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
 _PAGINA_ENTRAR = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Abrir o seu painel</h1>"
     "<p>Toque no botão para entrar. O link abre uma única vez.</p>"
@@ -256,9 +283,9 @@ svg text{font:11px system-ui,sans-serif;fill:#5B6B65}
 pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:0}
 nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #DCE2DE;display:flex;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
-nav button[aria-current=page]{color:var(--v)}button.sair{border:0;background:none;color:var(--v);font:inherit;font-weight:700;min-height:44px;cursor:pointer}
+nav button[aria-current=page]{color:var(--v)}.sair{border:0;background:none;color:var(--v);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
 </style></head><body><main>
-<div class="lin"><span class="mut" id="sub"></span><button class="sair" id="sair" type="button">Sair</button></div>
+<div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
 <h1 id="titulo">FinFlow</h1><div id="conteudo" class="mut">Carregando…</div></main>
 <nav aria-label="Seções"><button data-a="resumo" aria-current="page">Resumo</button><button data-a="fluxo">Fluxo</button><button data-a="previsao">Previsão</button></nav>
 <script>
@@ -328,6 +355,6 @@ const vistas={
 async function ir(a){document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
  el.className='mut';el.textContent='Carregando…';try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>ir(b.dataset.a));
-document.getElementById('sair').onclick=async()=>{await fetch('/painel/sair',{method:'POST',credentials:'same-origin'});location.href='/painel'};
+document.getElementById('sair').onclick=async()=>{await fetch('/painel/sair',{method:'POST',credentials:'same-origin'});location.href='/painel/saiu'};
 ir('resumo');
 </script></body></html>"""

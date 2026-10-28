@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-28i · painel: tela de previsão redesenhada"
+VERSAO = "2026-10-28k · painel: botão para voltar ao WhatsApp"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
