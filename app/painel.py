@@ -9,13 +9,14 @@ Todas as rotas de dados exigem a sessão e usam o mesmo telefone do WhatsApp (ou
 """
 from __future__ import annotations
 
+import html
 import logging
 import os
 import secrets
 import time
 from datetime import date
 
-from fastapi import APIRouter, Cookie, HTTPException, Request
+from fastapi import APIRouter, Cookie, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import app.database as db
@@ -69,6 +70,12 @@ def consumir_codigo(codigo: str | None) -> str | None:
     if not item or item[1] <= time.time():
         return None
     return item[0]
+
+
+def codigo_valido(codigo: str | None) -> bool:
+    """O código existe e não venceu? Só olha: NÃO gasta (pré-visualizadores e verificadores de link abrem o GET)."""
+    item = _CODIGOS.get(codigo or "")
+    return bool(item and item[1] > time.time())
 
 
 def criar_sessao(telefone: str) -> str:
@@ -129,12 +136,29 @@ def _json(dados: dict) -> JSONResponse:
 
 # ── rotas ────────────────────────────────────────────────────────────────────
 @router.get("/painel/entrar")
-def entrar(c: str = ""):
+def entrar(request: Request, c: str = ""):
+    """Só mostra o botão: o código NÃO é gasto aqui. Quem gasta é o POST (clique da pessoa), para que a
+    pré-visualização do WhatsApp, verificadores de link e navegadores que carregam a página antes não queimem o link."""
+    if not ligado():
+        raise HTTPException(status_code=503, detail="painel indisponível")
+    agente = (request.headers.get("user-agent") or "")[:80]
+    if not codigo_valido(c):
+        logger.info(f"Painel: link inválido, vencido ou já usado (agente: {agente}).")
+        return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
+    logger.info(f"Painel: página de entrada aberta (agente: {agente}).")
+    return HTMLResponse(_PAGINA_ENTRAR.replace("__CODIGO__", html.escape(c, quote=True)),
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@router.post("/painel/entrar")
+def entrar_confirmar(c: str = Form(default="")):
     if not ligado():
         raise HTTPException(status_code=503, detail="painel indisponível")
     telefone = consumir_codigo(c)
     if not telefone:
+        logger.info("Painel: clique em link inválido, vencido ou já usado.")
         return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
+    logger.info("Painel: sessão aberta.")
     resp = RedirectResponse("/painel", status_code=303)
     resp.set_cookie(COOKIE, criar_sessao(telefone), max_age=VALIDADE_SESSAO, httponly=True, samesite="lax",
                     secure=base_url().startswith("https://"), path="/")
@@ -147,7 +171,8 @@ def pagina(finflow_sessao: str | None = Cookie(default=None)):
     if not ligado():
         raise HTTPException(status_code=503, detail="painel indisponível")
     if not telefone_da_sessao(finflow_sessao):
-        return HTMLResponse(_PAGINA_EXPIRADA, status_code=401, headers={"Cache-Control": "no-store"})
+        logger.info("Painel: acesso sem sessão (cookie ausente, bloqueado ou sessão vencida).")
+        return HTMLResponse(_PAGINA_SEM_SESSAO, status_code=401, headers={"Cache-Control": "no-store"})
     return HTMLResponse(_PAGINA, headers={"Cache-Control": "no-store"})
 
 
@@ -180,11 +205,21 @@ def sair(request: Request, finflow_sessao: str | None = Cookie(default=None)):
 
 
 # ── páginas ──────────────────────────────────────────────────────────────────
-_PAGINA_EXPIRADA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>FinFlow</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#F3F5F2;color:#15221E;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
-main{max-width:360px;display:flex;flex-direction:column;gap:12px}h1{font-size:24px;margin:0}p{margin:0;line-height:1.5;color:#5B6B65}</style></head>
-<body><main><h1>Link vencido ou já usado</h1><p>Mande <b>painel</b> no WhatsApp para receber um link novo. Cada link vale por 10 minutos e abre uma única vez.</p></main></body></html>"""
+_ESTILO = """<style>body{margin:0;font-family:system-ui,sans-serif;background:#F3F5F2;color:#15221E;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+main{max-width:360px;display:flex;flex-direction:column;gap:12px}h1{font-size:24px;margin:0}p{margin:0;line-height:1.5;color:#5B6B65}
+button{min-height:52px;border:0;border-radius:12px;background:#0E6B57;color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer}</style>"""
+_PAGINA_EXPIRADA = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Link vencido ou já usado</h1>"
+    "<p>Mande <b>painel</b> no WhatsApp para receber um link novo. Cada link vale por 10 minutos e abre uma única vez.</p></main></body></html>")
+_PAGINA_SEM_SESSAO = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Sessão não encontrada</h1>"
+    "<p>Mande <b>painel</b> no WhatsApp para receber um link novo. Se você acabou de abrir um link e caiu aqui, abra o link no navegador do celular (Chrome ou Safari), "
+    "não no navegador interno de outro aplicativo, e permita cookies.</p></main></body></html>")
+_PAGINA_ENTRAR = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Abrir o seu painel</h1>"
+    "<p>Toque no botão para entrar. O link abre uma única vez.</p>"
+    "<form method=\"post\" action=\"/painel/entrar\"><input type=\"hidden\" name=\"c\" value=\"__CODIGO__\">"
+    "<button type=\"submit\" style=\"width:100%\">Abrir meu painel</button></form></main></body></html>")
 
 _PAGINA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>FinFlow</title>

@@ -2,7 +2,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # FinBot Agent — o cérebro do sistema (Versão Unificada, Corrigida e Produção)
 # ─────────────────────────────────────────────────────────────────────────────
-#
 from __future__ import annotations
 
 import json
