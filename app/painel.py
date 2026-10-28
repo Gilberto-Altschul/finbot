@@ -186,14 +186,16 @@ def api_resumo(finflow_sessao: str | None = Cookie(default=None)):
 def api_fluxo(dias: int = 30, finflow_sessao: str | None = Cookie(default=None)):
     _real, usuario = _usuario(finflow_sessao)
     import app.dados_banco as dados_banco       # import tardio: puxa o módulo de contas/faturas só quando usa
-    return _json({"texto": dados_banco.fluxo_caixa(usuario, max(7, min(dias, 90)))})
+    import app.fluxo as fluxo
+    return _json(fluxo.para_painel(dados_banco.fluxo_projecao(usuario, max(7, min(dias, 90))), dados_banco.hoje_local()))
 
 
 @router.get("/painel/api/previsao")
 def api_previsao(finflow_sessao: str | None = Cookie(default=None)):
     _real, usuario = _usuario(finflow_sessao)
     import app.dados_banco as dados_banco
-    return _json({"texto": dados_banco.previsao_mes(usuario)})
+    import app.previsao as previsao
+    return _json(previsao.para_painel(*dados_banco.previsao_dados(usuario)))
 
 
 @router.post("/painel/sair")
@@ -236,6 +238,21 @@ h1{margin:0;font-size:28px;letter-spacing:-.5px}.mut{color:var(--mut);font-size:
 .barra{height:8px;border-radius:4px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;background:var(--v)}
 .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700}
 .saudavel{background:#E3F1EA;color:#0E6B57}.atencao{background:#FFF4E5;color:#7A3B00}.estourado{background:#FDECEA;color:#8A1C12}
+h2{margin:0;font-size:17px}
+.alerta{border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px}.alerta.ruim{background:#FDECEA;color:#8A1C12}.alerta.bom{background:#E3F1EA;color:#0B4F40}
+.alerta b{font-size:18px}.alerta span{font-size:14px;line-height:1.45}
+.soma{display:flex;flex-direction:column}.soma .lin{padding:10px 0;border-bottom:1px solid var(--lin)}.soma .lin:last-child{border:0;font-weight:700;font-size:16px}
+.neg{color:#B42318}.pos{color:#0E6B57}.dia{padding:14px 0;border-bottom:1px solid var(--lin);display:grid;grid-template-columns:52px 1fr;gap:4px 12px}.dia:last-child{border:0}
+.dia .d{font-weight:700;font-size:15px}.dia .d small{display:block;font-weight:400;color:var(--mut);font-size:12px}
+.ev{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:2px 0}.ev .n{display:flex;flex-direction:column;gap:2px;min-width:0}.ev .n span{font-size:15px;overflow-wrap:anywhere}.ev b{white-space:nowrap}.lin span:last-child{white-space:nowrap}
+.tipo{font-size:12px;color:var(--mut)}.sd{font-size:13px;color:var(--mut);margin-top:4px}
+details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:var(--v)}details p{margin:0;font-size:13px;line-height:1.5;color:var(--mut)}
+h3{margin:0;font-size:15px}.prev{display:flex;flex-direction:column;gap:4px}.prev .grande{font-size:30px;font-weight:700;letter-spacing:-.5px}
+.pb{position:relative;height:10px;border-radius:5px;background:var(--lin)}.pb i{position:absolute;top:0;bottom:0;display:block}.pb u{position:absolute;top:-3px;bottom:-3px;width:2px;background:#15221E}
+.leg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut)}.leg span:before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
+.cp{padding:14px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:8px}.cp:last-child{border:0}
+.ok{background:#E3F1EA;color:#0E6B57}.estoura{background:#FDECEA;color:#8A1C12}
+svg text{font:11px system-ui,sans-serif;fill:#5B6B65}
 pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:0}
 nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #DCE2DE;display:flex;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
@@ -257,8 +274,57 @@ const vistas={
   '<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<div class="cat"><div class="lin"><b>'+esc(c.nome)+'</b>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'</div>'+
   (c.orcamento?'<div class="barra"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></div>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>'},
- async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='card';el.innerHTML='<pre>'+esc(d.texto)+'</pre>'},
- async previsao(){const d=await api('previsao');ti.textContent='Previsão do mês';sub.innerHTML='';el.className='card';el.innerHTML='<pre>'+esc(d.texto)+'</pre>'}};
+ async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
+  if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
+  const dm=i=>i.slice(8,10)+'/'+i.slice(5,7);const sem=i=>['dom','seg','ter','qua','qui','sex','sáb'][new Date(i+'T12:00:00').getDay()];
+  const cl=v=>v<0?'neg':'pos';const m=v=>(v<0?'-':'')+brl(Math.abs(v));
+  const alerta=d.minimo<0?'<div class="alerta ruim" role="alert"><b>'+(d.saldo_inicial<0?'O saldo já está negativo':'O saldo fica negativo em '+dm(d.primeiro_negativo))+'</b><span>Menor ponto: '+m(d.minimo)+' em '+dm(d.data_minimo)+'. Para não ficar no vermelho, precisaria entrar '+brl(d.falta)+' até lá.</span></div>'
+   :'<div class="alerta bom"><b>O saldo não fica negativo nos próximos '+d.horizonte+' dias</b><span>Menor ponto: '+m(d.minimo)+' em '+dm(d.data_minimo)+'.</span></div>';
+  const S=d.serie,W=320,H=130,P=8,t0=new Date(S[0].data).getTime(),t1=new Date(S[S.length-1].data).getTime()||t0+1;
+  const vs=S.map(x=>x.saldo),lo=Math.min(0,...vs),hi=Math.max(0,...vs),sp=(hi-lo)||1;
+  const X=i=>P+(new Date(i).getTime()-t0)/((t1-t0)||1)*(W-2*P),Y=v=>P+(hi-v)/sp*(H-2*P-12),y0=Y(0);
+  const pts=S.map(x=>X(x.data).toFixed(1)+','+Y(x.saldo).toFixed(1)).join(' ');
+  const graf='<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" aria-label="Saldo projetado de '+m(d.saldo_inicial)+' hoje para '+m(d.saldo_final)+' em '+dm(d.fim)+'">'+
+   '<defs><clipPath id="cima"><rect x="0" y="0" width="'+W+'" height="'+y0.toFixed(1)+'"/></clipPath><clipPath id="baixo"><rect x="0" y="'+y0.toFixed(1)+'" width="'+W+'" height="'+H+'"/></clipPath></defs>'+
+   '<line x1="'+P+'" x2="'+(W-P)+'" y1="'+y0.toFixed(1)+'" y2="'+y0.toFixed(1)+'" stroke="#9AA9A2" stroke-dasharray="3 3"/>'+
+   '<polyline points="'+pts+'" fill="none" stroke="#0E6B57" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#cima)"/>'+
+   '<polyline points="'+pts+'" fill="none" stroke="#B42318" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#baixo)"/>'+
+   '<text x="'+P+'" y="'+(H-2)+'">'+dm(d.inicio)+'</text><text x="'+(W-P)+'" y="'+(H-2)+'" text-anchor="end">'+dm(d.fim)+'</text>'+
+   '<text x="'+(W-P)+'" y="'+(y0-4).toFixed(1)+'" text-anchor="end">R$ 0</text></svg>';
+  const soma='<div class="card soma"><h2>De onde vem o saldo de '+dm(d.fim)+'</h2>'+
+   '<div class="lin"><span>Saldo hoje</span><span class="'+cl(d.saldo_inicial)+'">'+m(d.saldo_inicial)+'</span></div>'+
+   '<div class="lin"><span>Entradas previstas</span><span class="pos">+'+brl(d.entradas)+'</span></div>'+
+   '<div class="lin"><span>Contas e faturas</span><span>-'+brl(d.contas)+'</span></div>'+
+   '<div class="lin"><span>Gastos do dia a dia<br><small class="mut">média de '+brl(d.ritmo)+' por dia</small></span><span>-'+brl(d.gastos_dia)+'</span></div>'+
+   '<div class="lin"><span>Saldo em '+dm(d.fim)+'</span><span class="'+cl(d.saldo_final)+'">'+m(d.saldo_final)+'</span></div></div>';
+  const rot={conta:'Conta fixa',fatura:'Fatura do cartão',entrada:'Entrada prevista'};
+  const linhas=d.dias.length?d.dias.map(x=>'<div class="dia"><div class="d">'+dm(x.data)+'<small>'+sem(x.data)+'</small></div><div>'+
+   x.eventos.map(e=>'<div class="ev"><div class="n"><span>'+esc(e.nome)+'</span><span class="tipo">'+(rot[e.tipo]||'')+'</span></div><b class="'+(e.valor>0?'pos':'')+'">'+(e.valor>0?'+':'-')+brl(Math.abs(e.valor))+'</b></div>').join('')+
+   '<div class="sd">Saldo depois: <b class="'+cl(x.saldo)+'">'+m(x.saldo)+'</b></div></div></div>').join(''):'<p class="mut">Nenhuma entrada ou vencimento conhecido nesse período.</p>';
+  el.innerHTML=alerta+'<div class="card"><h2>Saldo projetado</h2>'+graf+'</div>'+soma+'<div class="card"><h2>Próximos movimentos</h2>'+linhas+'</div>'+
+   '<details class="card"><summary>Como calculamos</summary><p>Parte do saldo atual das contas correntes. Soma as entradas recorrentes detectadas no histórico, desconta as faturas dos cartões e as contas fixas, e aplica a média de gastos do dia a dia'+(d.ritmo_texto?' ('+esc(d.ritmo_texto)+')':' dos últimos 60 dias')+'. Compras futuras no cartão e gastos fora do padrão não entram.</p></details>'},
+ async previsao(){const d=await api('previsao');ti.textContent='Previsão de '+(d.vazio?'':d.mes);sub.innerHTML='';el.className='';
+  if(d.vazio){ti.textContent='Previsão do mês';el.className='card';el.innerHTML='<p class="mut">Ainda não tenho gastos suficientes neste mês para prever o fechamento.</p>';return}
+  const m=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pc=d.previsto>0?Math.min(d.realizado/d.previsto*100,100):0;
+  let comp='';if(d.dif!==null&&d.mes_anterior){const up=d.dif>0;comp='<div class="mut" style="font-size:13px">'+(up?'↑ ':'↓ ')+m(Math.abs(d.dif))+' ('+Math.abs(d.dif_pct)+'%) '+(up?'acima':'abaixo')+' do mês passado ('+m(d.mes_anterior)+')</div>'}
+  const topo='<div class="card prev"><span class="mut" style="font-size:13px">Previsto para o fim do mês</span><span class="grande">'+m(d.previsto)+'</span>'+
+   '<div class="pb" role="img" aria-label="Já gasto '+m(d.realizado)+' de '+m(d.previsto)+' previstos"><i style="left:0;width:'+pc.toFixed(1)+'%;background:#0E6B57;border-radius:5px 0 0 5px"></i><i style="left:'+pc.toFixed(1)+'%;right:0;background:#8FB9AC;border-radius:0 5px 5px 0"></i></div>'+
+   '<div class="leg"><span style="--c:#0E6B57">Já gasto '+m(d.realizado)+'</span><span style="--c:#8FB9AC">Ainda por vir</span></div>'+
+   '<div class="mut" style="font-size:13px">Faltam '+d.restam+' dia'+(d.restam!==1?'s':'')+' para fechar o mês</div>'+comp+'</div>';
+  const est=d.categorias.filter(c=>c.status==='estoura');
+  const alerta=est.length?'<div class="alerta ruim" role="alert"><b>'+est.length+(est.length>1?' categorias devem':' categoria deve')+' passar do orçamento</b><span>'+est.map(c=>esc(c.nome)+' (+'+m(c.excede)+')').join(' · ')+'</span></div>':'';
+  const escala=Math.max(...d.categorias.map(c=>Math.max(c.previsto,c.limite||0)))*1.02||1;
+  const rot={ok:'Dentro',atencao:'Atenção',estoura:'Estoura'};const cls={ok:'ok',atencao:'atencao',estoura:'estoura'};
+  const lin=c=>{const r=c.realizado/escala*100,rest=Math.max(c.previsto-c.realizado,0)/escala*100;
+   return '<div class="cp"><div class="lin"><b>'+esc(c.nome)+'</b>'+(c.limite?'<span class="pill '+cls[c.status]+'">'+rot[c.status]+'</span>':'')+'</div>'+
+   '<div class="pb"><i style="left:0;width:'+r.toFixed(1)+'%;background:#0E6B57;border-radius:5px 0 0 5px"></i><i style="left:'+r.toFixed(1)+'%;width:'+rest.toFixed(1)+'%;background:#8FB9AC"></i>'+(c.limite?'<u style="left:'+(c.limite/escala*100).toFixed(1)+'%"></u>':'')+'</div>'+
+   '<div class="mut" style="font-size:13px">'+m(c.previsto)+' previsto'+(c.limite?' de '+m(c.limite):'')+' · já gasto '+m(c.realizado)+'</div></div>'};
+  const vis=d.categorias.slice(0,8),resto=d.categorias.slice(8);
+  const lista='<div class="card"><h2>Por categoria</h2>'+vis.map(lin).join('')+(resto.length?'<details><summary>Ver mais '+resto.length+' categorias</summary>'+resto.map(lin).join('')+'</details>':'')+
+   '<p class="mut" style="font-size:12px;margin:8px 0 0">Barra escura: já gasto. Barra clara: previsto até o fim do mês. Traço preto: orçamento.</p></div>';
+  el.innerHTML=topo+alerta+lista+'<details class="card"><summary>Como calculamos</summary><p>Soma o que já foi gasto no mês com a média diária dos gastos de débito e Pix por categoria (últimos 60 dias), as contas fixas que ainda vão vencer e as parcelas previstas do cartão. Compras novas no cartão caem na fatura do mês seguinte e não entram aqui.</p></details>'}
+};
 async function ir(a){document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
  el.className='mut';el.textContent='Carregando…';try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>ir(b.dataset.a));

@@ -9,6 +9,7 @@ Convenção: valor > 0 = entra dinheiro; valor < 0 = sai.
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from calendar import monthrange
 from dataclasses import dataclass
@@ -330,3 +331,60 @@ def formatar(proj: dict | None, sem_contas: bool = False) -> str:
              if proj.get("ritmo") else ". Não inclui gastos novos de débito/Pix nem compras futuras no cartão._")
     linhas.append(nota)
     return "\n".join(linhas)
+
+
+# ── Dados para o painel (a mesma projeção, sem texto de WhatsApp) ────────────────────────────────────────
+_PREFIXOS_NOME = ("pagamento de boleto ", "pagamento de ", "entrada ", "pix recebido ", "transferencia recebida ", "transferência recebida ")
+_MINUSCULAS = {"de", "da", "do", "das", "dos", "e", "em", "para"}
+
+
+def _nome_limpo(descricao: str) -> tuple[str, str]:
+    """('Cond Residencial Tor Rochelle', 'conta') a partir da descrição em texto do evento. Tipos: entrada | conta | fatura | outro."""
+    d = (descricao or "").strip()
+    tipo = "outro"
+    m = re.search(r"\(([^)]*)\)\s*$", d)
+    if m:
+        marca = m.group(1).lower()
+        tipo = "conta" if "conta fixa" in marca else ("fatura" if "fatura" in marca else ("entrada" if "previst" in marca else "outro"))
+        d = d[:m.start()].strip()
+    for pre in _PREFIXOS_NOME:
+        if d.lower().startswith(pre):
+            d = d[len(pre):].strip()
+            break
+    d = " ".join(t for t in d.split() if not (t.isdigit() and len(t) >= 8))      # CPF/códigos longos não ajudam a ler
+    if d and d == d.upper():
+        d = " ".join(t.lower() if t.lower() in _MINUSCULAS and i else t.capitalize() for i, t in enumerate(d.split()))
+    return d or "Lançamento", tipo
+
+
+def para_painel(proj: dict | None, hoje: date | None = None) -> dict:
+    """Projeção do fluxo como dados: situação, de onde vem o saldo final, série para o gráfico e dias com eventos."""
+    if proj is None:
+        return {"vazio": True}
+    dias, serie, entradas, contas = [], [], 0.0, 0.0
+    inicio = hoje or proj["fim"] - timedelta(days=proj["horizonte"])
+    serie.append({"data": inicio.isoformat(), "saldo": proj["saldo_inicial"]})
+    for dia, evs, saldo in proj["dias"]:
+        itens = []
+        for e in evs:
+            nome, tipo = _nome_limpo(e.descricao)
+            if e.valor > 0:
+                entradas += e.valor
+                tipo = "entrada"
+            else:
+                contas += -e.valor
+                tipo = tipo if tipo in ("conta", "fatura") else "conta"
+            itens.append({"nome": nome, "tipo": tipo, "valor": round(e.valor, 2)})
+        dias.append({"data": dia.isoformat(), "saldo": saldo, "eventos": itens})
+        serie.append({"data": dia.isoformat(), "saldo": saldo})
+    serie.append({"data": proj["fim"].isoformat(), "saldo": proj["saldo_final"]})
+    gasto_dia = round(proj["saldo_inicial"] + entradas - contas - proj["saldo_final"], 2)
+    return {
+        "vazio": False, "horizonte": proj["horizonte"], "inicio": inicio.isoformat(), "fim": proj["fim"].isoformat(),
+        "saldo_inicial": proj["saldo_inicial"], "saldo_final": proj["saldo_final"],
+        "minimo": proj["minimo"], "data_minimo": proj["data_minimo"].isoformat(), "falta": proj["falta"],
+        "primeiro_negativo": proj["primeiro_negativo"].isoformat() if proj["primeiro_negativo"] else None,
+        "ritmo": proj.get("ritmo") or 0.0, "ritmo_texto": proj.get("ritmo_texto") or "",
+        "entradas": round(entradas, 2), "contas": round(contas, 2), "gastos_dia": max(gasto_dia, 0.0),
+        "serie": serie, "dias": dias,
+    }

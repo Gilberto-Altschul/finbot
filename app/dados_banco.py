@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-28g · painel: link só gasta no clique"
+VERSAO = "2026-10-28i · painel: tela de previsão redesenhada"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -627,13 +627,13 @@ def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 190) -> li
         return []
 
 
-def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
-    """Saldo das contas correntes projetado dia a dia: faturas a vencer, contas fixas, entradas recorrentes
-    e o ritmo médio dos gastos do dia a dia."""
+def fluxo_projecao(user_phone: str, dias: int = 30) -> dict | None:
+    """Projeção do saldo das contas correntes dia a dia (None se não há conta corrente com saldo): faturas a vencer,
+    contas fixas, entradas recorrentes e o ritmo dos gastos do dia a dia."""
     hoje = hoje_local()
     contas = [c for c in ler_contas(user_phone) if c["tipo"] == "BANK" and c.get("saldo") is not None]
     if not contas:
-        return fluxo_mod.formatar(None, sem_contas=True)
+        return None
     eventos: list[fluxo_mod.Evento] = []
     for itens in _faturas_projetadas(user_phone, 3 + dias // 30).values():
         for c in itens:
@@ -646,11 +646,18 @@ def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
     eventos += fixas
     ritmo = fluxo_mod.ritmo_projecao(despesas, chaves_fixas, hoje)   # média, ou ajustada por dia da semana/parte do mês
     saldo = round(sum(c["saldo"] for c in contas), 2)
-    return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias, ritmo))
+    return fluxo_mod.projetar(saldo, eventos, hoje, dias, ritmo)
 
 
-def previsao_mes(user_phone: str) -> str:
-    """Quanto o mês deve fechar, por categoria: realizado + o que ainda deve sair até o último dia."""
+def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
+    """O mesmo fluxo, como texto do WhatsApp."""
+    proj = fluxo_projecao(user_phone, dias)
+    return fluxo_mod.formatar(None, sem_contas=True) if proj is None else fluxo_mod.formatar(proj)
+
+
+def previsao_dados(user_phone: str):
+    """Quanto o mês deve fechar, por categoria: realizado + o que ainda deve sair até o último dia.
+    Devolve (linhas, hoje, fim_mes, gasto do mês anterior)."""
     hoje = hoje_local()
     mes_ref = hoje.strftime("%Y-%m")
     fim_mes = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
@@ -670,4 +677,9 @@ def previsao_mes(user_phone: str) -> str:
         logger.warning(f"Parcelas previstas indisponíveis para a previsão do mês: {e}")
     limites = {b["category"]: b["amount"] for b in db.get_all_budgets(user_phone, mes_ref)}
     anterior = db.get_resumo_mes_anterior(user_phone).get("gastos") or None
-    return previsao_mod.formatar(previsao_mod.montar(realizado, restante, limites), hoje, fim_mes, anterior)
+    return previsao_mod.montar(realizado, restante, limites), hoje, fim_mes, anterior
+
+
+def previsao_mes(user_phone: str) -> str:
+    """A mesma previsão, como texto do WhatsApp."""
+    return previsao_mod.formatar(*previsao_dados(user_phone))

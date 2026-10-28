@@ -108,3 +108,21 @@ def formatar(linhas: list[dict], hoje: date, fim_mes: date, mes_anterior: float 
                "contas fixas que ainda vão vencer + parcelas previstas do cartão. Compras novas no cartão caem na fatura "
                "do mês seguinte e não entram aqui._")
     return "\n".join(out)
+
+
+def para_painel(linhas: list[dict], hoje: date, fim_mes: date, mes_anterior: float | None = None) -> dict:
+    """A mesma previsão como dados (sem texto de WhatsApp): totais, comparação com o mês passado e categorias."""
+    if not linhas:
+        return {"vazio": True}
+    real = round(sum(x["realizado"] for x in linhas), 2)
+    prev = round(sum(x["previsto"] for x in linhas), 2)
+    dif = round(prev - mes_anterior, 2) if mes_anterior else None
+    cats = [{"nome": x["categoria"], "realizado": x["realizado"], "restante": x["restante"], "previsto": x["previsto"],
+             "limite": x["limite"], "status": x["status"],
+             "excede": round(x["previsto"] - x["limite"], 2) if x["limite"] and x["status"] == "estoura" else 0.0}
+            for x in linhas]
+    return {"vazio": False, "mes": _MESES[hoje.month - 1], "ano": hoje.year, "restam": (fim_mes - hoje).days,
+            "fim": fim_mes.isoformat(), "realizado": real, "previsto": prev,
+            "mes_anterior": mes_anterior or None, "dif": dif,
+            "dif_pct": round(dif / mes_anterior * 100) if mes_anterior else None,
+            "estouros": sum(1 for x in linhas if x["status"] == "estoura"), "categorias": cats}
