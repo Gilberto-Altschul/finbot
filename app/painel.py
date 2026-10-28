@@ -17,6 +17,7 @@ import time
 from datetime import date
 
 from fastapi import APIRouter, Cookie, Form, HTTPException, Request
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import app.database as db
@@ -216,6 +217,38 @@ def api_previsao(finflow_sessao: str | None = Cookie(default=None)):
     return _json(previsao.para_painel(*dados_banco.previsao_dados(usuario)))
 
 
+class _Confirmacao(BaseModel):
+    key: str
+    categoria: str
+    subcategoria: str
+
+
+@router.get("/painel/api/revisar")
+def api_revisar(finflow_sessao: str | None = Cookie(default=None)):
+    _real, usuario = _usuario(finflow_sessao)
+    import app.revisao as revisao
+    return _json(revisao.lista_para_painel(usuario))
+
+
+@router.get("/painel/api/categorias")
+def api_categorias(finflow_sessao: str | None = Cookie(default=None)):
+    """Categorias de despesa e suas subcategorias, para escolher 'outra categoria' na revisão."""
+    _usuario(finflow_sessao)
+    from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS, A_CLASSIFICAR
+    cats = [{"nome": c, "subs": [x for x in SUBCATEGORIAS.get(c, []) if (c, x) != A_CLASSIFICAR]} for c in CATEGORIAS_DESPESA]
+    return _json({"categorias": [c for c in cats if c["subs"]]})
+
+
+@router.post("/painel/api/revisar/confirmar")
+def api_revisar_confirmar(corpo: _Confirmacao, finflow_sessao: str | None = Cookie(default=None)):
+    """Corpo JSON (não é um formulário simples: o navegador barra chamadas de outros sites) + cookie SameSite=Lax."""
+    _real, usuario = _usuario(finflow_sessao)
+    import app.revisao as revisao
+    res = revisao.confirmar_para_painel(usuario, corpo.key[:200], corpo.categoria[:80], corpo.subcategoria[:80])
+    logger.info(f"Painel: revisão {'confirmada' if res.get('ok') else 'recusada (' + str(res.get('motivo')) + ')'}.")
+    return _json(res)
+
+
 @router.get("/painel/saiu", response_class=HTMLResponse)
 def saiu():
     """Tela de despedida (pública): sem sessão ela só informa, não é erro."""
@@ -265,7 +298,7 @@ h1{margin:0;font-size:28px;letter-spacing:-.5px}.mut{color:var(--mut);font-size:
 .barra{height:8px;border-radius:4px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;background:var(--v)}
 .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700}
 .saudavel{background:#E3F1EA;color:#0E6B57}.atencao{background:#FFF4E5;color:#7A3B00}.estourado{background:#FDECEA;color:#8A1C12}
-h2{margin:0;font-size:17px}
+#conteudo{display:flex;flex-direction:column;gap:16px}h2{margin:0;font-size:17px}
 .alerta{border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px}.alerta.ruim{background:#FDECEA;color:#8A1C12}.alerta.bom{background:#E3F1EA;color:#0B4F40}
 .alerta b{font-size:18px}.alerta span{font-size:14px;line-height:1.45}
 .soma{display:flex;flex-direction:column}.soma .lin{padding:10px 0;border-bottom:1px solid var(--lin)}.soma .lin:last-child{border:0;font-weight:700;font-size:16px}
@@ -279,6 +312,9 @@ h3{margin:0;font-size:15px}.prev{display:flex;flex-direction:column;gap:4px}.pre
 .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut)}.leg span:before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
 .cp{padding:14px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:8px}.cp:last-child{border:0}
 .ok{background:#E3F1EA;color:#0E6B57}.estoura{background:#FDECEA;color:#8A1C12}
+button.op{min-height:44px;padding:0 14px;border-radius:12px;border:1.5px solid var(--v);background:#fff;color:var(--v);font:inherit;font-size:14px;font-weight:700;cursor:pointer;text-align:left}
+button.op:disabled{opacity:.5}select{min-height:44px;border-radius:12px;border:1.5px solid #8A9A93;background:#fff;font:inherit;font-size:15px;padding:0 10px;color:var(--ink);width:100%}
+.rev,.cx{display:flex;flex-direction:column;gap:10px}.feito{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--v);font-size:14px}.ops{display:flex;flex-wrap:wrap;gap:8px}
 svg text{font:11px system-ui,sans-serif;fill:#5B6B65}
 pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:0}
 nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #DCE2DE;display:flex;padding:6px 8px 10px}
@@ -287,7 +323,7 @@ nav button[aria-current=page]{color:var(--v)}.sair{border:0;background:none;colo
 </style></head><body><main>
 <div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
 <h1 id="titulo">FinFlow</h1><div id="conteudo" class="mut">Carregando…</div></main>
-<nav aria-label="Seções"><button data-a="resumo" aria-current="page">Resumo</button><button data-a="fluxo">Fluxo</button><button data-a="previsao">Previsão</button></nav>
+<nav aria-label="Seções"><button data-a="resumo" aria-current="page">Resumo</button><button data-a="fluxo">Fluxo</button><button data-a="previsao">Previsão</button><button data-a="revisar">Revisar</button></nav>
 <script>
 const brl=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const el=document.getElementById('conteudo'),ti=document.getElementById('titulo'),sub=document.getElementById('sub');
@@ -351,6 +387,29 @@ const vistas={
   const lista='<div class="card"><h2>Por categoria</h2>'+vis.map(lin).join('')+(resto.length?'<details><summary>Ver mais '+resto.length+' categorias</summary>'+resto.map(lin).join('')+'</details>':'')+
    '<p class="mut" style="font-size:12px;margin:8px 0 0">Barra escura: já gasto. Barra clara: previsto até o fim do mês. Traço preto: orçamento.</p></div>';
   el.innerHTML=topo+alerta+lista+'<details class="card"><summary>Como calculamos</summary><p>Soma o que já foi gasto no mês com a média diária dos gastos de débito e Pix por categoria (últimos 60 dias), as contas fixas que ainda vão vencer e as parcelas previstas do cartão. Compras novas no cartão caem na fatura do mês seguinte e não entram aqui.</p></details>'}
+, async revisar(){const d=await api('revisar');ti.textContent='Revisar lançamentos';sub.innerHTML='';el.className='';
+  if(!d.itens.length){el.className='card';el.innerHTML='<b>Tudo revisado 🎉</b><p class="mut" style="margin:6px 0 0">Não há lançamentos aguardando classificação.</p>';return}
+  const m=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  let restam=d.total_lancamentos;const cabeca=()=>restam+(restam===1?' lançamento aguardando':' lançamentos aguardando')+' classificação'+(d.total_grupos>d.itens.length?' · mostrando os '+d.itens.length+' maiores de '+d.total_grupos+' estabelecimentos':'');
+  el.innerHTML='<div class="mut" id="cab">'+cabeca()+'</div>'+d.itens.map((x,i)=>'<div class="card rev" data-k="'+esc(x.key)+'" data-n="'+x.n+'"><div class="lin"><b>'+esc(x.descricao)+'</b><b>'+m(x.total)+'</b></div>'+
+   '<div class="mut" style="font-size:13px">'+[x.n>1?x.n+' lançamentos':'1 lançamento',x.datas,x.origens].filter(Boolean).map(esc).join(' · ')+'</div>'+
+   '<div class="mut" style="font-size:13px">'+(x.opcoes.length?'Toque na categoria certa:':'Sem sugestão. Escolha a categoria:')+'</div>'+
+   '<div class="ops">'+x.opcoes.map(o=>'<button type="button" class="op" data-c="'+esc(o.categoria)+'" data-s="'+esc(o.subcategoria)+'">'+esc(o.categoria)+' › '+esc(o.subcategoria)+'</button>').join('')+'</div>'+
+   '<details'+(x.opcoes.length?'':' open')+'><summary>Outra categoria</summary><div class="cx" style="padding-bottom:6px"><select class="sc" aria-label="Categoria"></select><select class="ss" aria-label="Subcategoria"></select><button type="button" class="op ok2">Confirmar</button></div></details></div>').join('');
+  const cats=(await api('categorias')).categorias;
+  const preencher=sel=>{const sc=sel.querySelector('.sc'),ss=sel.querySelector('.ss');sc.innerHTML='<option value="">Categoria…</option>'+cats.map(c=>'<option>'+esc(c.nome)+'</option>').join('');ss.innerHTML='<option value="">Subcategoria…</option>';
+   sc.onchange=()=>{const c=cats.find(z=>z.nome===sc.value);ss.innerHTML='<option value="">Subcategoria…</option>'+(c?c.subs.map(x=>'<option>'+esc(x)+'</option>').join(''):'')}};
+  el.querySelectorAll('.rev').forEach(preencher);
+  const confirmar=async(card,c,s)=>{card.querySelectorAll('button').forEach(b=>b.disabled=true);
+   try{const r=await fetch('/painel/api/revisar/confirmar',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:card.dataset.k,categoria:c,subcategoria:s})});
+    if(r.status===401){location.href='/painel';return}const j=await r.json();
+    if(j.ok||j.motivo==='ja_resolvido'){restam=Math.max(restam-Number(card.dataset.n),0);document.getElementById('cab').textContent=restam?cabeca():'Tudo revisado 🎉';
+     card.innerHTML='<div class="feito" role="status">✓ '+(j.ok?'Confirmado como '+esc(c)+' › '+esc(s):'Esse já estava resolvido')+'</div>'}
+    else{card.querySelectorAll('button').forEach(b=>b.disabled=false);alert('Não consegui salvar essa categoria. Escolha outra.')}}
+   catch(e){card.querySelectorAll('button').forEach(b=>b.disabled=false);alert('Não consegui salvar agora. Tente de novo.')}};
+  el.onclick=ev=>{const b=ev.target.closest('button.op');if(!b)return;const card=b.closest('.rev[data-k]');if(!card)return;
+   if(b.classList.contains('ok2')){const c=card.querySelector('.sc').value,s=card.querySelector('.ss').value;if(!c||!s){alert('Escolha a categoria e a subcategoria.');return}confirmar(card,c,s)}
+   else confirmar(card,b.dataset.c,b.dataset.s)}}
 };
 async function ir(a){document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
  el.className='mut';el.textContent='Carregando…';try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}

@@ -294,6 +294,27 @@ def _como_inteiro(v) -> int | None:
         return None
 
 
+def aplicar_classificacao(user_phone: str, ids_brutos: list, learn_key: str, familia: bool, cat: str, sub: str) -> None:
+    """Grava a categoria nos lançamentos (confirmados) e ensina o estabelecimento. Usada pelo WhatsApp e pelo painel."""
+    peso = 1 if familia else MIN_AMOSTRAS   # marketplace precisa se repetir; o resto aprende de 1 resposta
+    etapa = "buscar subcategoria"
+    sub_id = None
+    try:
+        sub_id = _como_inteiro(db.get_subcategory_id_by_name(sub))   # só número válido vai para a coluna bigint
+        campos = {"category": cat, "subcategory": sub, "review_status": "confirmado", "confidence": 1.0}
+        if sub_id:
+            campos["subcategory_id"] = sub_id
+        etapa = "atualizar lançamentos"
+        ids = [i for i in (_como_inteiro(x) for x in ids_brutos) if i]   # descarta None/"None"
+        for i in range(0, len(ids), 50):
+            (db.get_db().table("finbot_expenses").update(campos)
+             .in_("id", ids[i:i + 50]).ilike("user_phone", db._q(user_phone)).execute())
+    except Exception as exc:
+        raise RuntimeError(f"etapa '{etapa}' ({cat}/{sub}, sub_id={sub_id if etapa != 'buscar subcategoria' else '?'}, "
+                           f"ids={list(ids_brutos)[:5]}): {exc}") from exc
+    registrar_resposta(user_phone, learn_key, cat, sub, peso)
+
+
 def responder(user_phone: str, texto: str) -> str:
     from app.ingestion import _resolver_categoria  # import tardio: ingestion também importa este módulo
     est = ler_estado(user_phone)
@@ -310,22 +331,7 @@ def responder(user_phone: str, texto: str) -> str:
         return proxima or "Ok, deixei para depois. ✅"
 
     cat, sub = escolha
-    peso = 1 if est["familia"] else MIN_AMOSTRAS   # marketplace precisa se repetir; o resto aprende de 1 resposta
-    etapa = "buscar subcategoria"
-    try:
-        sub_id = _como_inteiro(db.get_subcategory_id_by_name(sub))   # só número válido vai para a coluna bigint
-        campos = {"category": cat, "subcategory": sub, "review_status": "confirmado", "confidence": 1.0}
-        if sub_id:
-            campos["subcategory_id"] = sub_id
-        etapa = "atualizar lançamentos"
-        ids = [i for i in (_como_inteiro(x) for x in est["ids"]) if i]   # descarta None/"None"
-        for i in range(0, len(ids), 50):
-            (db.get_db().table("finbot_expenses").update(campos)
-             .in_("id", ids[i:i + 50]).ilike("user_phone", db._q(user_phone)).execute())
-    except Exception as exc:
-        raise RuntimeError(f"etapa '{etapa}' ({cat}/{sub}, sub_id={sub_id if etapa != 'buscar subcategoria' else '?'}, "
-                           f"ids={est['ids'][:5]}): {exc}") from exc
-    registrar_resposta(user_phone, est["learn_key"], cat, sub, peso)
+    aplicar_classificacao(user_phone, est["ids"], est["learn_key"], est["familia"], cat, sub)
 
     n = len(est["ids"])
     confirmacao = f"✅ Anotado: {cat} › {sub}." + (f" Reclassifiquei {n} lançamentos." if n > 1 else "")
@@ -345,3 +351,35 @@ COMANDOS_REVISAR = {"revisar", "revisao", "revisão", "pendentes", "pendencias",
 
 def eh_comando_revisar(texto: str) -> bool:
     return (texto or "").strip().lower() in COMANDOS_REVISAR
+
+
+
+# ── Painel web: a mesma fila, em tela ───────────────────────────────────────────────────────────────────
+def lista_para_painel(user_phone: str, limite: int = 15) -> dict:
+    """Pendentes agrupados por estabelecimento (maior valor primeiro), com as opções de um toque de cada um.
+    O painel nunca recebe nem devolve ids de lançamento: a confirmação é por `key`, resolvida aqui no servidor."""
+    rows = _buscar_pendentes(user_phone)
+    grupos = agrupar_pendentes(rows)
+    visiveis = grupos[:limite]
+    nomes = _nomes_das_contas(user_phone) if any(g.contas for g in visiveis) else {}
+    itens = []
+    for g in visiveis:
+        ops = montar_opcoes(g, ler_historico(user_phone, g.learn_key).ranking)
+        itens.append({"key": g.key, "descricao": g.descricao, "total": round(g.total, 2), "n": g.n,
+                      "datas": fmt_datas(g.datas), "origens": fmt_origens([nomes[a] for a in g.contas if a in nomes]),
+                      "opcoes": [{"categoria": c, "subcategoria": sb} for c, sb in ops]})
+    return {"total_grupos": len(grupos), "total_lancamentos": len(rows), "itens": itens}
+
+
+def confirmar_para_painel(user_phone: str, key: str, cat: str, sub: str) -> dict:
+    """Confirma a categoria de UM grupo da fila. {ok: False, motivo} se já foi resolvido ou a categoria não vale."""
+    from app.taxonomia import VALIDAS
+    rows = _buscar_pendentes(user_phone)
+    g = next((x for x in agrupar_pendentes(rows) if x.key == key), None)
+    if g is None:
+        return {"ok": False, "motivo": "ja_resolvido"}
+    ops = {tuple(o) for o in montar_opcoes(g, ler_historico(user_phone, g.learn_key).ranking)}
+    if (cat, sub) == A_CLASSIFICAR or ((cat, sub) not in VALIDAS and (cat, sub) not in ops):
+        return {"ok": False, "motivo": "categoria_invalida"}
+    aplicar_classificacao(user_phone, g.ids, g.learn_key, g.familia, cat, sub)
+    return {"ok": True, "reclassificados": g.n, "restantes_lancamentos": len(rows) - g.n}
