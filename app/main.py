@@ -24,6 +24,7 @@ import app.revisao as revisao
 import app.titular as titular
 import app.seguranca as seguranca
 import app.demo as demo_mod
+import app.painel as painel
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -53,6 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FinBot", version="1.0.0", lifespan=lifespan)
 
 http_client: httpx.AsyncClient = None
+app.include_router(painel.router)   # painel web do FinFlow (/painel/...)
 processed_messages = deque(maxlen=1000)
 _twilio = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
@@ -425,6 +427,11 @@ async def webhook(
     if titular.eh_comando(user_message):
         reply = await asyncio.to_thread(titular.responder, user_phone, user_message)
         await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+        return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 2.45: COMANDO "painel" — manda o link de uso único do painel web ──
+    if painel.eh_comando(user_message):
+        await asyncio.to_thread(_send_whatsapp, real_phone, painel.mensagem_link(real_phone))
         return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──
