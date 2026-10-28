@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 # De onde veio o último palpite: "llm" = a IA chutou um estabelecimento inédito (sem keyword nem histórico).
 # Quem chama (classificador) usa isso para PERGUNTAR em vez de gravar sozinho.
 ORIGEM_PALPITE: contextvars.ContextVar = contextvars.ContextVar("origem_palpite", default=None)
+CERTEZA_IA: contextvars.ContextVar = contextvars.ContextVar("certeza_ia", default=None)   # 0..1, quando a IA decidiu sozinha
+LIMIAR_IA_AUTO = 0.5     # a IA classifica sem pergunta quando a certeza declarada é MAIOR que isso
+
+
+def _certeza(valor) -> float | None:
+    """Certeza declarada pela IA como fração 0..1 (aceita 85, '85%', 0.85). Ilegível -> None (= dúvida)."""
+    try:
+        x = float(str(valor).strip().rstrip("%").replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if x > 1:
+        x /= 100
+    return x if 0 <= x <= 1 else None
 
 
 # Termos curtos que viram falso positivo quando buscados como pedaço de outra palavra:
@@ -145,7 +158,11 @@ SUBCATEGORIAS E CATEGORIAS PERMITIDAS NO SISTEMA (lista oficial, vinda do banco 
 ATENÇÃO: use 'Outros' só quando nenhuma outra categoria servir. Receitas, transferências e investimentos não fazem parte desta lista.
 {instrucao_ambiguidade}
 Responda EXCLUSIVAMENTE com um JSON no formato estrito, usando exatamente os nomes da lista acima:
-{{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria"}}
+{{"categoria": "Nome da Categoria", "subcategoria": "Nome da Subcategoria", "certeza": 85}}
+
+Campo "certeza": número inteiro de 0 a 100 com a sua confiança de que a classificação está certa. Seja honesto: acima de 50 só
+se você reconhece o estabelecimento ou o termo é claro (livraria, sebo, farmácia, posto, seguro); se estiver deduzindo pelo nome
+ou chutando, use 50 ou menos.
 """
 
 async def categorizar_gasto_hibrido(
@@ -164,6 +181,7 @@ async def categorizar_gasto_hibrido(
     """
     desc_norm = _normalize(descricao)
     ORIGEM_PALPITE.set(None)
+    CERTEZA_IA.set(None)
 
     # Camada -1: Proteção Hardcoded para Família e Dependentes (Prioridade Máxima)
     if _tem_termo(desc_norm, _FAMILY_FORCE_TERMS):
@@ -300,9 +318,15 @@ async def categorizar_gasto_hibrido(
         # confirmar (senão um chute como "Salute" -> Saúde vira regra permanente sem ninguém ver).
         # Exceção: se a web identificou o estabelecimento (dica), a classificação não é chute no escuro — vale direto
         # e fica aprendida (o usuário corrige com "acertar" se discordar), sem pergunta.
-        if (cat, sub) != A_CLASSIFICAR and not categoria_conhecida and not dica:
+        # Também vale direto quando a própria IA declara MAIS de 50% de certeza (LIMIAR_IA_AUTO); a certeza fica gravada
+        # no lançamento (confidence). Com 50% ou menos, sem o campo ou ilegível, continua sendo chute: revisão.
+        certeza = _certeza(data.get("certeza"))
+        confiante = certeza is not None and certeza > LIMIAR_IA_AUTO
+        if (cat, sub) != A_CLASSIFICAR and not categoria_conhecida and not dica and not confiante:
             ORIGEM_PALPITE.set("llm")
         elif (cat, sub) != A_CLASSIFICAR and not eh_marketplace:
+            if confiante and not dica and not categoria_conhecida:
+                CERTEZA_IA.set(round(certeza, 2))
             db.save_user_merchant_mapping(user_phone, descricao, cat, sub)
 
         return cat, sub

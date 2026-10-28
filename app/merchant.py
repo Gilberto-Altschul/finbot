@@ -9,6 +9,8 @@ def sem_acento(s: str) -> str:
 
 
 _PARCELA = re.compile(r"\bparc(?:ela)?\.?\s*\d{1,2}\s*(?:/|de)\s*\d{1,2}\b|\b\d{1,2}/\d{1,2}\b")
+# Mês de cobrança no fim da descrição ("SCP ESSENCIAL- OUT/26"): muda todo mês e quebraria a chave do estabelecimento.
+_MES_ANO = re.compile(r"\b(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s*/\s*\d{2,4}\b")
 _PROCESSADORA = re.compile(r"^(?:mp|pag|pagseguro|ec|iz|sumup|stone|cielo|getnet|rede)\s*\*\s*")
 _PREFIXOS = re.compile(
     r"^(?:compra\s+(?:no\s+)?(?:debito|credito|cartao)|pix\s+(?:enviado|recebido)|"
@@ -22,7 +24,8 @@ _NUM_LONGO = re.compile(r"\b\d{3,}\b")
 def normalizar_merchant(descricao: str, max_tokens: int = 4) -> str:
     """Chave estável do estabelecimento: sem acento, prefixo de operação, sufixo legal, nº de loja/parcela."""
     base = sem_acento((descricao or "").lower()).strip()
-    s = _PARCELA.sub(" ", base)
+    s = _MES_ANO.sub(" ", base)
+    s = _PARCELA.sub(" ", s)
     s = _PROCESSADORA.sub("", s)
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()

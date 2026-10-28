@@ -81,7 +81,7 @@ async def classificar(user_phone: str, descricao: str,
     if d.status == "auto" and d.confidence == CONF_HISTORICO:
         return d
 
-    from app.categorizer import ORIGEM_PALPITE
+    from app.categorizer import ORIGEM_PALPITE, CERTEZA_IA
     base = await categorizar_gasto_hibrido(
         user_phone, descricao, fallback=fallback, permitir_melhor_esforco=True)
     d = decidir(base, familia, hist_familia, hist_merchant,
@@ -89,6 +89,10 @@ async def classificar(user_phone: str, descricao: str,
     if ORIGEM_PALPITE.get() == "llm" and d.status == "auto":
         # Lugar inédito classificado só por chute da IA (ex.: "Salute Prime" -> Saúde): pergunta antes de valer.
         return Decisao(d.categoria, d.subcategoria, "revisar", CONF_DUVIDA, d.merchant_key, [(d.categoria, d.subcategoria)])
+    certeza_ia = CERTEZA_IA.get()
+    if certeza_ia is not None and d.status == "auto":
+        # A IA decidiu sozinha com mais de 50% de certeza: grava a certeza dela, para dar para achar e conferir depois.
+        d = Decisao(d.categoria, d.subcategoria, d.status, certeza_ia, d.merchant_key, d.sugestoes)
     return d
 
 
