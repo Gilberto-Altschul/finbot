@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-28d · IA com mais de 50% de certeza classifica sozinha"
+VERSAO = "2026-10-28e · fluxo com gasto sazonal (dia da semana e parte do mês)"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -612,7 +612,7 @@ def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dic
         return []
 
 
-def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 95) -> list[dict]:
+def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 190) -> list[dict]:
     """Gastos pagos pela conta (débito/Pix/boleto), sem cartão. Pagamento de fatura e transferência entre contas
     próprias já vêm como 'transferencia' (movement) e não entram."""
     try:
@@ -644,7 +644,7 @@ def fluxo_caixa(user_phone: str, dias: int = 30) -> str:
     despesas = _despesas_conta_recentes(user_phone, hoje)
     fixas, chaves_fixas = fluxo_mod.saidas_recorrentes(despesas, hoje, dias)
     eventos += fixas
-    ritmo = fluxo_mod.ritmo_diario(despesas, chaves_fixas, hoje)
+    ritmo = fluxo_mod.ritmo_projecao(despesas, chaves_fixas, hoje)   # média, ou ajustada por dia da semana/parte do mês
     saldo = round(sum(c["saldo"] for c in contas), 2)
     return fluxo_mod.formatar(fluxo_mod.projetar(saldo, eventos, hoje, dias, ritmo))
 

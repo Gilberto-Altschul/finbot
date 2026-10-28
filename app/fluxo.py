@@ -130,11 +130,128 @@ def ritmo_diario(despesas: list[dict], excluir: set[str], hoje: date, janela: in
     return round(total / janela, 2)
 
 
-def projetar(saldo_inicial: float, eventos: list[Evento], hoje: date, dias: int, ritmo: float = 0.0) -> dict:
-    """Linha do tempo só com os dias que têm movimento (o ritmo diário é descontado entre eles). Retorna:
+# ── Ritmo dos gastos do dia a dia: média simples ou ajustada por dia da semana e parte do mês ──────────────────
+JANELA_SAZONAL = 180        # dias de histórico usados para achar o padrão (dia da semana / parte do mês)
+MIN_DIAS_SAZONAL = 90       # cobertura mínima do histórico para ajustar os fatores
+K_SEMANA, K_MES = 4.0, 10.0  # "amostras de dúvida": com poucos dias num grupo, o fator volta para 1
+GANHO_MIN = 0.03            # o ajuste só vale se errar pelo menos 3% menos que a média simples no teste com o histórico
+_DIAS_SEMANA = ("segundas", "terças", "quartas", "quintas", "sextas", "sábados", "domingos")
+_PARTES_MES = ("no início do mês (dias 1 a 10)", "no meio do mês (dias 11 a 20)", "no fim do mês (dia 21 em diante)")
+
+
+def _parte_mes(d: date) -> int:
+    return 0 if d.day <= 10 else (1 if d.day <= 20 else 2)
+
+
+@dataclass(frozen=True)
+class Ritmo:
+    """Gasto diário previsto. `sazonal=False`: o mesmo valor todo dia (média). `sazonal=True`: a média vezes o fator do
+    dia da semana e da parte do mês (normalizado, para o nível geral continuar igual ao dos últimos dias)."""
+    media: float
+    sem: tuple = (1.0,) * 7
+    mes: tuple = (1.0,) * 3
+    norm: float = 1.0
+    sazonal: bool = False
+    ganho: float = 0.0       # quanto o ajuste errou a menos que a média, no teste com o histórico (0.25 = 25%)
+
+    def __call__(self, d: date) -> float:
+        if not self.sazonal:
+            return self.media
+        return self.media * self.sem[d.weekday()] * self.mes[_parte_mes(d)] / self.norm
+
+    def descricao(self) -> str:
+        if not self.sazonal:
+            return ""
+        altos = [_DIAS_SEMANA[i] for i, f in enumerate(self.sem) if f >= 1.2]
+        partes = [_PARTES_MES[i] for i, f in enumerate(self.mes) if f >= 1.15]
+        onde = " e ".join(x for x in (", ".join(altos), ", ".join(partes)) if x)
+        return "ajustada pelo seu histórico" + (f" (maiores em {onde})" if onde else "")
+
+
+def _diarios(despesas: list[dict], excluir: set[str], ini: date, fim: date) -> list[tuple[date, float]]:
+    """Gasto variável por dia entre `ini` e `fim` (dias sem gasto valem 0), sem contas fixas e sem gasto único enorme."""
+    tot: dict[date, float] = {}
+    for r in despesas:
+        dia = _dia(r)
+        if dia is None or not (ini <= dia <= fim) or _chave(r.get("description") or "") in excluir:
+            continue
+        try:
+            v = abs(float(r["amount"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if v <= TETO_EXCEPCIONAL:
+            tot[dia] = tot.get(dia, 0.0) + v
+    return [(ini + timedelta(days=i), tot.get(ini + timedelta(days=i), 0.0)) for i in range((fim - ini).days + 1)]
+
+
+def _fatores(dias: list[tuple[date, float]]) -> tuple[tuple, tuple] | None:
+    """Fator por dia da semana e por parte do mês (gasto médio do grupo / gasto médio geral), puxado para 1 com poucos dias."""
+    if not dias:
+        return None
+    media = sum(v for _d, v in dias) / len(dias)
+    if media <= 0:
+        return None
+    s_sem, n_sem, s_mes, n_mes = [0.0] * 7, [0] * 7, [0.0] * 3, [0] * 3
+    for d, v in dias:
+        s_sem[d.weekday()] += v; n_sem[d.weekday()] += 1
+        s_mes[_parte_mes(d)] += v; n_mes[_parte_mes(d)] += 1
+    sem = tuple(((s_sem[i] / n_sem[i] / media) * n_sem[i] + K_SEMANA) / (n_sem[i] + K_SEMANA) if n_sem[i] else 1.0 for i in range(7))
+    mes = tuple(((s_mes[i] / n_mes[i] / media) * n_mes[i] + K_MES) / (n_mes[i] + K_MES) if n_mes[i] else 1.0 for i in range(3))
+    return sem, mes
+
+
+def _ritmo_ate(despesas: list[dict], excluir: set[str], corte: date) -> Ritmo:
+    """Ritmo ajustado usando só dados até `corte` (inclusive). Sem histórico suficiente: média simples (sazonal=False)."""
+    media = ritmo_diario([r for r in despesas if (_dia(r) or corte) <= corte], excluir, corte)
+    datas = [d for d in (_dia(r) for r in despesas) if d is not None and d <= corte]
+    if not datas:
+        return Ritmo(media)
+    ini = max(min(datas), corte - timedelta(days=JANELA_SAZONAL - 1))
+    if (corte - ini).days + 1 < MIN_DIAS_SAZONAL:
+        return Ritmo(media)
+    fat = _fatores(_diarios(despesas, excluir, ini, corte - timedelta(days=1)))   # o dia do corte está incompleto
+    if fat is None:
+        return Ritmo(media)
+    sem, mes = fat
+    ref = [corte - timedelta(days=i) for i in range(JANELA_RITMO)]
+    norm = sum(sem[d.weekday()] * mes[_parte_mes(d)] for d in ref) / len(ref)
+    return Ritmo(media, sem, mes, norm or 1.0, True)
+
+
+def ritmo_projecao(despesas: list[dict], excluir: set[str], hoje: date, passos: int = 4, horizonte: int = 14) -> Ritmo:
+    """Escolhe o ritmo do fluxo. O ajuste por dia da semana e parte do mês só é usado se, num teste com o próprio
+    histórico (prever os `horizonte` dias seguintes a vários cortes passados), errar menos que a média simples."""
+    atual = _ritmo_ate(despesas, excluir, hoje)
+    if not atual.sazonal:
+        return atual
+    err_media, err_saz = [], []
+    cortes = 0
+    for k in range(1, passos + 1):
+        corte = hoje - timedelta(days=horizonte * k)
+        r = _ritmo_ate(despesas, excluir, corte)
+        if not r.sazonal:
+            continue
+        cortes += 1
+        for d, v in _diarios(despesas, excluir, corte + timedelta(days=1), corte + timedelta(days=horizonte)):
+            err_media.append(abs(v - r.media))
+            err_saz.append(abs(v - r(d)))
+    if cortes < 2 or not err_media:
+        return Ritmo(atual.media)           # histórico curto demais para provar que o ajuste ajuda
+    em, es = sum(err_media) / len(err_media), sum(err_saz) / len(err_saz)
+    if em <= 0 or es >= em * (1 - GANHO_MIN):
+        return Ritmo(atual.media)
+    return Ritmo(atual.media, atual.sem, atual.mes, atual.norm, True, round(1 - es / em, 2))
+
+
+def projetar(saldo_inicial: float, eventos: list[Evento], hoje: date, dias: int, ritmo=0.0) -> dict:
+    """Linha do tempo só com os dias que têm movimento (o ritmo diário é descontado dia a dia entre eles). `ritmo`:
+    número (mesmo gasto todo dia) ou `Ritmo`. Retorna:
     {saldo_inicial, dias: [(data, [Evento], saldo_apos)], minimo, data_minimo, primeiro_negativo, falta,
-     saldo_final, fim, ritmo, horizonte}"""
+     saldo_final, fim, ritmo, ritmo_texto, horizonte}"""
     fim = hoje + timedelta(days=dias)
+    gasto = ritmo if callable(ritmo) else (lambda _d, v=float(ritmo or 0.0): v)
+    media = float(getattr(ritmo, "media", ritmo) or 0.0)
+    tem_ritmo = media > 0
     por_dia: dict[date, list[Evento]] = {}
     for e in eventos:
         if hoje <= e.data <= fim:
@@ -148,10 +265,13 @@ def projetar(saldo_inicial: float, eventos: list[Evento], hoje: date, dias: int,
         """Gasta o ritmo diário de `anterior` até `ate`; marca o 1º dia negativo se o saldo acabar no meio."""
         nonlocal saldo, minimo, data_min, primeiro_neg, anterior
         gap = (ate - anterior).days
-        if ritmo > 0 and gap > 0:
-            if primeiro_neg is None and saldo - ritmo * gap < 0:
-                primeiro_neg = anterior + timedelta(days=max(1, math.floor(saldo / ritmo) + 1)) if saldo >= 0 else ate
-            saldo = round(saldo - ritmo * gap, 2)
+        if tem_ritmo and gap > 0:
+            for k in range(1, gap + 1):
+                dia = anterior + timedelta(days=k)
+                saldo -= gasto(dia)
+                if primeiro_neg is None and saldo < 0:
+                    primeiro_neg = dia
+            saldo = round(saldo, 2)
             if saldo < minimo:
                 minimo, data_min = saldo, ate
         anterior = ate
@@ -170,7 +290,8 @@ def projetar(saldo_inicial: float, eventos: list[Evento], hoje: date, dias: int,
     avancar(fim)
     return {"saldo_inicial": round(saldo_inicial, 2), "dias": linhas, "minimo": minimo, "data_minimo": data_min,
             "primeiro_negativo": primeiro_neg, "falta": round(-minimo, 2) if minimo < 0 else 0.0,
-            "saldo_final": saldo, "fim": fim, "ritmo": ritmo, "horizonte": dias}
+            "saldo_final": saldo, "fim": fim, "ritmo": round(media, 2),
+            "ritmo_texto": ritmo.descricao() if hasattr(ritmo, "descricao") else "", "horizonte": dias}
 
 
 def brl(v: float) -> str:
@@ -183,7 +304,9 @@ def formatar(proj: dict | None, sem_contas: bool = False) -> str:
         return "📈 Não achei contas correntes conectadas para projetar o fluxo de caixa."
     linhas = [f"📈 *Fluxo de caixa — próximos {proj['horizonte']} dias*",
               f"\n🏦 Saldo hoje (contas correntes): *{brl(proj['saldo_inicial'])}*"]
-    if proj.get("ritmo"):
+    if proj.get("ritmo") and proj.get("ritmo_texto"):
+        linhas.append(f"🛒 Gastos do dia a dia: média de *{brl(proj['ritmo'])}/dia*, {proj['ritmo_texto']}")
+    elif proj.get("ritmo"):
         linhas.append(f"🛒 Gastos do dia a dia (média dos últimos {JANELA_RITMO} dias): *{brl(proj['ritmo'])}/dia*")
     linhas.append("")
     if not proj["dias"]:
