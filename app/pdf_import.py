@@ -11,7 +11,7 @@ from google import genai
 from google.genai import types, errors
 
 from app.utils import _normalize
-from app.taxonomia import CATEGORIAS_DESPESA
+from app.taxonomia import lista_para_prompt
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload, StandardTransaction
 from app.parsers import detectar_banco_e_tipo, santander_credito, c6_credito
@@ -138,8 +138,9 @@ Regras:
      NUNCA use ano {fatura_ano + 1}.
    - description: nome limpo do estabelecimento
    - amount: float positivo
-   - category: {', '.join(CATEGORIAS_DESPESA)}
-   - subcategory: subcategoria lógica
+   - category e subcategory: escolha EXATAMENTE um par da lista abaixo (categoria: subcategorias).
+     Se não souber o que é o estabelecimento, use category "Outros" e subcategory "A classificar". Não invente nomes.
+{lista_para_prompt()}
    - installment_of/installment_total: parcela atual/total (null se não parcelado)
    - payment_method: credito ou debito
    - type: expense ou income
@@ -158,6 +159,9 @@ Extraia TODAS as transações de ambas as colunas, se houver.
 Ignore cabeçalhos, totais, estornos e pagamentos de fatura.
 Para cada transação: id, date (ISO, DD/MM nunca MM/DD), description, amount (positivo),
 category, subcategory, installment_of, installment_total, payment_method (credito/debito), type (expense/income).
+Para category e subcategory escolha EXATAMENTE um par da lista abaixo (categoria: subcategorias); se não souber o que é,
+use category "Outros" e subcategory "A classificar".
+""" + lista_para_prompt() + """
 Responda APENAS com o JSON.
 """
         pdf_b64 = base64.b64encode(pdf_content).decode()

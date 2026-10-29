@@ -13,8 +13,8 @@ _PARCELA = re.compile(r"\bparc(?:ela)?\.?\s*\d{1,2}\s*(?:/|de)\s*\d{1,2}\b|\b\d{
 _MES_ANO = re.compile(r"\b(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s*/\s*\d{2,4}\b")
 _PROCESSADORA = re.compile(r"^(?:mp|pag|pagseguro|ec|iz|sumup|stone|cielo|getnet|rede)\s*\*\s*")
 _PREFIXOS = re.compile(
-    r"^(?:compra\s+(?:no\s+)?(?:debito|credito|cartao)|pix\s+(?:enviado|recebido)|"
-    r"transferencia\s+(?:enviada|recebida)|pagamento\s+(?:de\s+)?(?:boleto|conta)|"
+    r"^(?:compra\s+(?:no\s+)?(?:debito|credito|cartao)|pix\s+(?:enviado|recebido|transf(?:erencia)?)|"
+    r"transferencia\s+(?:enviada|recebida)|pag(?:amento)?\s+(?:de\s+)?(?:boleto|conta)|"
     r"debito\s+automatico|compra)\s+"
 )
 _LEGAIS = re.compile(r"\b(?:ltda|eireli|epp|me|sa|s a|cia)\b")

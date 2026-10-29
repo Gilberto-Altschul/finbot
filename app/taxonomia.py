@@ -57,6 +57,17 @@ SUBCATEGORIAS = {
 
 VALIDAS = {(c, s) for c, subs in SUBCATEGORIAS.items() for s in subs}
 
+
+def lista_para_prompt() -> str:
+    """Categorias de despesa com suas subcategorias, uma por linha, para a IA do PDF escolher só nomes oficiais
+    (assim a classificação já vem na leitura do extrato e poupa chamadas de IA e de busca na web depois)."""
+    linhas = []
+    for c in CATEGORIAS_DESPESA:
+        subs = [x for x in SUBCATEGORIAS.get(c, []) if (c, x) != A_CLASSIFICAR]
+        if subs:
+            linhas.append(f"   - {c}: {', '.join(subs)}")
+    return "\n".join(linhas)
+
 # Nomes antigos (categoria, subcategoria) -> nomes novos. Usado em tudo que ainda chega com a taxonomia velha (PDF, IA, atalhos).
 LEGADO = {
     ('Alimentação', 'Cafe'): ('Alimentação', 'Padaria e Café'),

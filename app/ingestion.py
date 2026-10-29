@@ -6,6 +6,7 @@ import app.database as db
 import asyncio
 from dataclasses import dataclass
 import app.revisao as revisao
+import app.faturas as _fat
 from app.classificador import classificar
 from app.merchant import normalizar_merchant, familia_ambigua
 
@@ -292,7 +293,7 @@ def _resolver_categoria(subcategoria_input: str) -> tuple[str, str] | None:
     return None
 
 
-def _montar_diagnostico(total: int, novos: int, ignorados: int, auto: int, revisar: int) -> str:
+def _montar_diagnostico(total: int, novos: int, ignorados: int, auto: int, revisar: int, faturas: int = 0) -> str:
     msg = (
         "🏦 *Extrato processado!*\n\n"
         f"🔍 {total} transações no arquivo.\n"
@@ -300,9 +301,33 @@ def _montar_diagnostico(total: int, novos: int, ignorados: int, auto: int, revis
     )
     if ignorados:
         msg += f"♻️ {ignorados} ignorados por já existirem.\n"
+    if faturas:
+        msg += f"💳 {faturas} pagamento(s) de fatura de cartão ignorado(s): o gasto já está nas compras do cartão.\n"
     if revisar:
         msg += f"\n🤔 *{revisar}* precisam de um toque seu — já estão no seu painel como _a revisar_.\n"
     return msg
+
+
+def _cartoes_com_faturas(user_phone: str) -> list[dict]:
+    """Cartões do usuário com as faturas guardadas no Supabase: [{"banco": ..., "bills": [...]}]. Falha = lista vazia."""
+    try:
+        from app.utils import get_lookup_prefix
+        import app.faturas as fat
+        chave = get_lookup_prefix(user_phone)
+        cli = db.get_db()
+        contas = (cli.table("finbot_contas").select("account_id, banco_nome, nome")
+                  .eq("user_key", chave).eq("tipo", "CREDIT").execute().data or [])
+        if not contas:
+            return []
+        faturas = cli.table("finbot_faturas").select("*").eq("user_key", chave).execute().data or []
+        saida = []
+        for c in contas:
+            mine = [f for f in faturas if f.get("account_id") == c["account_id"]]
+            saida.append({"banco": c.get("banco_nome") or c.get("nome") or "", "bills": fat.bills_das_faturas_guardadas(mine)})
+        return saida
+    except Exception as e:
+        logger.warning(f"Faturas guardadas indisponíveis para checar pagamento de fatura ({e}).")
+        return []
 
 
 @dataclass
@@ -312,6 +337,7 @@ class ResultadoImportacao:
     ignorados: int = 0
     auto: int = 0
     revisar: int = 0
+    faturas: int = 0           # pagamentos de fatura de cartão ignorados (o gasto já está nas compras do cartão)
     aviso: str | None = None   # mensagem pronta quando nada foi importado (vazio, já sincronizado, erro)
     erro: bool = False
 
@@ -340,10 +366,24 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
 
     # Fase 1: separa o que é novo e decide o que precisa de classificação. Mesma padaria 12x no lote = 1 decisão.
     novas: list[tuple] = []          # (tx, tx_id, chave, comum)
+    cartoes = None                   # carregado 1x, só se aparecer saída de conta que possa ser pagamento de fatura
+    faturas_ignoradas = 0
     for tx in all_transactions:
         tx_id = str(tx.id).strip().lower()
         if tx_id in ids_existentes or tx_id in ids_no_lote:
             continue
+        # Quitação de fatura pela conta corrente: o gasto já está nas compras do cartão (igual à sincronização Pluggy).
+        if tx.type == "expense" and tx.payment_method != "credito":
+            if cartoes is None:
+                cartoes = _cartoes_com_faturas(user_phone)
+            try:
+                if cartoes and _fat.pagamento_de_fatura(tx.description, abs(tx.amount), date.fromisoformat(str(tx.date)[:10]), cartoes):
+                    logger.info(f"Ignorando pagamento de fatura do cartão (valor e banco conferem): {tx.description}")
+                    faturas_ignoradas += 1
+                    ids_no_lote.add(tx_id)
+                    continue
+            except Exception as e:
+                logger.warning(f"Não consegui checar se '{tx.description}' quita fatura ({e}); mantendo o lançamento.")
         ids_no_lote.add(tx_id)
         novas.append((tx, tx_id, normalizar_merchant(tx.description), familia_ambigua(tx.description) is None))
 
@@ -410,6 +450,10 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
         })
 
     if not novas_rows:
+        if faturas_ignoradas and not ids_existentes:
+            return ResultadoImportacao(
+                total=total_encontrado, faturas=faturas_ignoradas,
+                aviso=f"💳 Só encontrei pagamento(s) de fatura de cartão ({faturas_ignoradas}); o gasto já está nas compras do cartão.")
         return ResultadoImportacao(
             total=total_encontrado, ignorados=len(ids_existentes),
             aviso=("✅ Seu extrato já estava sincronizado!\n\n"
@@ -427,7 +471,7 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
     return ResultadoImportacao(
         total=total_encontrado, inseridos=inseridos,
         ignorados=len(ids_existentes) + (len(novas_rows) - inseridos),
-        auto=n_auto, revisar=n_revisar)
+        auto=n_auto, revisar=n_revisar, faturas=faturas_ignoradas)
 
 
 async def processar_ingestion_unificada(user_phone: str, all_transactions: list, progresso=None) -> tuple[str, None]:
@@ -437,7 +481,7 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list,
         r = await importar_lote(user_phone, all_transactions, progresso)
         if r.aviso:
             return r.aviso, None
-        mensagem = _montar_diagnostico(r.total, r.inseridos, r.ignorados, r.auto, r.revisar)
+        mensagem = _montar_diagnostico(r.total, r.inseridos, r.ignorados, r.auto, r.revisar, r.faturas)
         if r.revisar:
             try:
                 pergunta = await asyncio.to_thread(revisao.iniciar, user_phone)

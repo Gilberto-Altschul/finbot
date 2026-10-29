@@ -480,6 +480,13 @@ def pagamento_de_fatura(descricao: str, valor: float, data: date, cartoes: list[
     return False
 
 
+def bills_das_faturas_guardadas(linhas: list[dict]) -> list[dict]:
+    """Linhas de finbot_faturas -> formato do /bills da Pluggy, para reaproveitar pagamento_de_fatura()."""
+    return [{"id": r.get("bill_id"), "dueDate": str(r.get("vencimento") or "")[:10] or None,
+             "billClosingDate": str(r.get("fechamento") or "")[:10] or None, "totalAmount": r.get("total")}
+            for r in linhas or []]
+
+
 def aplicar_piso_fatura(rows: list[dict], piso_iso: str) -> list[dict]:
     """Tira lançamentos de CARTÃO de faturas anteriores ao piso (YYYY-MM-DD). Conta/débito não é afetado."""
     return [r for r in rows if not (r.get("payment_method") == "credito" and str(r.get("billing_date"))[:10] < piso_iso)]
