@@ -11,6 +11,7 @@ from google import genai
 from google.genai import types, errors
 
 from app.utils import _normalize
+from app.taxonomia import CATEGORIAS_DESPESA
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload, StandardTransaction
 from app.parsers import detectar_banco_e_tipo, santander_credito, c6_credito
@@ -237,6 +238,10 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
 
     # 3. Pós-processamento comum (filtros, hash, normalização)
     for tx in raw_transactions:
+        # Linhas incompletas (ex.: "saldo do dia" sem valor) não podem derrubar a importação inteira.
+        if tx.amount is None or not tx.description or not tx.date:
+            logger.info(f"Ignorando linha incompleta do extrato: {tx.description!r}")
+            continue
         desc_lower = _normalize(tx.description)
 
         if any(p in desc_lower for p in [

@@ -818,4 +818,4 @@ def limpar_transacoes_pendentes(user_phone: str) -> None:
         }
         get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
     except Exception as e:
-        logger.error(f"Erro em limpar_transacoes_pendentes: {e}")
+        logger.error(f"Erro em limpar_transacoes_pendentes: {e}")

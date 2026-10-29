@@ -358,7 +358,7 @@ const vistas={
    '<div class="lin"><span>Saldo hoje</span><span class="'+cl(d.saldo_inicial)+'">'+m(d.saldo_inicial)+'</span></div>'+
    '<div class="lin"><span>Entradas previstas</span><span class="pos">+'+brl(d.entradas)+'</span></div>'+
    '<div class="lin"><span>Contas e faturas</span><span>-'+brl(d.contas)+'</span></div>'+
-   '<div class="lin"><span>Gastos do dia a dia<br><small class="mut">média de '+brl(d.ritmo)+' por dia</small></span><span>-'+brl(d.gastos_dia)+'</span></div>'+
+   '<div class="lin"><span>Gastos do dia a dia<br><small class="mut">média de '+brl(d.ritmo)+' por dia'+(d.ritmo_texto?', '+esc(d.ritmo_texto):'')+'</small></span><span>-'+brl(d.gastos_dia)+'</span></div>'+
    '<div class="lin"><span>Saldo em '+dm(d.fim)+'</span><span class="'+cl(d.saldo_final)+'">'+m(d.saldo_final)+'</span></div></div>';
   const rot={conta:'Conta fixa',fatura:'Fatura do cartão',entrada:'Entrada prevista'};
   const linhas=d.dias.length?d.dias.map(x=>'<div class="dia"><div class="d">'+dm(x.data)+'<small>'+sem(x.data)+'</small></div><div>'+

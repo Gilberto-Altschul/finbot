@@ -33,6 +33,9 @@ CARTOES = [
     {"id": "demo-cartao-2", "nome": "Banco Azul Platinum", "fecha": 5, "vence": 12, "limite": 8000.0},
 ]
 ITEM = "demo-item"
+DIA_SALARIO = 5
+CONTAS_FIXAS_DIA = [(10, 1850.00), (15, 1240.00), (20, 119.90), (25, 389.00)]
+MARGEM_SALDO = 1500.00
 MESES_HISTORICO = 6
 
 
@@ -250,6 +253,7 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
 
     # faturas dos cartões: cada ciclo fechado soma suas linhas; pagamento na conta nos ciclos já vencidos
     faturas, contas = [], []
+    faturas_a_pagar: list[tuple[date, float]] = []
     agora = datetime.now(timezone.utc).isoformat()
     chave = get_lookup_prefix(demo)
     for c in CARTOES:
@@ -270,6 +274,7 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
             paga = venc < hoje
             if fechada and not paga:
                 devedor += total
+                faturas_a_pagar.append((venc, total))
             if not fechada:
                 devedor += total
             faturas.append({"user_key": chave, "bill_id": f"demo-{c['id']}-{b:%Y%m}", "account_id": c["id"],
@@ -284,9 +289,26 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
                        "available_limit": round(c["limite"] - devedor, 2), "atualizado_banco": agora,
                        "sincronizado_em": agora})
     contas.insert(0, {"user_key": chave, "account_id": CONTA["id"], "item_id": ITEM, "tipo": "BANK", "nome": CONTA["nome"],
-                      "banco_nome": "Banco Demo", "saldo": CONTA["saldo"], "credit_limit": None, "available_limit": None,
+                      "banco_nome": "Banco Demo",
+                      "saldo": _saldo_conta(hoje, faturas_a_pagar), "credit_limit": None, "available_limit": None,
                       "atualizado_banco": agora, "sincronizado_em": agora})
     return {"lancamentos": lin, "contas": contas, "faturas": faturas}
+
+
+def _saldo_conta(hoje: date, faturas_a_pagar: list[tuple[date, float]]) -> float:
+    """Saldo da conta de demonstração coerente com a data: cobre as saídas conhecidas até o próximo salário
+    (faturas e contas fixas) e o gasto diário, com uma margem. Assim o fluxo nunca nasce negativo."""
+    sal = date(hoje.year, hoje.month, DIA_SALARIO)
+    if sal < hoje:
+        sal = _soma_meses(date(hoje.year, hoje.month, 1), 1).replace(day=DIA_SALARIO)
+    saidas = sum(t for v, t in faturas_a_pagar if hoje <= v < sal)
+    for d in (hoje, _soma_meses(date(hoje.year, hoje.month, 1), 1)):
+        for dia, valor in CONTAS_FIXAS_DIA:
+            dt = date(d.year, d.month, dia)
+            if hoje <= dt < sal:
+                saidas += valor
+    saidas += 100.0 * (sal - hoje).days
+    return round((saidas + MARGEM_SALDO) / 10) * 10.0
 
 
 def gerar(demo: str, hoje: date | None = None) -> dict:

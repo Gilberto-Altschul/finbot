@@ -293,7 +293,8 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
     except Exception as exc:
         logger.error(f"Erro crítico imprevisto no PDF ({user_phone}): {exc}", exc_info=True)
         db.limpar_pdf_pendente(user_phone)
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. Verifique se o arquivo está correto.")
+        detalhe = f"\n\n🔧 {type(exc).__name__}: {str(exc)[:300]}" if os.getenv("FINBOT_DEBUG") == "1" else ""
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. O arquivo parece correto: tente de novo em instantes." + detalhe)
 
 
 async def async_process_revisao(user_phone: str, resposta_usuario: str):
