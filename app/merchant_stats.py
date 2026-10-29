@@ -53,6 +53,39 @@ def ler_historico(user_phone: str, merchant_key: str) -> Historico:
         return Historico()
 
 
+def historico_de_confirmados(rows: list[dict], peso: int = MIN_AMOSTRAS) -> Historico:  # pura
+    """Lançamentos que o USUÁRIO confirmou (review_status='confirmado') viram histórico: cada um pesa `peso`."""
+    cont: dict[tuple[str, str], int] = {}
+    for r in rows:
+        c, sc = r.get("category"), r.get("subcategory")
+        if c and sc:
+            cont[(c, sc)] = cont.get((c, sc), 0) + peso
+    return resumir_historico([{"category": c, "subcategory": sc, "n": n} for (c, sc), n in cont.items()])
+
+
+def ler_historico_destinatario(user_phone: str, merchant_key: str) -> Historico:
+    """Pix/TED para pessoa: o banco corta o nome de formas diferentes (PDF do Itaú: "GILVANI"; Pluggy: "GILVANIA RIBEIRO
+    GOMES"), então a chave exata falha. Procura por PREFIXO da chave, primeiro nas respostas aprendidas e depois nos
+    lançamentos que o usuário já confirmou (inclusive os antigos, gravados sem chave)."""
+    chave = (merchant_key or "").strip()
+    if len(chave) < 5 or chave.startswith("familia:"):
+        return Historico()
+    try:
+        cli = db.get_db()
+        res = (cli.table(TABELA).select("category, subcategory, n")
+               .eq("user_key", get_lookup_prefix(user_phone)).like("merchant_key", f"{chave}%").execute())
+        h = resumir_historico(res.data or [])
+        if h.total:
+            return h
+        conf = (cli.table("finbot_expenses").select("category, subcategory")
+                .ilike("user_phone", f"{get_lookup_prefix(user_phone)}:%")
+                .eq("review_status", "confirmado").ilike("description", f"%{chave}%").limit(50).execute())
+        return historico_de_confirmados(conf.data or [])
+    except Exception as e:
+        logger.error(f"Erro ao ler histórico do destinatário '{chave}': {e}")
+        return Historico()
+
+
 def registrar_resposta(user_phone: str, merchant_key: str, categoria: str, subcategoria: str, peso: int = 1) -> None:
     """Soma `peso` (atômico, via função SQL). Estabelecimento comum: peso=MIN_AMOSTRAS (uma resposta
     já vira regra). Marketplace: peso=1 — só vira automático se o usuário repetir a mesma escolha."""

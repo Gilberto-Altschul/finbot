@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from app.merchant import normalizar_merchant, familia_ambigua
 from app.taxonomia import A_CLASSIFICAR, COMPRAS_ONLINE
 from app.merchant_stats import (
-    Historico, e_consistente, ler_historico, chave_familia, MIN_AMOSTRAS, MIN_AMOSTRAS_FAMILIA,
+    Historico, e_consistente, ler_historico, ler_historico_destinatario, chave_familia, MIN_AMOSTRAS, MIN_AMOSTRAS_FAMILIA,
 )
 
 CONF_HISTORICO = 0.95   # usuário respondeu o mesmo, de forma consistente
@@ -64,6 +64,14 @@ def tem_termo_ambiguo(descricao: str) -> bool:
     return _tem_termo(d, _AMBIGUOUS_TERMS)
 
 
+_RE_TRANSFERENCIA = re.compile(r"^(?:pix|ted|doc|transf\w*)\b")
+
+
+def eh_transferencia_para_pessoa(descricao: str) -> bool:
+    from app.utils import _normalize
+    return bool(_RE_TRANSFERENCIA.match(_normalize(descricao or "")))
+
+
 async def classificar(user_phone: str, descricao: str,
                       fallback: tuple[str, str] | None = None,
                       valor: float | None = None, data: str | None = None) -> Decisao:
@@ -75,6 +83,8 @@ async def classificar(user_phone: str, descricao: str,
     familia = familia_ambigua(descricao)
     hist_familia = ler_historico(user_phone, chave_familia(familia)) if familia else Historico()
     hist_merchant = Historico() if familia else ler_historico(user_phone, merchant_key)
+    if not familia and not hist_merchant.total and eh_transferencia_para_pessoa(descricao):
+        hist_merchant = ler_historico_destinatario(user_phone, merchant_key)   # nome cortado pelo banco: busca por prefixo
 
     # Atalho: com histórico consistente não gasta keyword/LLM
     d = decidir(A_CLASSIFICAR, familia, hist_familia, hist_merchant, False, merchant_key)
