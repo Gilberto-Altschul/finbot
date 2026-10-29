@@ -316,7 +316,10 @@ class ResultadoImportacao:
     erro: bool = False
 
 
-async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImportacao:
+CLASSIFICAR_EM_PARALELO = 5   # chamadas de classificação (IA + busca na web) simultâneas
+
+
+async def importar_lote(user_phone: str, all_transactions: list, progresso=None) -> ResultadoImportacao:
     """
     Importa TUDO imediatamente, sem enviar nada ao usuário (serve PDF e Pluggy).
     Cada transação entra com review_status ('auto' ou 'revisar') e confidence.
@@ -333,24 +336,52 @@ async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImp
 
     novas_rows: list[dict] = []
     ids_no_lote: set[str] = set()
-    cache_decisao: dict[str, object] = {}   # mesma padaria 12x no lote = 1 decisão
     cache_sub_id: dict[str, int | None] = {}
 
+    # Fase 1: separa o que é novo e decide o que precisa de classificação. Mesma padaria 12x no lote = 1 decisão.
+    novas: list[tuple] = []          # (tx, tx_id, chave, comum)
     for tx in all_transactions:
         tx_id = str(tx.id).strip().lower()
         if tx_id in ids_existentes or tx_id in ids_no_lote:
             continue
+        ids_no_lote.add(tx_id)
+        novas.append((tx, tx_id, normalizar_merchant(tx.description), familia_ambigua(tx.description) is None))
 
+    tarefas: dict = {}               # chave da tarefa -> tx que representa a decisão
+    for i, (tx, _tid, chave, comum) in enumerate(novas):
+        k = chave if comum else f"#{i}"
+        if k not in tarefas:
+            tarefas[k] = tx
+
+    # Fase 2: classifica em paralelo (limitado), com aviso de andamento para lotes grandes.
+    decisoes: dict = {}
+    sem = asyncio.Semaphore(CLASSIFICAR_EM_PARALELO)
+    total_tarefas = len(tarefas)
+    feitas = 0
+    avisos = {0, total_tarefas // 2} if total_tarefas >= 12 else set()
+
+    async def _avisar(n_feitas: int):
+        if progresso and n_feitas in avisos:
+            try:
+                await progresso(n_feitas, total_tarefas, len(novas))
+            except Exception as e:      # aviso de andamento nunca pode derrubar a importação
+                logger.warning(f"Aviso de andamento falhou: {e}")
+
+    async def _uma(k: str, tx):
+        nonlocal feitas
         fallback = traduzir(tx.category, tx.subcategory) if tx.category and tx.category != "Outros" else None   # PDF/IA -> taxonomia v2
-        chave = normalizar_merchant(tx.description)
-        comum = familia_ambigua(tx.description) is None
-        if comum and chave in cache_decisao:
-            dec = cache_decisao[chave]
-        else:
-            dec = await classificar(user_phone, tx.description, fallback=fallback,
-                                    valor=tx.amount, data=str(tx.date))
-            if comum:
-                cache_decisao[chave] = dec
+        async with sem:
+            decisoes[k] = await classificar(user_phone, tx.description, fallback=fallback,
+                                            valor=tx.amount, data=str(tx.date))
+        feitas += 1
+        await _avisar(feitas)
+
+    await _avisar(0)
+    await asyncio.gather(*(_uma(k, tx) for k, tx in tarefas.items()))
+
+    # Fase 3: monta as linhas na ordem original.
+    for i, (tx, tx_id, chave, comum) in enumerate(novas):
+        dec = decisoes[chave if comum else f"#{i}"]
 
         if dec.subcategoria not in cache_sub_id:
             cache_sub_id[dec.subcategoria] = (
@@ -377,7 +408,6 @@ async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImp
             "purchase_date": tx.date,
             "billing_date": getattr(tx, "billing_date", None) or tx.date,
         })
-        ids_no_lote.add(tx_id)
 
     if not novas_rows:
         return ResultadoImportacao(
@@ -400,11 +430,11 @@ async def importar_lote(user_phone: str, all_transactions: list) -> ResultadoImp
         auto=n_auto, revisar=n_revisar)
 
 
-async def processar_ingestion_unificada(user_phone: str, all_transactions: list) -> tuple[str, None]:
+async def processar_ingestion_unificada(user_phone: str, all_transactions: list, progresso=None) -> tuple[str, None]:
     """Fluxo do PDF (usuário presente): importa tudo e já abre a primeira pergunta da fila.
     Retorna (mensagem, None) — o segundo item existe só por compatibilidade com main.py."""
     try:
-        r = await importar_lote(user_phone, all_transactions)
+        r = await importar_lote(user_phone, all_transactions, progresso)
         if r.aviso:
             return r.aviso, None
         mensagem = _montar_diagnostico(r.total, r.inseridos, r.ignorados, r.auto, r.revisar)

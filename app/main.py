@@ -275,7 +275,15 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         llm_time = time.perf_counter() - start_time - download_time
 
         # ingestion agora retorna (mensagem, lista_outros_ou_None)
-        mensagem, transacoes_outros = await ingestion.processar_ingestion_unificada(user_phone, all_extracted_transactions)
+        async def _andamento(feitos: int, total: int, n_novos: int):
+            if feitos == 0:
+                texto = f"📄 Encontrei *{n_novos}* lançamentos novos. Estou classificando, isso pode levar um ou dois minutos."
+            else:
+                texto = f"⏳ Classificando… {feitos} de {total} estabelecimentos."
+            await asyncio.to_thread(_send_whatsapp, user_phone, texto)
+
+        mensagem, transacoes_outros = await ingestion.processar_ingestion_unificada(
+            user_phone, all_extracted_transactions, _andamento)
 
         total_time = time.perf_counter() - start_time
         logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
