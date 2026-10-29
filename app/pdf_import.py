@@ -128,7 +128,8 @@ ATENÇÃO: O extrato pode ter duas colunas de transações lado a lado. Extraia 
 
 Regras:
 1. Ignore cabeçalhos, subtotais, saldos e avisos.
-2. Ignore linhas de Estorno e "Pagamento de fatura"/"Pag Fatura Boleto".
+2. Ignore linhas de "Pagamento de fatura"/"Pag Fatura Boleto"/"Pagamento recebido". NÃO ignore Estorno nem créditos
+   (ex.: "Estorno Tarifa"): extraia como type income, com o valor positivo; eles abatem a fatura.
 3. Para cada transação:
    - id: temporário baseado em data e valor
    - date: ISO YYYY-MM-DD. Formato original é DD/MM, NUNCA MM/DD.
@@ -156,7 +157,7 @@ Regras:
         user_instructions = """
 Analise o extrato bancário anexo e converta-o em um JSON com a chave 'transactions'.
 Extraia TODAS as transações de ambas as colunas, se houver.
-Ignore cabeçalhos, totais, estornos e pagamentos de fatura.
+Ignore cabeçalhos, totais e pagamentos de fatura. Estornos e créditos (ex.: "Estorno Tarifa") entram como type income, valor positivo.
 Para cada transação: id, date (ISO, DD/MM nunca MM/DD), description, amount (positivo),
 category, subcategory, installment_of, installment_total, payment_method (credito/debito), type (expense/income).
 Para category e subcategory escolha EXATAMENTE um par da lista abaixo (categoria: subcategorias); se não souber o que é,
