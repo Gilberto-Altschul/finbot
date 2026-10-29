@@ -324,10 +324,29 @@ def _cartoes_com_faturas(user_phone: str) -> list[dict]:
         for c in contas:
             mine = [f for f in faturas if f.get("account_id") == c["account_id"]]
             saida.append({"banco": c.get("banco_nome") or c.get("nome") or "", "bills": fat.bills_das_faturas_guardadas(mine)})
+        logger.info(f"PDF: {len(saida)} cartão(ões) com {sum(len(x['bills']) for x in saida)} fatura(s) guardada(s) para conferir pagamento de fatura.")
         return saida
     except Exception as e:
         logger.warning(f"Faturas guardadas indisponíveis para checar pagamento de fatura ({e}).")
         return []
+
+
+def _diagnosticar_fatura(tx, dia: date, cartoes: list[dict]) -> None:
+    """Só log: quando a saída parece pagar fatura (cita o banco de um cartão) mas não bateu, mostra por quê."""
+    from app.utils import _normalize
+    palavras = set(_normalize(tx.description or "").split())
+    if not cartoes:
+        if palavras & {"boleto", "fatura", "cartao"} or "pag" in palavras:
+            logger.info(f"Pagamento de fatura? '{tx.description}' R$ {abs(tx.amount):.2f} em {dia}: "
+                        f"sem cartões/faturas guardados para conferir (rode 'sincronizar').")
+        return
+    for c in cartoes:
+        if not (_fat._palavras_banco(c.get("banco", "")) & palavras):
+            continue
+        ciclos = [(str(x.vencimento), x.total) for x in _fat.montar_ciclos(c.get("bills"))]
+        proximos = sorted(ciclos, key=lambda t: abs((date.fromisoformat(t[0]) - dia).days))[:3]
+        logger.info(f"Pagamento de fatura? '{tx.description}' R$ {abs(tx.amount):.2f} em {dia} cita o cartão "
+                    f"'{c.get('banco')}', mas nenhuma fatura bate. Faturas mais próximas (vencimento, total): {proximos}")
 
 
 @dataclass
@@ -377,11 +396,13 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
             if cartoes is None:
                 cartoes = _cartoes_com_faturas(user_phone)
             try:
-                if cartoes and _fat.pagamento_de_fatura(tx.description, abs(tx.amount), date.fromisoformat(str(tx.date)[:10]), cartoes):
+                dia_tx = date.fromisoformat(str(tx.date)[:10])
+                if cartoes and _fat.pagamento_de_fatura(tx.description, abs(tx.amount), dia_tx, cartoes):
                     logger.info(f"Ignorando pagamento de fatura do cartão (valor e banco conferem): {tx.description}")
                     faturas_ignoradas += 1
                     ids_no_lote.add(tx_id)
                     continue
+                _diagnosticar_fatura(tx, dia_tx, cartoes)
             except Exception as e:
                 logger.warning(f"Não consegui checar se '{tx.description}' quita fatura ({e}); mantendo o lançamento.")
         ids_no_lote.add(tx_id)
