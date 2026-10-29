@@ -487,6 +487,23 @@ def bills_das_faturas_guardadas(linhas: list[dict]) -> list[dict]:
             for r in linhas or []]
 
 
+_PALAVRAS_PAGAMENTO = {"pag", "pagto", "pagamento", "boleto", "fatura", "fat", "cartao", "cartoes"}
+
+
+def pagamento_de_fatura_importada(descricao: str, valor: float, data: date, somas: list[tuple[date, float]]) -> bool:
+    """Cliente SEM conexão bancária (só PDF): não há faturas guardadas, mas há as compras de cartão já importadas.
+    `somas` = [(1º dia do mês de cobrança, total das compras do cartão nesse mês)]. É pagamento de fatura quando o texto
+    parece pagamento (boleto/fatura/cartão) E o valor bate ao centavo com o total de um mês, com a data perto desse mês.
+    Bater ao centavo é o que evita falso positivo: por isso só vale com o total exato."""
+    from app.utils import _normalize
+    if not (set(_normalize(descricao or "").split()) & _PALAVRAS_PAGAMENTO):
+        return False
+    for mes, total in somas or []:
+        if total > 0 and abs(total - valor) <= 0.01 and -15 <= (data - mes).days <= 50:
+            return True
+    return False
+
+
 def aplicar_piso_fatura(rows: list[dict], piso_iso: str) -> list[dict]:
     """Tira lançamentos de CARTÃO de faturas anteriores ao piso (YYYY-MM-DD). Conta/débito não é afetado."""
     return [r for r in rows if not (r.get("payment_method") == "credito" and str(r.get("billing_date"))[:10] < piso_iso)]

@@ -331,6 +331,27 @@ def _cartoes_com_faturas(user_phone: str) -> list[dict]:
         return []
 
 
+def _somas_de_faturas_importadas(user_phone: str) -> list[tuple[date, float]]:
+    """Total das compras de cartão já importadas, por mês de cobrança (cliente que usa só PDF). Falha = lista vazia."""
+    try:
+        from app.utils import get_lookup_prefix
+        linhas = (db.get_db().table("finbot_expenses").select("amount, billing_date, transaction_type")
+                  .ilike("user_phone", f"{get_lookup_prefix(user_phone)}:%").eq("payment_method", "credito")
+                  .limit(5000).execute().data or [])
+        por_mes: dict[date, float] = {}
+        for r in linhas:
+            try:
+                d = date.fromisoformat(str(r.get("billing_date"))[:10]).replace(day=1)
+            except Exception:
+                continue
+            v = float(r.get("amount") or 0)
+            por_mes[d] = round(por_mes.get(d, 0.0) + (-v if str(r.get("transaction_type")) == "income" else v), 2)
+        return sorted(por_mes.items())
+    except Exception as e:
+        logger.warning(f"Compras de cartão importadas indisponíveis para checar pagamento de fatura ({e}).")
+        return []
+
+
 def _diagnosticar_fatura(tx, dia: date, cartoes: list[dict]) -> None:
     """Só log: quando a saída parece pagar fatura (cita o banco de um cartão) mas não bateu, mostra por quê."""
     from app.utils import _normalize
@@ -386,6 +407,7 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
     # Fase 1: separa o que é novo e decide o que precisa de classificação. Mesma padaria 12x no lote = 1 decisão.
     novas: list[tuple] = []          # (tx, tx_id, chave, comum)
     cartoes = None                   # carregado 1x, só se aparecer saída de conta que possa ser pagamento de fatura
+    somas = None                     # idem, para quem usa só PDF (sem faturas guardadas)
     faturas_ignoradas = 0
     for tx in all_transactions:
         tx_id = str(tx.id).strip().lower()
@@ -399,6 +421,13 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
                 dia_tx = date.fromisoformat(str(tx.date)[:10])
                 if cartoes and _fat.pagamento_de_fatura(tx.description, abs(tx.amount), dia_tx, cartoes):
                     logger.info(f"Ignorando pagamento de fatura do cartão (valor e banco conferem): {tx.description}")
+                    faturas_ignoradas += 1
+                    ids_no_lote.add(tx_id)
+                    continue
+                if somas is None:
+                    somas = _somas_de_faturas_importadas(user_phone)
+                if somas and _fat.pagamento_de_fatura_importada(tx.description, abs(tx.amount), dia_tx, somas):
+                    logger.info(f"Ignorando pagamento de fatura (valor igual ao total das compras de cartão importadas): {tx.description}")
                     faturas_ignoradas += 1
                     ids_no_lote.add(tx_id)
                     continue
