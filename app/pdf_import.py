@@ -41,6 +41,20 @@ def _generate_transaction_hash_id(transaction: StandardTransaction, user_phone: 
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
+def _tipo_documento(texto: str | None) -> str | None:
+    """'conta' (extrato de conta corrente), 'cartao' (fatura de cartão) ou None. Decide por palavras do próprio PDF,
+    para não depender de a IA acertar crédito/débito."""
+    if not texto:
+        return None
+    t = _normalize(texto)
+    if "saldo do dia" in t or "extrato conta" in t or "saldo em conta" in t or "saldo (r$)" in t:
+        return "conta"
+    if ("total da fatura" in t or "lancamentos: compras e saques" in t or "limite total de credito" in t
+            or "pagamento minimo" in t):
+        return "cartao"
+    return None
+
+
 def _dict_to_standard_transaction(d: dict) -> StandardTransaction:
     """Converte dict de parser determinístico para StandardTransaction."""
     return StandardTransaction(
@@ -119,6 +133,14 @@ async def _extrair_via_gemini(pdf_content: bytes, texto_pdf: str | None) -> list
 
     if texto_pdf and len(texto_pdf.strip()) > 100:
         logger.info("Usando abordagem híbrida: texto pdfplumber → Gemini")
+        if _tipo_documento(texto_pdf) == "conta":
+            regra_sinal = (
+                "- EXTRATO DE CONTA CORRENTE: valor com sinal de menos = saída (type expense); valor SEM sinal = entrada "
+                "(type income: Pix recebido, PGTO INSS, salário, TBI/resgates). payment_method é SEMPRE debito. "
+                "Ignore as linhas \"SALDO DO DIA\". Mantenha \"PAG BOLETO ...\" (são saídas normais)."
+            )
+        else:
+            regra_sinal = "- Valores negativos → type income, amount positivo."
         user_instructions = f"""
 Analise o texto de extrato bancário abaixo e converta-o em um objeto JSON com a chave 'transactions'.
 
@@ -145,7 +167,7 @@ Regras:
    - installment_of/installment_total: parcela atual/total (null se não parcelado)
    - payment_method: credito ou debito
    - type: expense ou income
-- Valores negativos → type income, amount positivo.
+{regra_sinal}
 - Responda APENAS com o JSON, sem markdown.
 
 === TEXTO DO EXTRATO ===
@@ -228,6 +250,7 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
 
     # 1. Tenta parser dedicado (determinístico, sem IA)
     resultado_dedicado = _tentar_parser_dedicado(pdf_content)
+    tipo_doc = None
 
     if resultado_dedicado and resultado_dedicado['transactions']:
         logger.info(f"✅ Parser dedicado ({resultado_dedicado['bank_detected']}) extraiu {len(resultado_dedicado['transactions'])} transações.")
@@ -239,6 +262,7 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
         except Exception as e:
             logger.error(f"Erro ao extrair texto: {e}")
             texto_pdf = None
+        tipo_doc = _tipo_documento(texto_pdf)
         raw_transactions = await _extrair_via_gemini(pdf_content, texto_pdf)
 
     # 3. Pós-processamento comum (filtros, hash, normalização)
@@ -251,7 +275,8 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
 
         if any(p in desc_lower for p in [
             "pagamento de fatura", "pagto fatura", "pag fatura", "pagamento fatura",
-        ]):
+        ]) or (tipo_doc == "cartao" and (desc_lower.strip() == "pagamento" or desc_lower.startswith(
+                ("pagamento efetuado", "pagamento recebido")))):
             logger.info(f"Ignorando pagamento de fatura: {tx.description}")
             continue
 
@@ -261,7 +286,11 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
 
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
-        if tx.payment_method:
+        if tipo_doc == "conta":
+            tx.payment_method = "debito"      # extrato de conta nunca é cartão de crédito
+        elif tipo_doc == "cartao":
+            tx.payment_method = "credito"
+        elif tx.payment_method:
             normalized_method = tx.payment_method.lower()
             if "credito" in normalized_method or "credit" in normalized_method:
                 tx.payment_method = "credito"
