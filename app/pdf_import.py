@@ -10,7 +10,7 @@ import pdfplumber
 from google import genai
 from google.genai import types, errors
 
-from app.utils import _normalize
+from app.utils import _normalize, tornar_ids_unicos
 from app.taxonomia import lista_para_prompt
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload, StandardTransaction
@@ -300,6 +300,9 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
                 tx.payment_method = "debito"  # boleto, pix, etc
 
         final_transactions.append(tx)
+
+    for tx, novo_id in zip(final_transactions, tornar_ids_unicos([t.id for t in final_transactions])):
+        tx.id = novo_id
 
     logger.info(f"Parsed {len(final_transactions)} transactions for {user_phone}.")
     return final_transactions

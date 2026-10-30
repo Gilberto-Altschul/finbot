@@ -84,3 +84,17 @@ def parse_mes_fatura(input_mes: str | int) -> str:
         ano -= 1
 
     return date(ano, mes, 1).isoformat()
+
+
+def tornar_ids_unicos(ids: list[str]) -> list[str]:
+    """Duas linhas idênticas no mesmo arquivo (mesmo dia, valor e descrição: ex. dois boletos de R$ 1.437,49) geram o mesmo
+    hash e uma seria descartada como duplicata. A 1ª ocorrência mantém o id (compatível com o que já está salvo);
+    a 2ª, 3ª... recebem um sufixo determinístico, então reimportar o mesmo arquivo continua sem duplicar."""
+    import hashlib
+    vistos: dict[str, int] = {}
+    saida = []
+    for i in ids:
+        n = vistos.get(i, 0)
+        vistos[i] = n + 1
+        saida.append(i if n == 0 else hashlib.sha256(f"{i}|#{n + 1}".encode()).hexdigest())
+    return saida
