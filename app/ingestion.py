@@ -370,6 +370,51 @@ def _diagnosticar_fatura(tx, dia: date, cartoes: list[dict]) -> None:
                     f"'{c.get('banco')}', mas nenhuma fatura bate. Faturas mais próximas (vencimento, total): {proximos}")
 
 
+def escolher_pagamentos_de_fatura(linhas: list[dict], cartoes: list[dict], somas: list[tuple[date, float]]) -> list:
+    """Função pura: quais saídas JÁ GRAVADAS (conta, não crédito) são pagamento de fatura de cartão.
+    linhas: [{id, amount, description, purchase_date, category}]. Devolve os ids. Mesma regra da importação, mas aplicada
+    depois: assim a ordem em que os PDFs chegam (fatura antes ou depois do extrato) não muda o resultado."""
+    achados = []
+    for r in linhas:
+        if r.get("category") == "Transferências":
+            continue
+        try:
+            dia = date.fromisoformat(str(r.get("purchase_date"))[:10])
+            valor = abs(float(r.get("amount") or 0))
+        except Exception:
+            continue
+        desc = r.get("description") or ""
+        if (cartoes and _fat.pagamento_de_fatura(desc, valor, dia, cartoes)) or \
+                _fat.pagamento_de_fatura_importada(desc, valor, dia, somas):
+            achados.append(r["id"])
+    return achados
+
+
+def conciliar_pagamentos_de_fatura(user_phone: str) -> int:
+    """Roda depois de cada importação: pega saídas de conta que já estavam gravadas e agora se revelam pagamento de fatura
+    (a fatura do cartão chegou depois do extrato). Passam a Transferências > Pagamento de Fatura. Devolve quantas mudaram."""
+    try:
+        from app.utils import get_lookup_prefix
+        linhas = (db.get_db().table("finbot_expenses").select("id, amount, description, purchase_date, category")
+                  .ilike("user_phone", f"{get_lookup_prefix(user_phone)}:%").eq("movement", "expense")
+                  .eq("transaction_type", "expense").neq("payment_method", "credito")
+                  .limit(5000).execute().data or [])
+        if not linhas:
+            return 0
+        ids = escolher_pagamentos_de_fatura(linhas, _cartoes_com_faturas(user_phone), _somas_de_faturas_importadas(user_phone))
+        if not ids:
+            return 0
+        sub_id = db.get_subcategory_id_by_name("Pagamento de Fatura")
+        for i in ids:
+            db.atualizar_transacao(i, {"category": "Transferências", "subcategory": "Pagamento de Fatura",
+                                       "subcategory_id": sub_id, "movement": "transfer", "review_status": "auto"})
+        logger.info(f"Conciliação: {len(ids)} saída(s) da conta reconhecida(s) como pagamento de fatura.")
+        return len(ids)
+    except Exception as e:
+        logger.warning(f"Conciliação de pagamento de fatura falhou ({e}); nada foi alterado.")
+        return 0
+
+
 @dataclass
 class ResultadoImportacao:
     total: int = 0
@@ -533,9 +578,13 @@ async def processar_ingestion_unificada(user_phone: str, all_transactions: list,
     Retorna (mensagem, None) — o segundo item existe só por compatibilidade com main.py."""
     try:
         r = await importar_lote(user_phone, all_transactions, progresso)
+        # Antes de montar a fila de perguntas: o que já estava gravado e agora se revela pagamento de fatura sai dela.
+        conciliados = await asyncio.to_thread(conciliar_pagamentos_de_fatura, user_phone)
+        nota = (f"\n🔁 {conciliados} lançamento(s) anterior(es) reconhecido(s) como pagamento de fatura de cartão."
+                if conciliados else "")
         if r.aviso:
-            return r.aviso, None
-        mensagem = _montar_diagnostico(r.total, r.inseridos, r.ignorados, r.auto, r.revisar, r.faturas)
+            return r.aviso + nota, None
+        mensagem = _montar_diagnostico(r.total, r.inseridos, r.ignorados, r.auto, r.revisar, r.faturas) + nota
         if r.revisar:
             try:
                 pergunta = await asyncio.to_thread(revisao.iniciar, user_phone)
