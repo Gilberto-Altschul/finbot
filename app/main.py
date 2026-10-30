@@ -217,6 +217,7 @@ async def _process(user_phone: str, user_message: str) -> None:
 
 
 async def async_process_pdf_extract(user_phone: str, media_url: str, senha_fornecida: str = None):
+    pediu_senha = False      # só nesse caso o estado "aguardando senha" deve sobreviver ao fim do processamento
     try:
         if not seguranca.midia_twilio_ok(media_url):
             # Nunca manda as credenciais da Twilio para um endereço que não seja da Twilio.
@@ -244,6 +245,7 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
 
         if reader.is_encrypted:
             if not senha_fornecida:
+                pediu_senha = True
                 db.salvar_pdf_aguardando_senha(user_phone, media_url, status="aguardando_senha")
                 reply = (
                     "🏦 *Extrato recebido!* O arquivo está protegido.\n\n"
@@ -303,6 +305,11 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         db.limpar_pdf_pendente(user_phone)
         detalhe = f"\n\n🔧 {type(exc).__name__}: {str(exc)[:300]}" if os.getenv("FINBOT_DEBUG") == "1" else ""
         await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao processar seu extrato. O arquivo parece correto: tente de novo em instantes." + detalhe)
+    finally:
+        # Qualquer saída (sucesso, erro, "já sincronizado") libera o estado; senão a próxima mensagem do cliente
+        # (ex.: "Resumo") seria lida como senha do PDF e o extrato rodaria de novo, em loop.
+        if not pediu_senha:
+            db.limpar_pdf_pendente(user_phone)
 
 
 async def async_process_revisao(user_phone: str, resposta_usuario: str):
@@ -405,8 +412,8 @@ async def webhook(
     # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
     if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
         logger.info(f"PDF recebido de {user_phone}.")
-        # Inicia como aguardando_senha — se não for protegido, o processamento ignora a senha
-        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="aguardando_senha")
+        # "processando": só vira "aguardando_senha" se o processamento descobrir que o PDF tem senha.
+        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="processando")
         await asyncio.to_thread(_send_whatsapp, user_phone, "🏦 *Extrato recebido!* Verificando o arquivo...")
         background_tasks.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
         return Response(content="<Response/>", media_type="text/xml")
