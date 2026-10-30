@@ -4,7 +4,7 @@ import json
 from datetime import date
 import app.database as db
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 import app.revisao as revisao
 import app.faturas as _fat
 from app.classificador import classificar
@@ -472,6 +472,10 @@ async def importar_lote(user_phone: str, all_transactions: list, progresso=None)
     # Fase 3: monta as linhas na ordem original.
     for i, (tx, tx_id, chave, comum) in enumerate(novas):
         dec = decisoes[chave if comum else f"#{i}"]
+        # "Verificação (≤ R$ 1)" só faz sentido para centavos; acima disso foi palpite errado (ex.: anuidade de R$ 98).
+        if dec.subcategoria.startswith("Verificação") and abs(tx.amount) > 1.00:
+            dec = _dc_replace(dec, categoria=A_CLASSIFICAR[0], subcategoria=A_CLASSIFICAR[1],
+                              status="revisar", confidence=0.0)
 
         if dec.subcategoria not in cache_sub_id:
             cache_sub_id[dec.subcategoria] = (
