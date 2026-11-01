@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-10-29o · conciliação: a ordem dos PDFs não importa"
+VERSAO = "2026-11-01c · salário em parcelas: prevê cada recebimento recente (estimado)"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -197,6 +197,18 @@ async def atualizar(pluggy_factory, user_phone: str) -> int:
             logger.warning(f"Faturas indisponíveis para {c['id']}: {e}")
             continue
         itens = fat.status_dos_ciclos(bills, hoje_local())
+        if itens and any(st != "paga" for _, st in itens):
+            # A Pluggy pode demorar a listar o pagamento no /bills; a saída na conta corrente já está nos lançamentos.
+            try:
+                desde = min(ci.fechamento for ci, st in itens if st != "paga").isoformat()
+                rows = (db.get_db().table("finbot_expenses").select("purchase_date, amount, description")
+                        .ilike("user_phone", f"{key}:%").eq("movement", "transfer").eq("payment_method", "debito")
+                        .gte("purchase_date", desde).ilike("description", "%pagamento%").execute().data or [])
+                itens = fat.baixar_por_lancamentos(
+                    itens, [{"date": r.get("purchase_date"), "amount": r.get("amount"), "description": r.get("description")}
+                            for r in rows])
+            except Exception as e:  # sem os lançamentos, vale o status da Pluggy
+                logger.warning(f"Baixa de fatura por lançamento indisponível: {e}")
         if itens:
             db.get_db().table(T_FATURAS).upsert(
                 [{"user_key": key, "bill_id": ci.bill_id, "account_id": c["id"], "vencimento": ci.vencimento.isoformat(),

@@ -247,6 +247,28 @@ def _pagamentos(bills: list[dict]) -> list[tuple[date, float]]:
     return saida
 
 
+def baixar_por_lancamentos(itens: list[tuple[Ciclo, str]], lancamentos: list[dict]) -> list[tuple[Ciclo, str]]:
+    """O /bills da Pluggy às vezes demora a listar o pagamento; a saída na conta corrente já existe.
+    Marca como 'paga' a fatura ainda aberta quando há uma saída 'pagamento ... cartão/fatura' de valor igual ao
+    total (±R$ 0,01), entre o fechamento e o vencimento (+ tolerância). `lancamentos` = [{"date", "amount",
+    "description"}] das saídas da conta. Não mexe em quem já está paga nem em total vazio."""
+    from app.utils import _normalize
+    saida = []
+    for c, st in itens:
+        if st != "paga" and c.total is not None and c.total > 0.005:
+            limite = c.vencimento + timedelta(days=JANELA_PAGAMENTO_DIAS)
+            for l in lancamentos or []:
+                d, v = _data(l.get("date")), l.get("amount")
+                palavras = set(_normalize(l.get("description") or "").split())
+                if (d is not None and v is not None and abs(abs(float(v)) - c.total) <= 0.01
+                        and c.fechamento <= d <= limite
+                        and "pagamento" in palavras and (palavras & {"cartao", "cartoes", "fatura"})):
+                    st = "paga"
+                    break
+        saida.append((c, st))
+    return saida
+
+
 def status_pagamento(c: Ciclo, pagamentos: list[tuple[date, float]], hoje: date | None = None) -> str:
     """
     'paga' | 'a_vencer' | 'sem_pagamento'.

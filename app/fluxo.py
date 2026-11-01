@@ -97,7 +97,46 @@ def entradas_recorrentes(receitas: list[dict], hoje: date, dias: int) -> list[Ev
     aceitas = {utils._normalize(x) for x in SUBCATEGORIAS_RECORRENTES}
     boas = [r for r in receitas
             if {utils._normalize(r.get("subcategory") or ""), utils._normalize(r.get("category") or "")} & aceitas]
-    return _recorrentes(boas, hoje, dias, +1, "previsto")[0]
+    eventos, chaves = _recorrentes(boas, hoje, dias, +1, "previsto")
+    return sorted(eventos + _salario_unico(boas, hoje, dias, chaves), key=lambda e: e.data)
+
+
+SUBCATEGORIAS_SALARIO = {"salario", "salário", "salario e pro-labore", "salário e pró-labore"}
+MIN_SALARIO_UNICO = 500.0     # abaixo disso não é salário
+JANELA_SALARIO_UNICO = 35     # só o salário recebido há até 35 dias gera o palpite do próximo mês
+
+
+def _salario_unico(receitas: list[dict], hoje: date, dias: int, ja_detectadas: set[str]) -> list[Evento]:
+    """Salário sem recorrência provada (cliente novo, ou pago em parcelas de valores diferentes no mês): cada
+    recebimento recente gera um palpite no mesmo dia do mês seguinte, marcado como "estimado". Só vale para
+    subcategoria Salário, valor mínimo e recebido há até 35 dias. Se o mês seguinte do mesmo pagamento já chegou
+    (outro lançamento igual 25 a 40 dias depois), não prevê de novo. A regra normal (acima) tem prioridade."""
+    salarios = {utils._normalize(x) for x in SUBCATEGORIAS_SALARIO}
+    fim, achados = hoje + timedelta(days=dias), {}
+    for r in receitas:
+        if utils._normalize(r.get("subcategory") or "") not in salarios:
+            continue
+        desc, dia = (r.get("description") or "").strip(), _dia(r)
+        try:
+            valor = abs(float(r["amount"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if (not desc or dia is None or valor < MIN_SALARIO_UNICO or _chave(desc) in ja_detectadas
+                or "pagamento recebido" in desc.lower()):   # crédito de pagamento de fatura, nunca salário
+            continue
+        if not (hoje - timedelta(days=JANELA_SALARIO_UNICO) <= dia <= hoje):
+            continue
+        achados.setdefault(_chave(desc), []).append((dia, valor, desc))
+    eventos = []
+    for itens in achados.values():
+        dias_vistos = [d for d, _v, _n in itens]
+        for dia, valor, nome in sorted(itens):
+            if any(25 <= (d2 - dia).days <= 40 for d2 in dias_vistos):
+                continue      # o pagamento do mês seguinte já entrou: o palpite seria dele, não deste
+            prox = _soma_mes(dia, 1)
+            if hoje <= prox <= fim:
+                eventos.append(Evento(prox, f"{nome} (previsto, estimado)", round(valor, 2)))
+    return eventos
 
 
 def saidas_recorrentes(despesas: list[dict], hoje: date, dias: int, minimo: float = MIN_SAIDA_FIXA

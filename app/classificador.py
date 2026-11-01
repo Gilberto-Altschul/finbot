@@ -72,9 +72,24 @@ def eh_transferencia_para_pessoa(descricao: str) -> bool:
     return bool(_RE_TRANSFERENCIA.match(_normalize(descricao or "")))
 
 
+def sem_verificacao_indevida(d: Decisao, valor: float | None) -> Decisao:
+    """"Verificação (≤ R$ 1)" só faz sentido para centavos. Um mapeamento aprendido com o pagamento de R$ 1,00
+    não pode valer para o de R$ 4.467,57: acima de R$ 1 vira "a classificar" (o movimento da conta decide o resto)."""
+    if valor is not None and d.subcategoria.startswith("Verificação") and abs(valor) > 1.00:
+        return Decisao(A_CLASSIFICAR[0], A_CLASSIFICAR[1], "revisar", CONF_NENHUMA, d.merchant_key, [])
+    return d
+
+
 async def classificar(user_phone: str, descricao: str,
                       fallback: tuple[str, str] | None = None,
                       valor: float | None = None, data: str | None = None) -> Decisao:
+    """Classificação com a trava de 'Verificação' (valor acima de R$ 1) aplicada em qualquer caminho de entrada."""
+    return sem_verificacao_indevida(await _classificar_base(user_phone, descricao, fallback, valor, data), valor)
+
+
+async def _classificar_base(user_phone: str, descricao: str,
+                            fallback: tuple[str, str] | None = None,
+                            valor: float | None = None, data: str | None = None) -> Decisao:
     """Orquestra: histórico do usuário → categorizador híbrido (modo melhor-esforço).
     `valor` e `data` ficam na assinatura por compatibilidade (antes serviam à pergunta rotina x lazer, que deixou de existir)."""
     from app.categorizer import categorizar_gasto_hibrido
@@ -108,7 +123,8 @@ async def classificar(user_phone: str, descricao: str,
 
 # ── Receitas: categoria-pai sempre "Receitas", sem IA e sem pergunta ─────────
 _REGRAS_RECEITA = [
-    ("Salário e Pró-labore", ("salario", "folha de pagamento", "proventos", "remuneracao", "pro labore", "prolabore")),
+    ("Salário e Pró-labore", ("salario", "folha de pagamento", "proventos", "remuneracao", "pro labore", "prolabore",
+                              "liquido de vencimento")),
     ("Aposentadoria e Benefícios", ("inss", "aposentadoria", "beneficio", "pensao do inss")),
     ("Rendimentos", ("rendimento", "rendimentos", "juros", "dividendo", "dividendos", "jcp", "cdb", "resgate", "lci", "lca")),
     ("Reembolso e Estorno", ("estorno", "reembolso", "devolucao", "cashback", "reversao", "chargeback")),
