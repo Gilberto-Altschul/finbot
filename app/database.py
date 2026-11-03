@@ -50,16 +50,21 @@ def get_user_settings(user_phone: str) -> dict | None:
         logger.error(f"Erro ao buscar configurações de {user_phone}: {exc}")
         return None
 
-def save_user_settings(user_phone: str, dia_vencimento: int, dia_corte: int) -> dict:
+def save_user_settings(user_phone: str, dia_vencimento: int | None, dia_corte: int | None) -> dict:
+    """Grava os dias do cartão NA LINHA JÁ EXISTENTE do usuário. O telefone criptografado muda a cada gravação (token
+    Fernet), então um upsert por user_phone nunca acha a linha antiga e cria uma duplicada; por isso atualiza pelo prefixo
+    estável. Campo None = não mexe nele."""
     try:
-        _get_or_create_user_connection(user_phone)
-        row = {
-            "user_phone": _s(user_phone),
-            "cartao_dia_vencimento": dia_vencimento,
-            "cartao_dia_corte": dia_corte
-        }
-        result = get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
-        return result.data[0]
+        linha = _get_or_create_user_connection(user_phone)
+        campos = {}
+        if dia_vencimento is not None:
+            campos["cartao_dia_vencimento"] = dia_vencimento
+        if dia_corte is not None:
+            campos["cartao_dia_corte"] = dia_corte
+        if not campos:
+            return linha
+        result = get_db().table("finbot_user_connections").update(campos).ilike("user_phone", _q(user_phone)).execute()
+        return result.data[0] if result.data else linha
     except Exception as exc:
         logger.error(f"Erro ao salvar configurações de {user_phone}: {exc}")
         raise exc

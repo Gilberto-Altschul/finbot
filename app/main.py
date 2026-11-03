@@ -277,9 +277,9 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         try:   # o vencimento impresso na fatura vale mais que o dia padrão (12) usado quando o banco não informa
             dia_venc = pdf_import.dia_vencimento_do_pdf(await asyncio.to_thread(pdf_import._extrair_texto_pdf, pdf_final_content))
             if dia_venc:
-                corte_atual, venc_atual = db.get_card_settings(user_phone)
-                if dia_venc != venc_atual:
-                    db.save_user_settings(user_phone, dia_venc, corte_atual)
+                cfg = db.get_user_settings(user_phone) or {}
+                if cfg.get("cartao_dia_vencimento") != dia_venc:
+                    db.save_user_settings(user_phone, dia_venc, None)   # só o vencimento; o corte não é alterado
                     logger.info(f"Vencimento do cartão ajustado para o dia {dia_venc} (lido do PDF).")
         except Exception as e:
             logger.warning(f"Não consegui ler o vencimento do PDF ({e}); mantendo o dia configurado.")

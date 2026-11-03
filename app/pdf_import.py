@@ -117,6 +117,37 @@ def _extrair_texto_pdf(pdf_content: bytes) -> str:
     return texto_completo
 
 
+_MES_ABREV = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6, "jul": 7, "ago": 8, "set": 9, "out": 10,
+              "nov": 11, "dez": 12}
+_RE_ESTORNO = re.compile(r"(?<!\d)(\d{1,2})\s+(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s+"
+                         r"(estorno[^\n]*?)\s{2,}(\d{1,3}(?:\.\d{3})*,\d{2})(?!\d)", re.IGNORECASE)
+
+
+def complementar_estornos(resultado: dict, texto: str) -> dict:
+    """Alguns parsers dedicados (C6) deixam de fora as linhas de estorno ("20 out Estorno Tarifa - Estorno  98,00").
+    Procura essas linhas no texto do PDF e acrescenta as que o parser não trouxe, como crédito."""
+    txs = resultado.get("transactions") or []
+    if not txs:
+        return resultado
+    billing = next((t.get("billing_date") for t in txs if t.get("billing_date")), None)
+    ref = str(billing or txs[0].get("date") or "")[:10]
+    if len(ref) < 10:
+        return resultado
+    ano_ref, mes_ref = int(ref[:4]), int(ref[5:7])
+    for m in _RE_ESTORNO.finditer(texto or ""):
+        dia, mes = int(m.group(1)), _MES_ABREV[m.group(2).lower()]
+        valor = float(m.group(4).replace(".", "").replace(",", "."))
+        desc = re.sub(r"\s+-\s+estorno\s*$", "", m.group(3).strip(), flags=re.IGNORECASE).strip() or "Estorno"
+        data = f"{ano_ref - 1 if mes > mes_ref else ano_ref}-{mes:02d}-{dia:02d}"
+        if any("estorno" in _normalize(str(t.get("description"))) and t.get("date") == data
+               and abs(abs(float(t.get("amount") or 0)) - valor) < 0.005 for t in txs):
+            continue
+        txs.append({"date": data, "description": desc, "amount": valor, "type": "income",
+                    "payment_method": "credito", "billing_date": billing})
+        logger.info(f"Estorno recuperado do texto do PDF: {desc} {valor:.2f} em {data}")
+    return resultado
+
+
 def _tentar_parser_dedicado(pdf_content: bytes) -> dict | None:
     """
     Tenta usar um parser determinístico dedicado (Santander, C6, etc).
@@ -139,7 +170,7 @@ def _tentar_parser_dedicado(pdf_content: bytes) -> dict | None:
             if banco == "santander" and tipo == "credito":
                 return santander_credito.parse_from_pdfplumber(pdf)
             elif banco == "c6" and tipo == "credito":
-                return c6_credito.parse(texto_completo)
+                return complementar_estornos(c6_credito.parse(texto_completo), texto_completo)
             else:
                 logger.info(f"Parser para {banco}/{tipo} ainda não implementado. Usando fallback Gemini.")
                 return None
