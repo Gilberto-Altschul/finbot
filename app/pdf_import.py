@@ -55,6 +55,38 @@ def _tipo_documento(texto: str | None) -> str | None:
     return None
 
 
+def tipo_apos_estorno(descricao: str | None, tipo: str | None, tipo_doc: str | None) -> str | None:
+    """Fatura de cartão: "Estorno ..." é crédito (abate a fatura), mesmo que o parser ou a IA o devolva como gasto,
+    pois no PDF o estorno vem com valor positivo, igual às compras. Mesma regra do caminho Pluggy.
+    Em extrato de conta o sinal do valor já decide, então não mexe."""
+    if tipo == "expense" and tipo_doc != "conta" and "estorno" in _normalize(descricao or ""):
+        return "income"
+    return tipo
+
+
+_MESES_TXT = {"janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "junho": 6, "julho": 7,
+              "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12}
+
+
+def dia_vencimento_do_pdf(texto: str | None) -> int | None:
+    """Dia de vencimento impresso numa FATURA de cartão ("Data do vencimento: 01 de Novembro" ou "Vencimento 01/11/2026").
+    None se o PDF não for fatura ou não trouxer a data."""
+    if not texto:
+        return None
+    t = _normalize(texto)
+    if _tipo_documento(texto) == "conta" or "fatura" not in t:
+        return None
+    m = re.search(r"vencimento\W{0,12}(\d{1,2})\s+de\s+([a-z]+)", t)
+    if m and m.group(2) in _MESES_TXT:
+        dia = int(m.group(1))
+    else:
+        m = re.search(r"vencimento\D{0,15}?(\d{1,2})/(\d{1,2})(?:/\d{2,4})?", t)
+        if not m or not 1 <= int(m.group(2)) <= 12:
+            return None
+        dia = int(m.group(1))
+    return dia if 1 <= dia <= 31 else None
+
+
 def _dict_to_standard_transaction(d: dict) -> StandardTransaction:
     """Converte dict de parser determinístico para StandardTransaction."""
     return StandardTransaction(
@@ -284,6 +316,8 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
             tx.amount = abs(tx.amount)
             tx.type = "income"
 
+        tx.type = tipo_apos_estorno(tx.description, tx.type, tipo_doc)
+
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
         if tipo_doc == "conta":
@@ -305,4 +339,4 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
         tx.id = novo_id
 
     logger.info(f"Parsed {len(final_transactions)} transactions for {user_phone}.")
-    return final_transactions
+    return final_transactions

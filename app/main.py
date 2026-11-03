@@ -274,6 +274,15 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
         await asyncio.to_thread(_send_whatsapp, user_phone, f"🔍 *PDF de {num_pages} páginas lido!* A IA está organizando seus gastos... Só mais um momento.")
 
         all_extracted_transactions = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
+        try:   # o vencimento impresso na fatura vale mais que o dia padrão (12) usado quando o banco não informa
+            dia_venc = pdf_import.dia_vencimento_do_pdf(await asyncio.to_thread(pdf_import._extrair_texto_pdf, pdf_final_content))
+            if dia_venc:
+                corte_atual, venc_atual = db.get_card_settings(user_phone)
+                if dia_venc != venc_atual:
+                    db.save_user_settings(user_phone, dia_venc, corte_atual)
+                    logger.info(f"Vencimento do cartão ajustado para o dia {dia_venc} (lido do PDF).")
+        except Exception as e:
+            logger.warning(f"Não consegui ler o vencimento do PDF ({e}); mantendo o dia configurado.")
         llm_time = time.perf_counter() - start_time - download_time
 
         # ingestion agora retorna (mensagem, lista_outros_ou_None)
