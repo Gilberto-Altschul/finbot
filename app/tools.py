@@ -472,7 +472,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
             try:
                 res = db.get_db().table("finbot_expenses") \
-                    .select("category, subcategory, description, amount, purchase_date, billing_date") \
+                    .select("category, subcategory, description, amount, purchase_date, billing_date, payment_method") \
                     .ilike("user_phone", db._q(user_phone)) \
                     .eq("movement", "income") \
                     .gte("billing_date", start_date) \
@@ -480,7 +480,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     .order("billing_date", desc=True) \
                     .execute()
 
-                receitas_raw = res.data or []
+                receitas_raw = [r for r in (res.data or []) if (r.get("payment_method") or "").lower() != "credito"]   # crédito de cartão abate a fatura
 
                 if not receitas_raw:
                     return {"mensagem": f"📭 Nenhuma receita registrada em {hoje.strftime('%m/%Y')}."}
@@ -927,7 +927,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             gastos_pagina = gastos[inicio:fim]
 
             linhas = []
-            total_fatura = sum(float(g["amount"]) for g in gastos)
+            total_bruto = sum(float(g["amount"]) for g in gastos)
+            abatido = round(sum(abs(float(c["amount"])) for c in dbk._creditos_da_fatura(user_phone, due)), 2)
+            total_fatura = round(total_bruto - abatido, 2)   # estornos/créditos do cartão abatem a fatura
 
             for g in gastos_pagina:
                 valor = float(g["amount"])
@@ -946,6 +948,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 msg += "🏦 " + " + ".join(_cartoes) + "\n"
             msg += f"📅 Vencimento: {due.strftime('%d/%m/%Y')}\n"
             msg += f"💰 Total: *R$ {_fmt_moeda(total_fatura)}*\n"
+            if abatido:
+                msg += f"↩️ Já abatidos créditos/estornos: R$ {_fmt_moeda(abatido)}\n"
             try:
                 total_banco = await dbk.total_do_banco(PluggyService, user_phone, due)
             except Exception as e:

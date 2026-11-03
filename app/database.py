@@ -164,7 +164,23 @@ def save_expense_credit(user_phone: str, valor: float, category: str, descriptio
 
 # ── Financial Math & Calculations (IGNORANDO HORAS COMPLETAMENTE) ───────────────────────────
 
+def _linhas_receita(user_phone: str, start: str, end: str) -> list[dict]:
+    res = get_db().table("finbot_expenses") \
+        .select("amount, payment_method") \
+        .ilike("user_phone", _q(user_phone)) \
+        .eq("movement", "income") \
+        .gte("billing_date", start) \
+        .lte("billing_date", end).execute()
+    return res.data or []
+
+
+def _eh_credito_cartao(item: dict) -> bool:
+    """Estorno/crédito lançado NO CARTÃO: abate a fatura, não é dinheiro que entrou na conta."""
+    return (item.get("payment_method") or "").lower() == "credito"
+
+
 def monthly_total(user_phone: str, mes_ref: str | None = None, dia_inicio: int = 1, dia_fim: int | None = None) -> float:
+    """Gastos do período, já LÍQUIDOS dos estornos/créditos do cartão (o total bate com a fatura do banco)."""
     try:
         ref = datetime.strptime(mes_ref, "%Y-%m").date() if mes_ref else date.today()
         start = ref.replace(day=max(1, dia_inicio)).isoformat()
@@ -179,12 +195,15 @@ def monthly_total(user_phone: str, mes_ref: str | None = None, dia_inicio: int =
             .eq("movement", "expense") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
-        return round(sum(float(item["amount"]) for item in (res.data or [])), 2)
+        bruto = sum(float(item["amount"]) for item in (res.data or []))
+        creditos = sum(abs(float(i["amount"])) for i in _linhas_receita(user_phone, start, end) if _eh_credito_cartao(i))
+        return round(bruto - creditos, 2)
     except Exception as exc:
         logger.error(f"Erro cálculo monthly_total: {exc}")
         return 0.0
 
 def monthly_income_total(user_phone: str, mes_ref: str | None = None, dia_inicio: int = 1, dia_fim: int | None = None) -> float:
+    """Receitas do período. Estorno/crédito do cartão NÃO entra aqui: ele já reduz os gastos (monthly_total)."""
     try:
         ref = datetime.strptime(mes_ref, "%Y-%m").date() if mes_ref else date.today()
         start = ref.replace(day=max(1, dia_inicio)).isoformat()
@@ -193,13 +212,8 @@ def monthly_income_total(user_phone: str, mes_ref: str | None = None, dia_inicio
         fim_val = min(dia_fim, max_dia) if dia_fim else max_dia
         end = ref.replace(day=fim_val).isoformat()
 
-        res = get_db().table("finbot_expenses") \
-            .select("amount") \
-            .ilike("user_phone", _q(user_phone)) \
-            .eq("movement", "income") \
-            .gte("billing_date", start) \
-            .lte("billing_date", end).execute()
-        return round(sum(float(item["amount"]) for item in (res.data or [])), 2)
+        linhas = [i for i in _linhas_receita(user_phone, start, end) if not _eh_credito_cartao(i)]
+        return round(sum(float(item["amount"]) for item in linhas), 2)
     except Exception as exc:
         logger.error(f"Erro cálculo income total: {exc}")
         return 0.0
@@ -262,12 +276,12 @@ def fatura_total(user_phone: str, fatura_date_iso: str, dia_corte: int) -> float
         res = get_db().table("finbot_expenses") \
             .select("amount, transaction_type") \
             .ilike("user_phone", _q(user_phone)) \
-            .or_("transaction_type.is.null,transaction_type.not.ilike.income") \
             .eq("payment_method", "credito") \
             .gte("billing_date", start) \
             .lte("billing_date", end).execute()
         
-        total = sum(float(item["amount"]) if item["transaction_type"] == "expense" else -float(item["amount"]) 
+        # estornos/créditos (transaction_type income) abatem a fatura
+        total = sum(-float(item["amount"]) if item["transaction_type"] == "income" else float(item["amount"])
                     for item in (res.data or []))
         return round(total, 2)
     except Exception as exc:
@@ -410,11 +424,12 @@ def get_resumo_mes_anterior(user_phone: str) -> dict:
         
         res_exp = get_db().table("finbot_expenses").select("amount") \
             .ilike("user_phone", _q(user_phone)).eq("movement", "expense").gte("billing_date", start).lte("billing_date", end).execute()
-        res_inc = get_db().table("finbot_expenses").select("amount") \
-            .ilike("user_phone", _q(user_phone)).eq("movement", "income").gte("billing_date", start).lte("billing_date", end).execute()
-            
-        g = sum(float(x["amount"]) for x in (res_exp.data or []))
-        r = sum(float(x["amount"]) for x in (res_inc.data or []))
+        linhas_inc = _linhas_receita(user_phone, start, end)
+
+        # mesma regra do resumo: estorno/crédito do cartão abate os gastos e não conta como receita
+        g = (sum(float(x["amount"]) for x in (res_exp.data or []))
+             - sum(abs(float(x["amount"])) for x in linhas_inc if _eh_credito_cartao(x)))
+        r = sum(float(x["amount"]) for x in linhas_inc if not _eh_credito_cartao(x))
         return {"gastos": g, "receitas": r, "saldo": round(r - g, 2)}
     except Exception as e:
         logger.error(f"Erro no resumo do mês anterior: {e}")
