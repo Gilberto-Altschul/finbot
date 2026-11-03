@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-01c · salário em parcelas: prevê cada recebimento recente (estimado)"
+VERSAO = "2026-11-03a · estorno no PDF e vencimento lido da fatura"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
