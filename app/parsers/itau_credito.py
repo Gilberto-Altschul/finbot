@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 _MESES = {"janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
           "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12}
 _VALOR = r"-?\d{1,3}(?:\.\d{3})*,\d{2}"
-_RE_LINHA = re.compile(rf"^\s*(\d{{2}})/(\d{{2}})\s+(.+?)\s{{2,}}({_VALOR})(?=\s|$)")
+# descrição longa deixa só 1 espaço antes do valor ("Microsoft-G190581916Sao 25,18"); o valor termina a linha ou vem antes de texto da outra coluna
+_RE_LINHA = re.compile(rf"^\s*(\d{{2}})/(\d{{2}})\s+(.+?)\s+({_VALOR})(?=\s|$)")
 _RE_PARCELA = re.compile(r"\s(\d{2})/(\d{2})\s*$")
 _INICIO = ("lancamentos: compras e saques", "lancamentos: produtos e servicos", "lancamentos internacionais")
 _FIM = ("total dos lancamentos atuais", "compras parceladas", "proximas faturas", "limites de credito", "limite total de credito")
