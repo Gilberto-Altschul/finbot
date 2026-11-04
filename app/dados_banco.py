@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-03h · parser do Itaú lê valor com 1 espaço"
+VERSAO = "2026-11-04b · resumo com previstas por categoria"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -608,6 +608,30 @@ def _faturas_projetadas(user_phone: str, quantos: int = 6) -> dict[date, list[di
                 banco = ci.total
             por_mes.setdefault(mes, []).append({"nome": c["nome"], "vence": due, "lancado": lancado, "previsto": prev, "banco": banco})
     return por_mes
+
+
+def parcelas_previstas_do_mes(user_phone: str, mes: date) -> tuple[float, int, dict]:
+    """(total, quantidade, {categoria: total}) das parcelas de cartão que vencem em `mes` (1º dia) e o banco ainda não lançou.
+    Cartão cuja fatura do mês já veio fechada do banco fica de fora (o valor real já está gravado)."""
+    hoje = hoje_local()
+    total, qtd, por_cat = 0.0, 0, {}
+    try:
+        parcelas = db.get_active_installments(user_phone)
+        for c in [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]:
+            ci = next((k for k, _ in ler_faturas(user_phone, c["id"])
+                       if (k.vencimento.year, k.vencimento.month) == (mes.year, mes.month)), None)
+            if ci is not None and not ci.estimado and ci.total is not None and ci.fechamento < hoje:
+                continue
+            meus = [x for x in parcelas if x.get("account_id") == c["id"]]
+            t, n = parcelas_proj.previstas_do_mes(meus, mes, hoje)
+            total += t
+            qtd += n
+            for cat, v in parcelas_proj.previstas_por_categoria(meus, mes, hoje).items():
+                por_cat[cat] = round(por_cat.get(cat, 0.0) + v, 2)
+    except Exception as e:
+        logger.warning(f"Parcelas previstas indisponíveis para o resumo: {e}")
+        return 0.0, 0, {}
+    return round(total, 2), qtd, por_cat
 
 
 def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dict]:

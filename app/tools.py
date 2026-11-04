@@ -832,14 +832,27 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     nome_original = next(l["category"] for l in limites_cadastrados if _normalize(l["category"]) == norm)
                     mapa_unificado[norm] = {"display": nome_original, "gasto": 0.0, "limite": valor}
 
+            # Parcelas previstas por categoria (só mês corrente): entram na categoria certa, mesmo sem gasto ainda
+            if mes_referencia == date.today().strftime("%Y-%m") and dia_inicio <= 1 and not dia_fim:
+                prev_total, prev_qtd, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+            else:
+                prev_total, prev_qtd, prev_cat = 0.0, 0, {}
+            for nome, v in prev_cat.items():
+                norm = _normalize(nome)
+                if norm not in mapa_unificado:
+                    mapa_unificado[norm] = {"display": nome, "gasto": 0.0, "limite": 0.0}
+                mapa_unificado[norm]["prev"] = mapa_unificado[norm].get("prev", 0.0) + v
+
             # 3. Ordenar por maior gasto real
             linhas_relatorio = []
-            for d in sorted(mapa_unificado.values(), key=lambda x: x["gasto"], reverse=True):
+            for d in sorted(mapa_unificado.values(), key=lambda x: x["gasto"] + x.get("prev", 0.0), reverse=True):
                 cat_nome = d["display"]
                 gasto_real = d["gasto"]
+                prev_cat_v = round(d.get("prev", 0.0), 2)
                 limite_valor = d["limite"]
                 
-                percentual_uso = round((gasto_real / limite_valor) * 100) if limite_valor > 0 else 0
+                # o percentual e o farol já contam as parcelas previstas (é o que a categoria deve fechar)
+                percentual_uso = round(((gasto_real + prev_cat_v) / limite_valor) * 100) if limite_valor > 0 else 0
                 
                 # O farol indica o estado completo da categoria (🔴 Estourado, ⚠️ Atenção, ✅ Saudável)
                 status_emoji = "🔴" if (limite_valor > 0 and percentual_uso > 100) else "⚠️" if (limite_valor > 0 and percentual_uso >= 80) else "✅"
@@ -851,7 +864,9 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
                 linhas_relatorio.append(
                     f"{status_emoji} {emoji_da_cat} {cat_nome}{txt_pct}\n"
-                    f"     R$ {_fmt_moeda(gasto_real)}{txt_budget}"
+                    f"     R$ {_fmt_moeda(gasto_real)}"
+                    + (f" + R$ {_fmt_moeda(prev_cat_v)} prev." if prev_cat_v > 0 else "")
+                    + f"{txt_budget}"
                 )
 
             periodo_label = hoje.strftime('%m/%Y')
@@ -861,11 +876,17 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 periodo_label = f"A partir de {dia_inicio:02d}/{hoje.month:02d}"
 
             # Montagem estruturada final com a linha de 12 traços para evitar quebras
+            saldo = round(total_receitas - total_gastos, 2)
+            linhas_prev = ""
+            if prev_total > 0:
+                linhas_prev = (f"⏳ Previstas:    R$ {_fmt_moeda(prev_total)} ({prev_qtd} parcela{'s' if prev_qtd != 1 else ''})\n"
+                               f"🔮 Saldo c/ prev.: R$ {_fmt_moeda(round(saldo - prev_total, 2))}\n")
             msg_completa = (
                 f"📊 *Resumo {periodo_label}*\n\n"
                 f"💰 Receitas:    R$ {_fmt_moeda(total_receitas)}\n"
                 f"💸 Gastos:      R$ {_fmt_moeda(total_gastos)}\n"
-                f"🏦 Saldo:       R$ {_fmt_moeda(round(total_receitas - total_gastos, 2))}\n\n"
+                f"🏦 Saldo:       R$ {_fmt_moeda(saldo)}\n"
+                + linhas_prev + "\n"
                 f"────────────\n"
                 + "\n\n".join(linhas_relatorio) +
                 f"\n────────────"
@@ -878,7 +899,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 "dia_fim": dia_fim,
                 "total_gastos": total_gastos, 
                 "total_receitas": total_receitas, 
-                "saldo": round(total_receitas - total_gastos, 2), 
+                "saldo": saldo,
+                "previstas": prev_total,
                 "mensagem": msg_completa
             }
 
