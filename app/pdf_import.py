@@ -15,6 +15,7 @@ from app.taxonomia import lista_para_prompt
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload, StandardTransaction
 from app.parsers import detectar_banco_e_tipo, santander_credito, c6_credito
+from app.parsers import itau_credito
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -85,6 +86,31 @@ def dia_vencimento_do_pdf(texto: str | None) -> int | None:
             return None
         dia = int(m.group(1))
     return dia if 1 <= dia <= 31 else None
+
+
+def vencimento_mes_do_pdf(texto: str | None, hoje=None) -> str | None:
+    """Mês de COBRANÇA de uma fatura de cartão em PDF, como 'AAAA-MM-01' (o mês do vencimento impresso na fatura).
+    Aceita "Vencimento 03/11/2026" e "Data do vencimento: 01 de Novembro" (sem ano: usa o ano mais próximo de hoje)."""
+    from datetime import date as _date
+    if not texto:
+        return None
+    t = _normalize(texto)
+    if _tipo_documento(texto) == "conta" or "fatura" not in t:
+        return None
+    hoje = hoje or _date.today()
+    m = re.search(r"vencimento\D{0,15}?(\d{1,2})/(\d{1,2})/(\d{4})", t)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"{int(m.group(3)):04d}-{int(m.group(2)):02d}-01"
+    m = re.search(r"vencimento\W{0,12}(\d{1,2})\s+de\s+([a-z]+)", t)
+    if m and m.group(2) in _MESES_TXT:
+        mes = _MESES_TXT[m.group(2)]
+        ano = hoje.year
+        if mes - hoje.month > 6:
+            ano -= 1
+        elif hoje.month - mes > 6:
+            ano += 1
+        return f"{ano:04d}-{mes:02d}-01"
+    return None
 
 
 def _dict_to_standard_transaction(d: dict) -> StandardTransaction:
@@ -158,6 +184,15 @@ def _tentar_parser_dedicado(pdf_content: bytes) -> dict | None:
             texto_completo = "\n\n".join(
                 page.extract_text(layout=True) or "" for page in pdf.pages
             )
+
+            # Itaú primeiro: o detector genérico já confundiu fatura do Itaú com a do C6.
+            if itau_credito.eh_fatura(texto_completo):
+                resultado_itau = itau_credito.parse(texto_completo)
+                if resultado_itau:
+                    logger.info("Banco detectado: itau (credito)")
+                    return resultado_itau
+                logger.info("Fatura do Itaú sem leitura confiável pelo parser dedicado. Usando fallback Gemini.")
+                return None
 
             deteccao = detectar_banco_e_tipo(texto_completo)
             if not deteccao:
@@ -314,6 +349,7 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
     # 1. Tenta parser dedicado (determinístico, sem IA)
     resultado_dedicado = _tentar_parser_dedicado(pdf_content)
     tipo_doc = None
+    billing_pdf = None      # mês de cobrança lido da fatura (só para o caminho com IA; o parser dedicado já informa o dele)
 
     if resultado_dedicado and resultado_dedicado['transactions']:
         logger.info(f"✅ Parser dedicado ({resultado_dedicado['bank_detected']}) extraiu {len(resultado_dedicado['transactions'])} transações.")
@@ -326,6 +362,7 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
             logger.error(f"Erro ao extrair texto: {e}")
             texto_pdf = None
         tipo_doc = _tipo_documento(texto_pdf)
+        billing_pdf = vencimento_mes_do_pdf(texto_pdf)
         raw_transactions = await _extrair_via_gemini(pdf_content, texto_pdf)
 
     # 3. Pós-processamento comum (filtros, hash, normalização)
@@ -348,6 +385,11 @@ async def converter_pdf_nativo_para_json(pdf_content: bytes, user_phone: str) ->
             tx.type = "income"
 
         tx.type = tipo_apos_estorno(tx.description, tx.type, tipo_doc)
+
+        # Fatura de cartão lida pela IA: sem isto a cobrança ficava na data da compra (28/09, 09/10...) em vez do mês
+        # do vencimento da fatura, e as compras sumiam do resumo e da fatura do mês certo.
+        if billing_pdf and tipo_doc == "cartao" and not getattr(tx, "billing_date", None):
+            tx.billing_date = billing_pdf
 
         tx.id = _generate_transaction_hash_id(tx, user_phone)
 
