@@ -131,13 +131,27 @@ def dados_resumo(user_phone: str, hoje: date | None = None) -> dict:
     gastos = db.monthly_total(user_phone, mes)
     receitas = db.monthly_income_total(user_phone, mes)
     orc = {_normalize(b["category"]): float(b["amount"]) for b in db.get_all_budgets(user_phone, mes)}
+    # Previstas (parcelas que o banco ainda não postou) contam como lançadas, como no Resumo do WhatsApp.
+    prev_total, prev_cat = 0.0, {}
+    try:
+        from app import dados_banco as dbk
+        prev_total, _n, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+    except Exception:
+        pass
+    por_cat = {}
+    for r in db.monthly_by_category(user_phone, mes):
+        por_cat[r["category"]] = float(r["total"])
+    for c, v in prev_cat.items():
+        por_cat[c] = round(por_cat.get(c, 0.0) + v, 2)
+    gastos_realizados, gastos = gastos, round(gastos + prev_total, 2)
     cats = []
-    for r in sorted(db.monthly_by_category(user_phone, mes), key=lambda x: -x["total"]):
+    for r in sorted(({"category": c, "total": v} for c, v in por_cat.items()), key=lambda x: -x["total"]):
         limite = orc.get(_normalize(r["category"]))
         pct = round(r["total"] / limite * 100) if limite else None
         status = None if pct is None else ("estourado" if pct > 100 else ("atencao" if pct >= 80 else "saudavel"))
         cats.append({"nome": r["category"], "gasto": r["total"], "orcamento": limite, "pct": pct, "status": status})
     return {"mes": mes, "receitas": receitas, "gastos": gastos, "saldo": round(receitas - gastos, 2),
+            "previstas": prev_total, "gastos_realizados": gastos_realizados,
             "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats}
 
 

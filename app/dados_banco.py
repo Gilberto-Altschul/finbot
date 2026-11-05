@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-04b · resumo com previstas por categoria"
+VERSAO = "2026-11-05b · limite e estouro contam previstas"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -399,9 +399,14 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
     por_cat: dict[str, float] = {}
     for g in gastos:
         por_cat[g.get("category") or "Outros"] = por_cat.get(g.get("category") or "Outros", 0.0) + float(g["amount"])
+    prev_cat = dict(previstas[3]) if previstas and len(previstas) > 3 and previstas[3] else {}
+    for c, v in prev_cat.items():   # as previstas contam como lançadas, até o banco postar a fatura
+        por_cat[c] = por_cat.get(c, 0.0) + v
     top = sorted(por_cat.items(), key=lambda kv: kv[1], reverse=True)[:6]
     if not detalhar or pagina == 1:
-        msg += "\n📊 *Por categoria:*\n" + "\n".join(f" • {c}: R$ {fat.fmt_moeda(v)}" for c, v in top) + "\n"
+        msg += "\n📊 *Por categoria:*" + (" _(inclui previstas)_" if prev_cat else "") + "\n" + "\n".join(
+            f" • {c}: R$ {fat.fmt_moeda(v)}" + (f" (R$ {fat.fmt_moeda(prev_cat[c])} prev.)" if c in prev_cat else "")
+            for c, v in top) + "\n"
     if detalhar:
         paginas = (len(gastos) + page_size - 1) // page_size
         msg += (f"\n🧾 *Lançamentos* (pág. {pagina}/{paginas}):\n" if paginas > 1 else "\n🧾 *Lançamentos:*\n")
@@ -470,7 +475,8 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
                 meus = [x for x in db.get_active_installments(user_phone) if x.get("account_id") == c["id"]]
                 mes_c = date(due_c.year, due_c.month, 1)
                 tot_p, n_p = parcelas_proj.previstas_do_mes(meus, mes_c, hoje_local())
-                previstas = (tot_p, n_p, parcelas_proj.previstas_detalhe(meus, mes_c, hoje_local()))
+                previstas = (tot_p, n_p, parcelas_proj.previstas_detalhe(meus, mes_c, hoje_local()),
+                             parcelas_proj.previstas_por_categoria(meus, mes_c, hoje_local()))
             except Exception as e:
                 logger.warning(f"Parcelas previstas indisponíveis para {c['nome']}: {e}")
         blocos.append(_bloco_cartao(c["nome"], due_c, proprios, total_banco, detalhar, pagina, creditos=creds, fecha_em=fecha_em,
@@ -634,6 +640,18 @@ def parcelas_previstas_do_mes(user_phone: str, mes: date) -> tuple[float, int, d
     return round(total, 2), qtd, por_cat
 
 
+def previstas_do_mes_por_categoria_norm(user_phone: str, mes: date | None = None) -> dict[str, float]:
+    """{categoria normalizada: total} das parcelas previstas do mês corrente (para "limite" e "por que estourou")."""
+    hoje = hoje_local()
+    mes = mes or date(hoje.year, hoje.month, 1)
+    _t, _n, por_cat = parcelas_previstas_do_mes(user_phone, mes)
+    out: dict[str, float] = {}
+    for cat, v in por_cat.items():
+        k = _normalize(cat)
+        out[k] = round(out.get(k, 0.0) + v, 2)
+    return out
+
+
 def _receitas_recentes(user_phone: str, hoje: date, dias: int = 150) -> list[dict]:
     """Entradas (não de cartão) dos últimos meses, para detectar salário e outras recorrências."""
     try:
@@ -699,18 +717,16 @@ def previsao_dados(user_phone: str):
     fim_mes = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
     restam = (fim_mes - hoje).days
     realizado = {r["category"]: r["total"] for r in db.monthly_by_category(user_phone, mes_ref)}
+    # Parcelas que o banco ainda não postou contam como já lançadas (inclusive de cartão com vencimento já passado).
+    _tot_prev, _n_prev, prev_cat = parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+    for cat, v in prev_cat.items():
+        realizado[cat] = round(realizado.get(cat, 0.0) + v, 2)
     despesas = _despesas_conta_recentes(user_phone, hoje)
     fixas, chaves = fluxo_mod.saidas_recorrentes(despesas, hoje, restam)
     restante = {c: v * restam for c, v in previsao_mod.ritmo_por_categoria(despesas, chaves, hoje).items()}
     for e in fixas:
         cat = previsao_mod.categoria_da_conta_fixa(despesas, e.descricao)
         restante[cat] = restante.get(cat, 0.0) + abs(e.valor)
-    try:
-        for c in _faturas_projetadas(user_phone, 1).get(date(hoje.year, hoje.month, 1), []):
-            if c.get("banco") is None and c.get("previsto", 0) > 0:
-                restante["Parcelas previstas (cartão)"] = restante.get("Parcelas previstas (cartão)", 0.0) + c["previsto"]
-    except Exception as e:
-        logger.warning(f"Parcelas previstas indisponíveis para a previsão do mês: {e}")
     limites = {b["category"]: b["amount"] for b in db.get_all_budgets(user_phone, mes_ref)}
     anterior = db.get_resumo_mes_anterior(user_phone).get("gastos") or None
     return previsao_mod.montar(realizado, restante, limites), hoje, fim_mes, anterior

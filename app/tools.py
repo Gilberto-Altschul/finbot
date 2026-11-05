@@ -600,12 +600,16 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 limite = db.get_budget(user_phone, categoria, mes)
                 if not limite: return {"erro": f"Nenhum limite definido para {categoria}."}
                 gasto_atual = db.category_total(user_phone, categoria)
+                prev_cat = dbk.previstas_do_mes_por_categoria_norm(user_phone).get(_normalize(categoria), 0.0)
+                gasto_atual = round(gasto_atual + prev_cat, 2)   # previstas contam como lançadas até o banco postar
                 pct = round((gasto_atual / limite) * 100) if limite > 0 else 0
-                return {"categoria": categoria, "limite": limite, "gasto_atual": gasto_atual, "percentual_usado": pct}
+                return {"categoria": categoria, "limite": limite, "gasto_atual": gasto_atual, "previstas": prev_cat, "percentual_usado": pct}
             limits = db.get_all_budgets(user_phone, mes)
             totais_mes = {c["category"]: float(c["total"]) for c in db.monthly_by_category(user_phone)}
             # Normaliza chaves de gastos para bater com categorias do limite
             totais_norm = {_normalize(k): v for k, v in totais_mes.items()}
+            for k, v in dbk.previstas_do_mes_por_categoria_norm(user_phone).items():   # previstas contam como lançadas
+                totais_norm[k] = round(totais_norm.get(k, 0.0) + v, 2)
             
             processed = []
             for l in limits:
@@ -842,8 +846,12 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 if norm not in mapa_unificado:
                     mapa_unificado[norm] = {"display": nome, "gasto": 0.0, "limite": 0.0}
                 mapa_unificado[norm]["prev"] = mapa_unificado[norm].get("prev", 0.0) + v
+            # As previstas contam como já lançadas: o banco ainda não postou, mas o gasto existe. Quando ele postar,
+            # a previsão some sozinha e valem os valores reais (qualquer diferença já entra certa).
+            gastos_realizados = total_gastos
+            total_gastos = round(total_gastos + prev_total, 2)
 
-            # 3. Ordenar por maior gasto real
+            # 3. Ordenar por maior gasto (realizado + previsto)
             linhas_relatorio = []
             for d in sorted(mapa_unificado.values(), key=lambda x: x["gasto"] + x.get("prev", 0.0), reverse=True):
                 cat_nome = d["display"]
@@ -864,9 +872,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
                 linhas_relatorio.append(
                     f"{status_emoji} {emoji_da_cat} {cat_nome}{txt_pct}\n"
-                    f"     R$ {_fmt_moeda(gasto_real)}"
-                    + (f" + R$ {_fmt_moeda(prev_cat_v)} prev." if prev_cat_v > 0 else "")
-                    + f"{txt_budget}"
+                    f"     R$ {_fmt_moeda(gasto_real + prev_cat_v)}{txt_budget}"
+                    + (f"\n     _(inclui R$ {_fmt_moeda(prev_cat_v)} previstos)_" if prev_cat_v > 0 else "")
                 )
 
             periodo_label = hoje.strftime('%m/%Y')
@@ -879,8 +886,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             saldo = round(total_receitas - total_gastos, 2)
             linhas_prev = ""
             if prev_total > 0:
-                linhas_prev = (f"⏳ Previstas:    R$ {_fmt_moeda(prev_total)} ({prev_qtd} parcela{'s' if prev_qtd != 1 else ''})\n"
-                               f"🔮 Saldo c/ prev.: R$ {_fmt_moeda(round(saldo - prev_total, 2))}\n")
+                linhas_prev = (f"⏳ _Gastos incluem R$ {_fmt_moeda(prev_total)} previstos "
+                               f"({prev_qtd} parcela{'s' if prev_qtd != 1 else ''} que o banco ainda não postou)_\n")
             msg_completa = (
                 f"📊 *Resumo {periodo_label}*\n\n"
                 f"💰 Receitas:    R$ {_fmt_moeda(total_receitas)}\n"
@@ -901,6 +908,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 "total_receitas": total_receitas, 
                 "saldo": saldo,
                 "previstas": prev_total,
+                "gastos_realizados": gastos_realizados,
                 "mensagem": msg_completa
             }
 
@@ -1121,8 +1129,10 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 total_gasto = db.category_total(user_phone, category=nome_alternativo)
                 if total_gasto > 0: cat_target = nome_alternativo
 
-            if total_gasto == 0:
+            prev_v = dbk.previstas_do_mes_por_categoria_norm(user_phone).get(_normalize(cat_target), 0.0)
+            if total_gasto == 0 and prev_v == 0:
                 return {"status": "sem_gastos", "categoria": cat_target}
+            total_gasto = round(total_gasto + prev_v, 2)   # previstas contam como lançadas até o banco postar
 
             try:
                 res = db.get_db().table("finbot_expenses")\
@@ -1155,8 +1165,10 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     sub_agrupado[s_name] = sub_agrupado.get(s_name, 0.0) + float(item["amount"])
             except Exception as e:
                 logger.error(f"Erro ao agrupar subcategorias: {e}")
-                sub_agrupado = {"Outros": total_gasto}
+                sub_agrupado = {"Outros": round(total_gasto - prev_v, 2)}
 
+            if prev_v > 0:
+                sub_agrupado["Parcelas previstas (cartão)"] = sub_agrupado.get("Parcelas previstas (cartão)", 0.0) + prev_v
             divisao_subcategorias = {k: round(v, 2) for k, v in sorted(sub_agrupado.items(), key=lambda x: x[1], reverse=True) if v > 0}
             total_gasto_filtrado = sum(divisao_subcategorias.values())
 
