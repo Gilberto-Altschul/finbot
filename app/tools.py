@@ -20,6 +20,7 @@ from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
 from app import titular
+from app.merchant import BENEFICIARIOS, codigo_beneficiario
 from app import parcelas as parcelas_proj
 from app.config import get_settings
 
@@ -237,7 +238,7 @@ SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "indice": {"type": "integer", "description": "O número de ordem da transação na lista (ex: 1, 2, 3)"},
-                "acao": {"type": "string", "enum": ["excluir", "categoria", "subcategoria", "valor"], "description": "Ação a ser executada: 'excluir', 'categoria', 'subcategoria' ou 'valor'."},
+                "acao": {"type": "string", "enum": ["excluir", "categoria", "subcategoria", "valor", "beneficiario"], "description": "Ação a ser executada: 'excluir', 'categoria', 'subcategoria', 'valor' ou 'beneficiario' (de quem é o gasto: pet, filhos, familia, casa, voce — e o app aprende para os próximos)."},
                 "valor": {"type": "string", "description": "O novo valor para a ação. Ex: 'Lazer' para 'categoria', ou '50.25' para 'valor'."}
             },
             "required": ["indice", "acao"]
@@ -1276,14 +1277,14 @@ def listar_transacoes_auditoria(user_phone: str, mes: int, ano: int, categoria: 
     msg += f"\n---"
     msg += f"\nPágina {pagina} | Próxima: *Listar {mes} pág {pagina + 1}*"
 
-    msg += f"\n💡 *Para ajustar, digite: Acertar [número] [excluir/subcategoria]*"
+    msg += f"\n💡 *Para ajustar, digite: Acertar [número] [excluir/subcategoria/beneficiario]*"
     return {"mensagem": msg, "transacoes": transacoes}
 
 async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valor: str = None):
     # Suporte flexível para comandos curtos como 'acertar 4 racao'
     # Se a 'acao' não for um comando reservado e não houver um 'valor' separado,
     # assumimos que a própria 'acao' é o novo nome da subcategoria.
-    if acao and acao.lower() not in ["excluir", "categoria", "subcategoria", "valor"] and not (valor and valor.strip()):
+    if acao and acao.lower() not in ["excluir", "categoria", "subcategoria", "valor", "beneficiario"] and not (valor and valor.strip()):
         valor = acao
         acao = "subcategoria"
 
@@ -1326,6 +1327,21 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
             return {"mensagem": "⚠️ Valor inválido. Use apenas números (ex: 50,25)."}
 
     
+    if acao.lower() == "beneficiario":
+        cod = codigo_beneficiario(valor)
+        if (valor or "").strip().lower() in ("nenhum", "ninguem", "limpar", "remover"):
+            cod = None
+        elif cod is None:
+            return {"mensagem": "⚠️ Não entendi o beneficiário. Use: *pet*, *filhos*, *família*, *casa* ou *você*. Ex: *acertar 2 beneficiario pet*"}
+        n = db.aplicar_beneficiario_merchant(user_phone, descricao, cod)
+        if n == 0:
+            db.atualizar_transacao(tx_id, {"beneficiary": cod})   # ao menos a transação pontual
+            n = 1
+        db.save_merchant_beneficiary(user_phone, descricao, cod)   # aprendizado para os próximos lançamentos
+        if cod is None:
+            return {"mensagem": f"✅ Tirei o beneficiário de '{descricao}' ({n} lançamento(s)) e não aplico mais nos próximos."}
+        return {"mensagem": f"✅ Beneficiário: *{BENEFICIARIOS[cod]}*. Apliquei em {n} lançamento(s) de '{descricao}' e aprendi para os próximos!"}
+
     if acao.lower() in ["categoria", "subcategoria"]:
         coluna = "category" if acao.lower() == "categoria" else "subcategory"
         if not valor or not valor.strip():

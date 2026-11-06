@@ -536,6 +536,50 @@ def get_category_id_by_name(category_name: str) -> int | None:
         logger.error(f"Erro em get_category_id_by_name: {e}")
         return None
 
+def get_beneficiarios_aprendidos(user_phone: str) -> dict[str, str]:
+    """{chave do estabelecimento: beneficiário} que ESTE usuário ensinou (por usuário, não global)."""
+    try:
+        res = get_db().table("finbot_merchant_beneficiary").select("merchant_key, beneficiary") \
+            .eq("user_key", get_lookup_prefix(user_phone)).execute()
+        return {r["merchant_key"]: r["beneficiary"] for r in (res.data or []) if r.get("beneficiary")}
+    except Exception as e:
+        logger.warning(f"Beneficiários aprendidos indisponíveis: {e}")
+        return {}
+
+
+def save_merchant_beneficiary(user_phone: str, descricao: str, beneficiary: str | None) -> None:
+    """Aprende (ou esquece, se None) o beneficiário de um estabelecimento para este usuário."""
+    from app.merchant import normalizar_merchant
+    key, uk = normalizar_merchant(descricao), get_lookup_prefix(user_phone)
+    try:
+        if beneficiary is None:
+            get_db().table("finbot_merchant_beneficiary").delete().eq("user_key", uk).eq("merchant_key", key).execute()
+        else:
+            get_db().table("finbot_merchant_beneficiary").upsert(
+                {"user_key": uk, "merchant_key": key, "beneficiary": beneficiary}, on_conflict="user_key,merchant_key").execute()
+    except Exception as e:
+        logger.error(f"Erro ao salvar beneficiário aprendido: {e}")
+
+
+def aplicar_beneficiario_merchant(user_phone: str, descricao: str, beneficiary: str | None) -> int:
+    """Aplica o beneficiário a TODOS os lançamentos do usuário do mesmo estabelecimento (retroativo). Retorna quantos."""
+    from app.merchant import normalizar_merchant
+    key = normalizar_merchant(descricao)
+    token = max(key.split(), key=len, default="")
+    if len(token) < 3:
+        return 0
+    try:
+        res = get_db().table("finbot_expenses").select("id, description").ilike("user_phone", _q(user_phone)) \
+            .ilike("description", f"%{token}%").limit(3000).execute()
+        ids = [r["id"] for r in (res.data or []) if normalizar_merchant(r.get("description") or "") == key]
+        for i in range(0, len(ids), 200):
+            get_db().table("finbot_expenses").update({"beneficiary": beneficiary}).in_("id", ids[i:i + 200]).execute()
+        return len(ids)
+    except Exception as e:
+        logger.error(f"Erro ao aplicar beneficiário retroativo: {e}")
+        return 0
+
+
 def save_user_merchant_mapping(user_phone: str, merchant: str, category: str, subcategory: str) -> None:
     """
     Salva o aprendizado de merchant -> CATEGORIA (autoritativo) de forma GLOBAL.
@@ -635,9 +679,18 @@ def inserir_gastos_em_lote(rows: list[dict]) -> int:
     """Insere transações ignorando duplicatas. Retorna o número de registros efetivamente inseridos."""
     if not rows:
         return 0
+    from app.merchant import beneficiario_aprendido
+    aprendidos_por_fone: dict[str, dict[str, str]] = {}
     for r in rows:
         if "user_phone" in r:
-            r["user_phone"] = _s(r["user_phone"])
+            fone = r["user_phone"]
+            if not r.get("beneficiary"):   # o que o usuário ensinou vale mais que a regra automática do banco
+                if fone not in aprendidos_por_fone:
+                    aprendidos_por_fone[fone] = get_beneficiarios_aprendidos(fone)
+                b = beneficiario_aprendido(r.get("description") or "", aprendidos_por_fone[fone])
+                if b:
+                    r["beneficiary"] = b
+            r["user_phone"] = _s(fone)
     try:
         inseridos = 0
         batch_size = 100
