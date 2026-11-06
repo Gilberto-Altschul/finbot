@@ -238,7 +238,7 @@ SCHEMAS: list[dict] = [
             "type": "object",
             "properties": {
                 "indice": {"type": "integer", "description": "O número de ordem da transação na lista (ex: 1, 2, 3)"},
-                "acao": {"type": "string", "enum": ["excluir", "categoria", "subcategoria", "valor", "beneficiario"], "description": "Ação a ser executada: 'excluir', 'categoria', 'subcategoria', 'valor' ou 'beneficiario' (de quem é o gasto: pet, filhos, familia, casa, voce — e o app aprende para os próximos)."},
+                "acao": {"type": "string", "enum": ["excluir", "categoria", "subcategoria", "valor", "beneficiario"], "description": "Ação a ser executada: 'excluir', 'categoria', 'subcategoria', 'valor' ou 'beneficiario' (de quem é o gasto: pet, filhos, familia, casa, voce ou nome da pessoa). Vale só para o lançamento; se o usuário acrescentar 'sempre' ao final do valor, aplica a todos do estabelecimento e aprende para os próximos."},
                 "valor": {"type": "string", "description": "O novo valor para a ação. Ex: 'Lazer' para 'categoria', ou '50.25' para 'valor'."}
             },
             "required": ["indice", "acao"]
@@ -1328,16 +1328,29 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
     
     if acao.lower() == "beneficiario":
-        cod = beneficiario_de_texto(valor)
-        if (valor or "").strip().lower() in ("nenhum", "ninguem", "limpar", "remover"):
+        # Padrão: vale só para ESTE lançamento (o mesmo estabelecimento pode atender pessoas diferentes).
+        # Com "sempre"/"todos" no fim: aplica a todos do estabelecimento e aprende para os próximos.
+        texto = (valor or "").strip()
+        sempre = False
+        partes = texto.split()
+        if len(partes) > 1 and partes[-1].lower() in ("sempre", "todos", "todas"):
+            sempre = True
+            texto = " ".join(partes[:-1])
+        cod = beneficiario_de_texto(texto)
+        if texto.lower() in ("nenhum", "ninguem", "ninguém", "limpar", "remover"):
             cod = None
         elif cod is None:
             return {"mensagem": "⚠️ Não entendi o beneficiário. Use *pet*, *filhos*, *família*, *casa*, *você* ou o nome da pessoa (só letras). Ex: *acertar 2 beneficiario Pedro*"}
+        if not sempre:
+            db.atualizar_transacao(tx_id, {"beneficiary": cod})
+            if cod is None:
+                return {"mensagem": f"✅ Tirei o beneficiário deste lançamento ({descricao}).\n💡 Para valer para todos do estabelecimento: *acertar {indice} beneficiario nenhum sempre*"}
+            return {"mensagem": f"✅ Beneficiário deste lançamento: *{rotulo_beneficiario(cod)}*.\n💡 Se for sempre a mesma pessoa nesse estabelecimento, digite: *acertar {indice} beneficiario {texto} sempre*"}
         n = db.aplicar_beneficiario_merchant(user_phone, descricao, cod)
         if n == 0:
-            db.atualizar_transacao(tx_id, {"beneficiary": cod})   # ao menos a transação pontual
+            db.atualizar_transacao(tx_id, {"beneficiary": cod})
             n = 1
-        db.save_merchant_beneficiary(user_phone, descricao, cod)   # aprendizado para os próximos lançamentos
+        db.save_merchant_beneficiary(user_phone, descricao, cod)
         if cod is None:
             return {"mensagem": f"✅ Tirei o beneficiário de '{descricao}' ({n} lançamento(s)) e não aplico mais nos próximos."}
         return {"mensagem": f"✅ Beneficiário: *{rotulo_beneficiario(cod)}*. Apliquei em {n} lançamento(s) de '{descricao}' e aprendi para os próximos!"}
