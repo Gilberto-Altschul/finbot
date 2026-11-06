@@ -464,11 +464,11 @@ def get_expenses_by_category_current_month(user_phone: str, category: str) -> li
         return []
 
 def get_expenses_by_beneficiary(user_phone: str, beneficiary: str, start: str, end: str) -> list[dict]:
-    """Despesas do mês (por mês de cobrança) de um beneficiário: self | family | children | pet | home."""
+    """Despesas do mês (por mês de cobrança) de um beneficiário: self | family | children | pet | home ou o NOME de uma pessoa."""
     try:
         res = get_db().table("finbot_expenses").select("category, subcategory, description, amount, purchase_date, billing_date") \
             .ilike("user_phone", _q(user_phone)) \
-            .eq("beneficiary", beneficiary) \
+            .ilike("beneficiary", beneficiary) \
             .eq("movement", "expense") \
             .gte("billing_date", start).lte("billing_date", end) \
             .order("billing_date", desc=True).execute()

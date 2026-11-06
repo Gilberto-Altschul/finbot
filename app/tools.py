@@ -20,7 +20,7 @@ from app.categorizer import categorizar_gasto_hibrido
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
 from app import titular
-from app.merchant import BENEFICIARIOS, codigo_beneficiario
+from app.merchant import BENEFICIARIOS, beneficiario_de_texto, rotulo_beneficiario
 from app import parcelas as parcelas_proj
 from app.config import get_settings
 
@@ -137,11 +137,11 @@ SCHEMAS: list[dict] = [
     },
     {
         "name": "gastos_beneficiario",
-        "description": "Gastos do mês de um BENEFICIÁRIO (para quem foi o gasto), independente da categoria. Use para 'gastos com o pet', 'quanto gastei com os pets', 'gastos dos filhos'. Só 'pet' é preenchido automaticamente hoje.",
+        "description": "Gastos do mês de um BENEFICIÁRIO (para quem foi o gasto), independente da categoria. Use para 'gastos com o pet', 'quanto gastei com os pets', 'gastos dos filhos', 'quanto gastei com o Pedro'. O usuário atribui com 'acertar [nº] beneficiario [pet/nome]' e o app aprende o estabelecimento.",
         "parameters": {
             "type": "object",
             "properties": {
-                "beneficiario": {"type": "string", "enum": ["pet", "children", "family", "home", "self"], "description": "pet = animais de estimação; children = filhos; family = família; home = casa; self = próprio usuário."},
+                "beneficiario": {"type": "string", "description": "pet, children, family, home, self (próprio usuário) OU o NOME de uma pessoa (ex.: 'Pedro') que o usuário já tenha atribuído a gastos."},
                 "mes": {"type": "string", "description": "Mês de referência no formato YYYY-MM."}
             },
             "required": ["beneficiario"]
@@ -626,11 +626,11 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             return {"mes": mes, "limites": processed}
 
         case "gastos_beneficiario":
-            ben = (args.get("beneficiario") or "").strip().lower()
+            ben = beneficiario_de_texto(args.get("beneficiario"))
             rotulos = {"pet": ("🐾", "Pets"), "children": ("🧒", "Filhos"), "family": ("👪", "Família"), "home": ("🏠", "Casa"), "self": ("🙋", "Você")}
-            if ben not in rotulos:
-                return {"mensagem": "🤷‍♂️ Não entendi o beneficiário. Ex: 'gastos com o pet'."}
-            emoji, nome = rotulos[ben]
+            if not ben:
+                return {"mensagem": "🤷‍♂️ Não entendi o beneficiário. Ex: 'gastos com o pet' ou 'gastos com o Pedro'."}
+            emoji, nome = rotulos.get(ben, ("👤", ben))   # nome de pessoa: grava e mostra o próprio nome
             hoje = date.today()
             parsed = _parse_month_year(args.get("mes"))
             if parsed:
@@ -639,7 +639,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             fim = hoje.replace(day=monthrange(hoje.year, hoje.month)[1]).isoformat()
             itens = db.get_expenses_by_beneficiary(user_phone, ben, ini, fim)
             if not itens:
-                extra = "\nℹ️ Hoje só os gastos de pet são identificados automaticamente." if ben != "pet" else ""
+                extra = "\nℹ️ Só os gastos de pet são identificados sozinhos. Para os outros, liste o extrato e use *acertar [nº] beneficiario [nome]*." if ben != "pet" else ""
                 return {"mensagem": f"📭 Nenhum gasto de {nome} em {hoje.strftime('%m/%Y')}.{extra}"}
             total = sum(float(i["amount"]) for i in itens)
             por_cat: dict[str, float] = {}
@@ -1328,11 +1328,11 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
     
     if acao.lower() == "beneficiario":
-        cod = codigo_beneficiario(valor)
+        cod = beneficiario_de_texto(valor)
         if (valor or "").strip().lower() in ("nenhum", "ninguem", "limpar", "remover"):
             cod = None
         elif cod is None:
-            return {"mensagem": "⚠️ Não entendi o beneficiário. Use: *pet*, *filhos*, *família*, *casa* ou *você*. Ex: *acertar 2 beneficiario pet*"}
+            return {"mensagem": "⚠️ Não entendi o beneficiário. Use *pet*, *filhos*, *família*, *casa*, *você* ou o nome da pessoa (só letras). Ex: *acertar 2 beneficiario Pedro*"}
         n = db.aplicar_beneficiario_merchant(user_phone, descricao, cod)
         if n == 0:
             db.atualizar_transacao(tx_id, {"beneficiary": cod})   # ao menos a transação pontual
@@ -1340,7 +1340,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         db.save_merchant_beneficiary(user_phone, descricao, cod)   # aprendizado para os próximos lançamentos
         if cod is None:
             return {"mensagem": f"✅ Tirei o beneficiário de '{descricao}' ({n} lançamento(s)) e não aplico mais nos próximos."}
-        return {"mensagem": f"✅ Beneficiário: *{BENEFICIARIOS[cod]}*. Apliquei em {n} lançamento(s) de '{descricao}' e aprendi para os próximos!"}
+        return {"mensagem": f"✅ Beneficiário: *{rotulo_beneficiario(cod)}*. Apliquei em {n} lançamento(s) de '{descricao}' e aprendi para os próximos!"}
 
     if acao.lower() in ["categoria", "subcategoria"]:
         coluna = "category" if acao.lower() == "categoria" else "subcategory"

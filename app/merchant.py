@@ -72,9 +72,9 @@ def contem_termo(texto_norm: str, termo_norm: str, palavra_inteira: bool = False
 BENEFICIARIOS = {"self": "Você", "family": "Família", "children": "Filhos", "pet": "Pet", "home": "Casa"}
 _SINONIMOS_BENEF = {
     "pet": ("pet", "pets", "bicho", "cachorro", "cao", "gato", "animal"),
-    "children": ("filho", "filhos", "filha", "filhas", "crianca", "criancas", "neto"),
-    "family": ("familia", "familiar"),
-    "home": ("casa", "lar", "apartamento", "apto"),
+    "children": ("children", "filho", "filhos", "filha", "filhas", "crianca", "criancas", "neto"),
+    "family": ("family", "familia", "familiar"),
+    "home": ("home", "casa", "lar", "apartamento", "apto"),
     "self": ("eu", "voce", "mim", "meu", "pessoal", "self"),
 }
 
@@ -92,3 +92,36 @@ def codigo_beneficiario(texto: str | None) -> str | None:
 def beneficiario_aprendido(descricao: str, aprendidos: dict[str, str]) -> str | None:
     """Beneficiário que o usuário já ensinou para este estabelecimento (chave estável do merchant)."""
     return aprendidos.get(normalizar_merchant(descricao)) if aprendidos else None
+
+
+_ARTIGOS_BENEF = {"meu", "minha", "meus", "minhas", "o", "a", "os", "as", "do", "da", "dos", "das", "de", "pro", "pra", "para"}
+_PARTICULAS_NOME = {"da", "de", "do", "das", "dos", "e"}
+
+
+def beneficiario_de_texto(texto: str | None) -> str | None:
+    """O que o usuário digitou -> valor a gravar em finbot_expenses.beneficiary.
+    'pet', 'meu cachorro' -> 'pet' (atalhos). Qualquer outro nome de pessoa -> o próprio nome ('Pedro', 'Ana Souza').
+    Texto vazio ou com símbolos/números -> None."""
+    t = (texto or "").strip()
+    if not t:
+        return None
+    palavras = [w for w in re.findall(r"[a-z]+", sem_acento(t.lower())) if w not in _ARTIGOS_BENEF]
+    if not palavras:
+        return None
+    for cod, sins in _SINONIMOS_BENEF.items():
+        if all(p in sins for p in palavras):
+            return cod
+    # nome de pessoa: só letras, espaço, hífen e apóstrofo; sem artigo no começo ("do Pedro" -> "Pedro")
+    partes = t.split()
+    while partes and sem_acento(partes[0].lower()) in _ARTIGOS_BENEF:
+        partes.pop(0)
+    nome = " ".join(partes)
+    if not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ'’\- ]{2,40}", nome):
+        return None
+    return " ".join(w.lower() if i and w.lower() in _PARTICULAS_NOME else w[:1].upper() + w[1:].lower()
+                    for i, w in enumerate(nome.split()))
+
+
+def rotulo_beneficiario(b: str | None) -> str:
+    """Nome para mostrar: 'pet' -> 'Pet'; 'Pedro' -> 'Pedro'."""
+    return BENEFICIARIOS.get(b or "", b or "")
