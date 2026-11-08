@@ -165,6 +165,34 @@ se você reconhece o estabelecimento ou o termo é claro (livraria, sebo, farmá
 ou chutando, use 50 ou menos.
 """
 
+# Intermediadores/processadoras de pagamento: o extrato mostra só a processadora, não a loja de verdade
+# (ex.: "Pix QR Code VINDI PAGAMENTOS ONLINE" era a Petlove). A IA chuta com certeza alta e erra, então,
+# quando o texto é SÓ a processadora (sem nome de loja junto), o lançamento vai para "A classificar".
+_PROCESSADORAS = [
+    "vindi", "pagseguro", "pag seguro", "pagbank", "mercado pago", "mercadopago", "stone", "cielo", "getnet",
+    "sumup", "picpay", "pagar.me", "pagarme", "iugu", "asaas", "ebanx", "zoop", "moip", "wirecard", "paypal",
+]
+_RUIDO_PROCESSADORA = {
+    "pagamento", "pagamentos", "de", "do", "da", "pix", "qr", "code", "online", "ltda", "sa", "s", "a", "me", "eireli",
+    "compra", "debito", "credito", "via", "pgto", "pag", "br", "brasil", "servicos", "instituicao", "pagto",
+}
+
+
+def so_intermediario(desc_norm: str) -> bool:
+    """True se a descrição tem uma processadora de pagamento e nada além de palavras genéricas."""
+    d = desc_norm
+    achou = False
+    for t in _PROCESSADORAS:
+        tn = _normalize(t)
+        if re.search(rf"(?<![a-z0-9]){re.escape(tn)}(?![a-z0-9])", d):
+            achou = True
+            d = re.sub(rf"(?<![a-z0-9]){re.escape(tn)}(?![a-z0-9])", " ", d)
+    if not achou:
+        return False
+    sobra = [w for w in re.split(r"[^a-z0-9]+", d) if w and w not in _RUIDO_PROCESSADORA and not w.isdigit()]
+    return not sobra
+
+
 async def categorizar_gasto_hibrido(
     user_phone: str, descricao: str, fallback: tuple[str, str] | None = None,
     permitir_melhor_esforco: bool = False,
@@ -278,6 +306,11 @@ async def categorizar_gasto_hibrido(
         else:
             logger.info(f"Camada 2.5 ignorada — fallback '{fb_categoria}/{fb_subcategoria}' não bate com a taxonomia oficial ou diverge da categoria já conhecida.")
 
+    # Camada 2.9: só a processadora de pagamento, sem loja: não dá para saber o que foi — não chuta.
+    if not categoria_conhecida and so_intermediario(desc_norm):
+        logger.info(f"Camada 2.9 (Intermediador de pagamento) — sem loja identificável: '{descricao}' -> A classificar")
+        return A_CLASSIFICAR
+
     # Camada 3: LLM decide a subcategoria — restrita à categoria já conhecida, se houver
     logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao} (categoria conhecida: {categoria_conhecida})")
     try:
@@ -332,4 +365,4 @@ async def categorizar_gasto_hibrido(
         return cat, sub
     except Exception as e:
         logger.error(f"Erro na Camada 3 (LLM): {e}")
-        return A_CLASSIFICAR
+        return A_CLASSIFICAR
