@@ -253,6 +253,12 @@ async def categorizar_gasto_hibrido(
         logger.info(f"Camada 0 (Marketplace) detectada: '{descricao}'. Categorizando como Outros > Compras Online.")
         return COMPRAS_ONLINE
     
+    # Camada 0.9: só a processadora de pagamento (Vindi etc.), sem loja identificável: SEMPRE decisão do usuário.
+    # Vem antes de qualquer regra aprendida: a mesma processadora cobra para lojas diferentes, então nada se aprende nem se aplica sozinho.
+    if so_intermediario(desc_norm):
+        logger.info(f"Camada 0.9 (Intermediador de pagamento) — sem loja identificável: '{descricao}' -> A classificar")
+        return A_CLASSIFICAR
+
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
     # Se além da categoria já existe uma subcategoria-dica de uma resolução
     # anterior EXATA desse mesmo merchant, usa ela direto — evita chamar
@@ -305,11 +311,6 @@ async def categorizar_gasto_hibrido(
             return fb_categoria, fb_subcategoria
         else:
             logger.info(f"Camada 2.5 ignorada — fallback '{fb_categoria}/{fb_subcategoria}' não bate com a taxonomia oficial ou diverge da categoria já conhecida.")
-
-    # Camada 2.9: só a processadora de pagamento, sem loja: não dá para saber o que foi — não chuta.
-    if not categoria_conhecida and so_intermediario(desc_norm):
-        logger.info(f"Camada 2.9 (Intermediador de pagamento) — sem loja identificável: '{descricao}' -> A classificar")
-        return A_CLASSIFICAR
 
     # Camada 3: LLM decide a subcategoria — restrita à categoria já conhecida, se houver
     logger.info(f"Camada 3 (LLM) acionada para local inédito: {descricao} (categoria conhecida: {categoria_conhecida})")

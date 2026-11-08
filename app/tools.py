@@ -16,7 +16,7 @@ import app.database as db
 from app.billing import fatura_vencimento, fatura_label, parcelas
 from app.utils import _fmt, _normalize, SISTEMA_CATEGORIAS
 from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS, categoria_valida
-from app.categorizer import categorizar_gasto_hibrido
+from app.categorizer import categorizar_gasto_hibrido, so_intermediario
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
 from app import titular
@@ -1336,6 +1336,10 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         if len(partes) > 1 and partes[-1].lower() in ("sempre", "todos", "todas"):
             sempre = True
             texto = " ".join(partes[:-1])
+        nota_proc = ""
+        if sempre and so_intermediario(_normalize(descricao)):
+            sempre = False
+            nota_proc = "\n💡 Processadora de pagamento (cobra para lojas diferentes): vale só para este lançamento, não aprendo."
         cod = beneficiario_de_texto(texto)
         if texto.lower() in ("nenhum", "ninguem", "ninguém", "limpar", "remover"):
             cod = None
@@ -1345,7 +1349,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
             db.atualizar_transacao(tx_id, {"beneficiary": cod})
             if cod is None:
                 return {"mensagem": f"✅ Tirei o beneficiário deste lançamento ({descricao}).\n💡 Para valer para todos do estabelecimento: *acertar {indice} beneficiario nenhum sempre*"}
-            return {"mensagem": f"✅ Beneficiário deste lançamento: *{rotulo_beneficiario(cod)}*.\n💡 Se for sempre a mesma pessoa nesse estabelecimento, digite: *acertar {indice} beneficiario {texto} sempre*"}
+            return {"mensagem": f"✅ Beneficiário deste lançamento: *{rotulo_beneficiario(cod)}*." + (nota_proc or ("" if so_intermediario(_normalize(descricao)) else f"\n💡 Se for sempre a mesma pessoa nesse estabelecimento, digite: *acertar {indice} beneficiario {texto} sempre*"))}
         n = db.aplicar_beneficiario_merchant(user_phone, descricao, cod)
         if n == 0:
             db.atualizar_transacao(tx_id, {"beneficiary": cod})
@@ -1412,6 +1416,19 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
                             nova_sub = sugestao_sub
             except: pass
 
+        # O banco só aceita pares categoria/subcategoria da taxonomia (gatilho de segurança devolve "A classificar").
+        # Texto livre que não existe ali (ex.: "consulta para pet") não pode ser gravado nem aprendido: avisa em vez de fingir sucesso.
+        if acao.lower() == "subcategoria" and nova_cat in SUBCATEGORIAS and nova_sub not in SUBCATEGORIAS[nova_cat]:
+            validas = SUBCATEGORIAS[nova_cat]
+            parecida = next((v for v in validas if _normalize(v) == _normalize(nova_sub)), None)
+            if parecida:
+                nova_sub = parecida
+            else:
+                return {"mensagem": (f"⚠️ Não existe a subcategoria *{target_val}* em {nova_cat}. Nada foi alterado.\n"
+                                     f"Opções de {nova_cat}: {', '.join(validas)}.\n"
+                                     f"Digite: *acertar {indice} subcategoria <nome>*. Para gasto do pet, use a subcategoria que couber "
+                                     f"e depois *acertar {indice} beneficiario pet*.")}
+
         # Prepara pacote de atualização
         updates = {coluna: nova_sub if coluna == "subcategory" else nova_cat}
         if nova_cat != tx_atual["category"]:
@@ -1432,6 +1449,12 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         # para que o lançamento não "suma" do extrato do mês ao ser recategorizado.
         if tx_atual.get("purchase_date"):
             updates["billing_date"] = tx_atual["purchase_date"]
+
+        # Processadora de pagamento (Vindi etc.): cada lançamento é decisão sua; não aplica nos outros nem aprende.
+        intermediario = so_intermediario(_normalize(descricao))
+        if intermediario:
+            db.atualizar_transacao(tx_id, updates)
+            return {"mensagem": f"✅ Ajustado para *{nova_sub}* ({nova_cat}) só neste lançamento.\n💡 '{descricao}' é uma processadora de pagamento (cobra para lojas diferentes), então não aplico nos outros nem aprendo: você decide a cada um."}
 
         # Atualiza TODAS as transações com a mesma descrição para este usuário (Retroatividade)
         try:
