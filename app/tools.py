@@ -1299,7 +1299,7 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
 
     # Busca dados atuais para atualizar aprendizado
     res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type").eq("id", tx_id).execute()
-    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type, purchase_date").eq("id", tx_id).execute()
+    res_tx = db.get_db().table("finbot_expenses").select("description, category, subcategory, transaction_type, purchase_date, billing_date").eq("id", tx_id).execute()
     if not res_tx.data:
          return {"mensagem": "⚠️ Erro ao acessar os dados da transação."}
     
@@ -1447,8 +1447,10 @@ async def processar_comando_acerto(user_phone: str, indice: int, acao: str, valo
         
         # Garante que a data de competência (billing_date) seja a mesma da compra,
         # para que o lançamento não "suma" do extrato do mês ao ser recategorizado.
-        if tx_atual.get("purchase_date"):
-            updates["billing_date"] = tx_atual["purchase_date"]
+        # (O billing_date NÃO entra no pacote que vai para todos os lançamentos de mesma descrição: antes isso copiava a
+        # data de UM lançamento para todos e jogava Pix/compras de meses antigos no mês corrente. Só preenche se estava vazio, neste lançamento.)
+        if tx_atual.get("purchase_date") and not tx_atual.get("billing_date"):
+            db.atualizar_transacao(tx_id, {"billing_date": tx_atual["purchase_date"]})
 
         # Processadora de pagamento (Vindi etc.): cada lançamento é decisão sua; não aplica nos outros nem aprende.
         intermediario = so_intermediario(_normalize(descricao))
