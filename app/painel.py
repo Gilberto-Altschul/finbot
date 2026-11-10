@@ -466,6 +466,25 @@ async def api_chat_enviar(corpo: _Mensagem, request: Request, finflow_sessao: st
     return _json({"status": "ok", "ultimo": c.seq})
 
 
+@router.post("/painel/api/chat/desfazer")
+async def api_chat_desfazer(request: Request, finflow_sessao: str | None = Cookie(default=None)):
+    """Desfaz o ÚLTIMO gasto gravado por áudio deste usuário (os ids ficam no servidor; o navegador não escolhe o que apagar)."""
+    real, c = _checar_chat(request, finflow_sessao)
+    import app.audio_gasto as audio_gasto
+    usuario = demo.efetivo(real)
+    try:
+        args = await asyncio.to_thread(audio_gasto.desfazer, usuario)
+    except Exception as exc:
+        logger.error(f"Painel: falha ao desfazer gasto ({type(exc).__name__}: {exc})")
+        args = None
+    if not args:
+        c.add("bot", "Não deu para desfazer: o prazo passou ou o gasto já tinha sido alterado.")
+        return _json({"ok": False, "ultimo": c.seq})
+    c.add("bot", f"↩️ Desfeito: R$ {args['valor']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+          + f" · {args.get('descricao') or ''} não ficou registrado.")
+    return _json({"ok": True, "ultimo": c.seq})
+
+
 @router.post("/painel/api/chat/audio")
 async def api_chat_audio(request: Request, audio: UploadFile = File(...), finflow_sessao: str | None = Cookie(default=None)):
     real, c = _checar_chat(request, finflow_sessao)
@@ -777,6 +796,18 @@ _CHAT_CSS = r""".msg{max-width:86%;padding:10px 14px;border-radius:16px;line-hei
 #comp textarea{flex:1;min-height:44px;max-height:120px;border-radius:22px;border:1px solid var(--borda);background:var(--bg);padding:11px 14px;font:inherit;font-size:16px;resize:none;color:var(--ink)}
 #comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#16295A;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}#comp button svg{display:block}
 #comp button.env{background:#2A62F5;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#gst{flex:1;display:none;flex-direction:column;justify-content:center;min-height:44px;padding-left:6px;min-width:0}#gst b{font-size:16px;color:var(--ink)}#gst b:before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:#B42318;margin-right:8px;animation:pisca 1s infinite}#gdica{font-size:12px;color:var(--mut)}@keyframes pisca{50%{opacity:.25}}#comp.gravando textarea,#comp.gravando #anexo,#comp.gravando #env{display:none}#comp.gravando #gst{display:flex}#comp.gravando #gcan{display:flex}#comp button.gr{background:#B42318;color:#fff}
+.gst{align-self:stretch;max-width:100%;display:flex;flex-direction:column;gap:10px}
+.gst .disse{background:var(--card);border:1px solid var(--lin);border-radius:18px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.gst .rot{font-size:11px;color:var(--mut);letter-spacing:.06em;text-transform:uppercase}.gst .disse p{margin:0;font-size:16px;line-height:1.45}
+.gst .ent{background:var(--corr);border:1px solid var(--borda);border-radius:22px;padding:14px;display:flex;flex-direction:column;gap:12px}
+.gst .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}.gst .top span{font-size:13px;color:#C9D6F5}
+.gst .top .val{font-family:"Bricolage Grotesque",Inter,sans-serif;font-weight:800;font-size:28px;letter-spacing:-.03em;color:var(--coral);white-space:nowrap}
+.gst .cps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.gst .cp2{background:var(--card);border-radius:14px;padding:9px 11px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.gst .cp2 span{font-size:12px;color:var(--mut)}.gst .cp2 b{font-size:15px;overflow-wrap:anywhere}.gst .cp2.duv{outline:1.5px solid var(--farol)}.gst .cp2.duv b{color:var(--farol)}
+.gst .ok{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700;color:var(--agua);font-size:14px;background:none}
+.gst .ok button{min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--borda);background:transparent;color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
+.gst .ops{display:flex;gap:8px;flex-wrap:wrap}.gst .ops button{flex:1 1 auto;text-align:center;padding:0 12px}
+#comp #gcan{display:none}#comp.gravando #gcan{display:flex}
 body.chat-on main{padding-bottom:150px}.senha{display:flex;gap:6px}.senha input{flex:1;min-height:44px;border-radius:14px;border:1px solid var(--borda);background:var(--bg);color:var(--ink);padding:0 12px;font:inherit;font-size:16px}
 """
 _CHAT_JS = r"""// ── Chat (mesma lógica do WhatsApp, sem Twilio) ──
@@ -788,15 +819,36 @@ async function cPost(url,opts){const r=await fetch(url,Object.assign({method:'PO
  if(r.status===429){cAviso('Muitas mensagens seguidas. Espere um instante.');return false}
  if(!r.ok){cAviso(r.status===413?'Esse arquivo é grande demais.':'Não consegui enviar agora. Tente de novo.');return false}
  cEnvio=Date.now();cOcupado=true;cPoll(true);return true}
+const cForma={debito:'Débito ou Pix',credito:'Crédito',dinheiro:'Dinheiro'};
+function cCartao(m){const g=m.dados||{},d=document.createElement('div');d.className='gst';d.dataset.id=m.id;
+ const dm=g.data?g.data.slice(8,10)+'/'+g.data.slice(5,7):'Hoje';
+ const conta=g.forma?(cForma[g.forma]||g.forma)+(g.cartao?' · '+g.cartao:'')+(g.parcelas?' · '+g.parcelas+'x':''):'Débito ou crédito?';
+ const cat=g.incerto_categoria?'A classificar':(g.subcategoria||g.categoria);
+ const orc=g.orcamento?'<div class="cp2"><span>Orçamento '+esc(g.categoria)+'</span><b class="'+(g.orcamento.pct>100?'neg':g.orcamento.pct>=80?'':'pos')+'"'+(g.orcamento.pct>=80&&g.orcamento.pct<=100?' style="color:var(--farol)"':'')+'>'+g.orcamento.pct+'% usado</b></div>'
+  :'<div class="cp2"><span>'+(g.fatura?'Fatura':'Data')+'</span><b>'+(g.fatura?esc(g.fatura):dm)+'</b></div>';
+ let pe='';
+ if(g.status==='registrado'){
+  const vivo=g.desfazer&&(Date.now()/1000-m.ts)<170;
+  pe='<div class="ok" role="status"><span>✓ Registrado'+(g.incerto_categoria?'<small style="display:block;font-weight:500;color:var(--farol)">Categoria vai para o Revisar</small>':'')+'</span>'+(vivo?'<button type="button" class="desf">Desfazer</button>':'')+'</div>';
+ }else{pe='<div class="ops"></div>'}
+ d.innerHTML=(g.transcricao?'<div class="disse"><span class="rot">Você disse</span><p>“'+esc(g.transcricao)+'”</p></div>':'')+
+  '<div class="ent"><div class="top"><span>'+(g.status==='registrado'?'O Flow registrou':'Confira antes de registrar')+'</span><span class="val">−'+brl(g.valor)+'</span></div>'+
+  '<div class="cps"><div class="cp2'+(g.incerto_categoria?' duv':'')+'"><span>Categoria</span><b>'+esc(cat)+'</b></div>'+
+  '<div class="cp2'+(g.forma?'':' duv')+'"><span>Conta</span><b>'+esc(conta)+'</b></div>'+
+  '<div class="cp2"><span>Descrição</span><b>'+esc(g.descricao||'')+'</b></div>'+orc+'</div>'+pe+'</div>';
+ if(g.status!=='registrado'&&m.botoes&&m.botoes.length){const o=d.querySelector('.ops');m.botoes.forEach(b=>{const x=document.createElement('button');x.className='op';x.type='button';x.textContent=b.titulo;x.dataset.bid=b.id;x.onclick=()=>cEnviar(b.titulo,b.id);o.appendChild(x)})}
+ const bd=d.querySelector('.desf');if(bd){const tira=setTimeout(()=>bd.remove(),Math.max(0,(170-(Date.now()/1000-m.ts))*1000));
+  bd.onclick=async()=>{bd.disabled=true;clearTimeout(tira);if(await cPost('/painel/api/chat/desfazer',{})){const ok=d.querySelector('.ok span');if(ok){ok.textContent='↩ Desfeito';ok.style.color='var(--mut)'}bd.remove()}else bd.disabled=false}}
+ return d}
 function cRender(ms){const box=document.getElementById('msgs');if(!box)return;
  const perto=(window.innerHeight+window.scrollY)>=document.body.scrollHeight-160;
  box.querySelectorAll('.dig').forEach(x=>x.remove());
- ms.forEach(m=>{cUltimo=Math.max(cUltimo,m.id);const d=document.createElement('div');d.className='msg '+(m.de==='eu'?'eu':'bot');d.dataset.id=m.id;d.innerHTML='<div>'+cFmt(m.texto)+'</div>';
+ ms.forEach(m=>{cUltimo=Math.max(cUltimo,m.id);if(m.tipo==='gasto'&&m.dados){box.appendChild(cCartao(m));return}const d=document.createElement('div');d.className='msg '+(m.de==='eu'?'eu':'bot');d.dataset.id=m.id;d.innerHTML='<div>'+cFmt(m.texto)+'</div>';
   if(m.botoes&&m.botoes.length){const o=document.createElement('div');o.className='ops';m.botoes.forEach(b=>{const x=document.createElement('button');x.className='op';x.type='button';x.textContent=b.titulo;x.dataset.bid=b.id;x.onclick=()=>cEnviar(b.titulo,b.id);o.appendChild(x)});d.appendChild(o)}
   if(m.acao==='senha_pdf'){const f=document.createElement('form');f.className='senha';f.innerHTML='<input type="password" inputmode="numeric" autocomplete="off" placeholder="Senha do PDF" aria-label="Senha do PDF"><button class="op" type="submit">Enviar</button>';
    f.onsubmit=async e=>{e.preventDefault();const s=f.querySelector('input').value;if(!cPdf){cAviso('Anexe o PDF de novo (📎).');return}f.remove();const fd=new FormData();fd.append('arquivo',cPdf);fd.append('senha',s);await cPost('/painel/api/chat/pdf',{body:fd})};d.appendChild(f)}
   box.appendChild(d)});
- const todas=[...box.querySelectorAll('.msg')];todas.forEach((d,i)=>d.querySelectorAll('button[data-bid]').forEach(b=>b.disabled=i!==todas.length-1));
+ const todas=[...box.querySelectorAll('.msg,.gst')];todas.forEach((d,i)=>d.querySelectorAll('button[data-bid]').forEach(b=>b.disabled=i!==todas.length-1));
  if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt('Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio 🎙️. Aqui é o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
  if(cOcupado){const d=document.createElement('div');d.className='dig';d.textContent='digitando…';box.appendChild(d)}
  if(perto||ms.length)window.scrollTo(0,document.body.scrollHeight)}

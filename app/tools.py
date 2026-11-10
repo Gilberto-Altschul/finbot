@@ -572,10 +572,13 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
                 if n_parcelas > 1:
                     plano = parcelas(expense_date, valor, n_parcelas, dia_corte, dia_vencimento)
+                    ids_gravados = []
                     for i, p in enumerate(plano):
                         due = seq[i].vencimento if seq else datetime.strptime(p["fatura_vencimento"], "%Y-%m-%d").date()
                         p["fatura_vencimento"], p["fatura_label"] = due.isoformat(), fatura_label(due)
-                        db.save_expense_credit(user_phone, p["valor"], categoria, descricao, beneficiario, subcategoria, _credito_date(due), p["parcela"], p["total_parcelas"], purchase_date=expense_date, account_id=cartao_id)
+                        _linha = db.save_expense_credit(user_phone, p["valor"], categoria, descricao, beneficiario, subcategoria, _credito_date(due), p["parcela"], p["total_parcelas"], purchase_date=expense_date, account_id=cartao_id)
+                        if isinstance(_linha, dict) and _linha.get("id"):
+                            ids_gravados.append(_linha["id"])
 
                     # Calcula o total da categoria para cada mês afetado pelas parcelas
                     detalhes = []
@@ -595,12 +598,14 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                         "categoria": categoria,
                         "cartao": cartao_nome,
                         "fatura_estimada": seq is None,
-                        "detalhes": detalhes
+                        "detalhes": detalhes,
+                        "ids": ids_gravados
                     }
                 else:
                     due = seq[0].vencimento if seq else fatura_vencimento(expense_date, dia_corte, dia_vencimento)
-                    db.save_expense_credit(user_phone, valor, category=categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, fatura_date=_credito_date(due), purchase_date=expense_date, account_id=cartao_id)
+                    _linha = db.save_expense_credit(user_phone, valor, category=categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, fatura_date=_credito_date(due), purchase_date=expense_date, account_id=cartao_id)
                     return {
+                        "ids": [_linha["id"]] if isinstance(_linha, dict) and _linha.get("id") else [],
                         "registrado": True, 
                         "tipo": "credito", 
                         "valor": valor, 
@@ -618,7 +623,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     }
             else:
                 row = db.save_expense(user_phone, valor, categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, expense_date=expense_date, transaction_type="expense", payment_method=method)
-                return {"registrado": True, "id": row.get("id") if isinstance(row, dict) else None, "valor": valor, "categoria": categoria, "subcategoria": subcategoria, "descricao": descricao, "beneficiario": beneficiario, "data": expense_date.isoformat(), "total_categoria_mes": db.category_total(user_phone, category=categoria), "total_mes": db.monthly_total(user_phone)}
+                return {"registrado": True, "id": row.get("id") if isinstance(row, dict) else None,
+                        "ids": [row["id"]] if isinstance(row, dict) and row.get("id") else [], "valor": valor, "categoria": categoria, "subcategoria": subcategoria, "descricao": descricao, "beneficiario": beneficiario, "data": expense_date.isoformat(), "total_categoria_mes": db.category_total(user_phone, category=categoria), "total_mes": db.monthly_total(user_phone)}
 
         case "consultar_limite":
             mes = date.today().strftime("%Y-%m")

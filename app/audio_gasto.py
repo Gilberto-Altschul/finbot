@@ -264,25 +264,58 @@ def _pergunta_cartao(pend: dict) -> str:
     return f"💳 Em qual cartão foi?\n{lista}\n\nResponda com o número ou o nome (ou *não* para cancelar)."
 
 
+def confiante(pend: dict) -> bool:
+    """Dá para gravar sem perguntar? Quando a pessoa disse a forma de pagamento (ela decide conta x fatura).
+    Categoria incerta NÃO segura o registro: grava como "A classificar" e vai para o Revisar.
+    Cartão de crédito com mais de um cartão ainda pergunta qual (em confirmar_detalhado)."""
+    return bool(pend.get("forma_definida"))
+
+
+def _incerto(args: dict) -> bool:
+    return args.get("categoria") == "Outros" and args.get("subcategoria") == "A classificar"
+
+
+# Último gasto gravado por áudio, por usuário: permite "Desfazer" no painel por alguns minutos.
+JANELA_DESFAZER = 3 * 60
+_ULTIMOS: dict[str, dict] = {}
+
+
+def desfazer(user_phone: str, apagar=None, agora: float | None = None) -> dict | None:
+    """Apaga o último gasto gravado por áudio (dentro da janela). Devolve os args do gasto desfeito, ou None."""
+    u = _ULTIMOS.pop(user_phone, None)
+    if not u or (agora or time.time()) - u["ts"] > JANELA_DESFAZER or not u["ids"]:
+        return None
+    if apagar is None:
+        import app.database as db
+        apagar = db.delete_expenses_of_user
+    return u["args"] if apagar(user_phone, u["ids"]) else None
+
+
 async def confirmar(user_phone: str, acao: str, executar=None, cartoes_fn=None) -> str:
     """Aplica o toque do usuário. Devolve a mensagem de resposta. Só aqui o gasto é gravado."""
+    texto, _res, _args = await confirmar_detalhado(user_phone, acao, executar, cartoes_fn)
+    return texto
+
+
+async def confirmar_detalhado(user_phone: str, acao: str, executar=None, cartoes_fn=None) -> tuple[str, dict | None, dict | None]:
+    """Como confirmar, mas devolve também (resultado de registrar_gasto, args) quando o gasto foi gravado."""
     pend = obter(user_phone)
     if not pend:
-        return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto)."
+        return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto).", None, None
     if acao == "no":
         limpar(user_phone)
-        return "Cancelado. Nada foi registrado."
+        return "Cancelado. Nada foi registrado.", None, None
     args = dict(pend["args"])
     if pend.get("etapa") == "cartao":
         if not acao.startswith("cartao:"):
-            return _pergunta_cartao(pend)          # tocou num botão antigo: repete a pergunta
+            return _pergunta_cartao(pend), None, None          # tocou num botão antigo: repete a pergunta
         escolhido = dbk_escolher(pend["cartoes"], acao.split(":", 1)[1])
         if not escolhido:
-            return _pergunta_cartao(pend)
+            return _pergunta_cartao(pend), None, None
         args["cartao"] = escolhido["id"]
     else:
         if acao.startswith("cartao:"):
-            return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto)."
+            return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto).", None, None
         if acao in _FORMA_DA_ACAO:
             args["payment_method"] = _FORMA_DA_ACAO[acao]
             if args["payment_method"] != "credito":
@@ -300,7 +333,7 @@ async def confirmar(user_phone: str, acao: str, executar=None, cartoes_fn=None) 
             if len(cartoes) > 1:
                 pend.update(args=args, etapa="cartao", ts=time.time(),
                             cartoes=[{"id": c["id"], "nome": c["nome"]} for c in cartoes])
-                return _pergunta_cartao(pend)
+                return _pergunta_cartao(pend), None, None
             if len(cartoes) == 1:
                 args["cartao"] = cartoes[0]["id"]
     if executar is None:
@@ -311,10 +344,17 @@ async def confirmar(user_phone: str, acao: str, executar=None, cartoes_fn=None) 
         res = await executar("registrar_gasto", args, user_phone)
     except Exception as exc:
         logger.error(f"Áudio: falha ao gravar o gasto ({type(exc).__name__}: {exc})")
-        return "⚠️ Não consegui registrar agora. Pode mandar o áudio de novo?"
+        return "⚠️ Não consegui registrar agora. Pode mandar o áudio de novo?", None, None
     if not res.get("registrado"):
-        return f"⚠️ Não consegui registrar: {res.get('erro') or 'erro desconhecido'}."
-    return _resumo_gravado(res, args, res.get("cartao"))
+        return f"⚠️ Não consegui registrar: {res.get('erro') or 'erro desconhecido'}.", None, None
+    _ULTIMOS[user_phone] = {"ids": list(res.get("ids") or []), "args": args, "ts": time.time()}
+    if _incerto(args) and res.get("ids"):
+        try:                         # categoria incerta: entra na fila do Revisar (WhatsApp e painel)
+            import app.database as db
+            db.mark_for_review(user_phone, res["ids"])
+        except Exception as exc:
+            logger.warning(f"Áudio: não consegui mandar para o Revisar ({type(exc).__name__}).")
+    return _resumo_gravado(res, args, res.get("cartao")), res, args
 
 
 def dbk_escolher(cartoes: list[dict], resposta: str) -> dict | None:

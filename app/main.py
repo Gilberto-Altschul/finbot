@@ -272,11 +272,44 @@ def _content_sid_confirma(n_botoes: int) -> str:
     return _CONTENT_SIDS_CONFIRMA[n_botoes]
 
 
+def _orcamento_apos(user_phone: str, categoria: str) -> dict | None:
+    """Quanto do orçamento da categoria já foi usado (com as parcelas previstas, como no Resumo). None sem orçamento."""
+    try:
+        from datetime import date as _date
+        from app import dados_banco as _dbk
+        from app.utils import _normalize as _norm
+        limite = db.get_budget(user_phone, categoria, _date.today().strftime("%Y-%m"))
+        if not limite:
+            return None
+        gasto = db.category_total(user_phone, categoria) + _dbk.previstas_do_mes_por_categoria_norm(user_phone).get(_norm(categoria), 0.0)
+        return {"limite": round(float(limite), 2), "gasto": round(gasto, 2), "pct": round(gasto / float(limite) * 100)}
+    except Exception as exc:
+        logger.warning(f"Orçamento do cartão de gasto indisponível ({type(exc).__name__}).")
+        return None
+
+
+def _cartao_gasto(user_phone: str, pend: dict, status: str, res: dict | None = None, args: dict | None = None) -> dict:
+    """Dados do cartão de gasto do chat do painel ('registrado' ou 'pendente')."""
+    a = args or pend["args"]
+    d = {"status": status, "transcricao": pend.get("transcricao"), "valor": a["valor"], "descricao": a["descricao"],
+         "categoria": a["categoria"], "subcategoria": a.get("subcategoria"), "parcelas": a.get("parcelas"),
+         "data": a.get("data"), "forma": a.get("payment_method") if (status == "registrado" or pend.get("forma_definida")) else None,
+         "incerto_categoria": a.get("categoria") == "Outros" and a.get("subcategoria") == "A classificar"}
+    if res:
+        d.update(cartao=res.get("cartao"), fatura=res.get("fatura_label"))
+        if res.get("tipo") == "parcelado" and res.get("detalhes"):
+            d["fatura"] = res["detalhes"][0].get("fatura_label")
+    if status == "registrado":
+        d["orcamento"] = _orcamento_apos(user_phone, a["categoria"])
+        d["desfazer"] = bool(res and res.get("ids"))
+    return d
+
+
 def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
     """Uma mensagem só: texto + botões. Se os botões falharem, a mesma pergunta sai em texto ('sim'/'não')."""
     linha, botoes = audio_gasto.texto_confirmacao(pend)
     if canal.ativo():
-        canal.emitir(f"🎙️ {linha}", botoes)
+        canal.emitir(f"🎙️ {linha}", botoes, tipo="gasto", dados=_cartao_gasto(to, pend, "pendente"))
         return
     if USAR_BOTOES:
         try:
@@ -296,6 +329,16 @@ async def _processar_audio_bytes(user_phone: str, audio: bytes, content_type: st
     dados = await audio_gasto.extrair(audio, content_type)
     if audio_gasto.eh_gasto(dados):
         pend = await audio_gasto.preparar(user_phone, dados)
+        pend["transcricao"] = dados.get("transcricao")
+        if canal.ativo() and audio_gasto.confiante(pend):
+            # Painel: com certeza (forma dita e categoria conhecida) grava direto e mostra "Desfazer". Sem custo de mensagem.
+            texto, res, args = await audio_gasto.confirmar_detalhado(user_phone, "ok")
+            if res and res.get("registrado"):
+                cartao = await asyncio.to_thread(_cartao_gasto, user_phone, pend, "registrado", res, args)
+                canal.emitir(texto, tipo="gasto", dados=cartao)
+            else:
+                canal.emitir(texto)          # pergunta "qual cartão?" ou erro: segue como texto
+            return
         await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
         return
     # Não é um gasto (pergunta, comando...): segue como se tivesse sido digitado, mostrando o que foi ouvido.

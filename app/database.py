@@ -846,6 +846,22 @@ def obter_transacoes_paginadas(user_phone: str, mes: int, ano: int, categoria: s
 def atualizar_transacao(tx_id: str, updates: dict):
     return get_db().table("finbot_expenses").update(updates).eq("id", tx_id).execute()
 
+def mark_for_review(user_phone: str, ids: list) -> int:
+    """Marca lançamentos do usuário para a fila do Revisar (review_status='revisar')."""
+    ids = [i for i in (ids or []) if i]
+    if not ids:
+        return 0
+    res = get_db().table("finbot_expenses").update({"review_status": "revisar"}).ilike("user_phone", _q(user_phone)).in_("id", ids).execute()
+    return len(res.data or [])
+
+def delete_expenses_of_user(user_phone: str, ids: list) -> int:
+    """Apaga lançamentos pelo id, só se forem do usuário (filtro pelo telefone). Usado pelo "Desfazer" do painel."""
+    ids = [i for i in (ids or []) if i]
+    if not ids:
+        return 0
+    res = get_db().table("finbot_expenses").delete().ilike("user_phone", _q(user_phone)).in_("id", ids).execute()
+    return len(res.data or [])
+
 def excluir_transacao(tx_id: str):
     return get_db().table("finbot_expenses").delete().eq("id", tx_id).execute()
 

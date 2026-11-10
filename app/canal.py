@@ -27,9 +27,12 @@ class Caixa:
         self.trava = asyncio.Lock()                   # uma por vez: a ordem importa (confirmações pendentes)
         self._envios: deque = deque()
 
-    def add(self, de: str, texto: str = "", botoes: list[dict] | None = None, acao: str | None = None, tipo: str = "texto") -> dict:
+    def add(self, de: str, texto: str = "", botoes: list[dict] | None = None, acao: str | None = None, tipo: str = "texto",
+            dados: dict | None = None) -> dict:
         self.seq += 1
         m = {"id": self.seq, "de": de, "tipo": tipo, "texto": texto, "ts": int(time.time())}
+        if dados:
+            m["dados"] = dados
         if botoes:
             m["botoes"] = botoes
         if acao:
@@ -75,12 +78,13 @@ def ativo() -> bool:
     return _ATUAL.get() is not None
 
 
-def emitir(texto: str, botoes: list[tuple[str, str]] | None = None, acao: str | None = None) -> None:
+def emitir(texto: str, botoes: list[tuple[str, str]] | None = None, acao: str | None = None, tipo: str = "texto",
+           dados: dict | None = None) -> None:
     """Resposta do bot para o chat do painel. `botoes` = [(id, título)] — o id é o mesmo payload que o WhatsApp mandaria."""
     c = _ATUAL.get()
     if c is None:
         return
-    c.add("bot", texto, [{"id": i, "titulo": t} for i, t in (botoes or [])], acao)
+    c.add("bot", texto, [{"id": i, "titulo": t} for i, t in (botoes or [])], acao, tipo=tipo, dados=dados)
 
 
 def limpar() -> None:
