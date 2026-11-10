@@ -44,8 +44,12 @@ def _get_or_create_user_connection(user_phone: str) -> dict:
 
 def get_user_settings(user_phone: str) -> dict | None:
     try:
-        result = get_db().table("finbot_user_connections").select("*").ilike("user_phone", _q(user_phone)).limit(1).execute()
-        return result.data[0] if result.data else None
+        result = get_db().table("finbot_user_connections").select("*").ilike("user_phone", _q(user_phone)).limit(50).execute()
+        if not result.data:
+            return None
+        # com linhas duplicadas antigas, prefere a que tem corte e vencimento preenchidos
+        def _peso(r): return (r.get("cartao_dia_corte") is not None) + (r.get("cartao_dia_vencimento") is not None)
+        return max(result.data, key=_peso)
     except Exception as exc:
         logger.error(f"Erro ao buscar configurações de {user_phone}: {exc}")
         return None
@@ -607,6 +611,13 @@ def save_user_merchant_mapping(user_phone: str, merchant: str, category: str, su
     except Exception as e:
         logger.error(f"Erro ao salvar mapeamento do estabelecimento: {e}")
 
+def _atualizar_conexao(user_phone: str, campos: dict) -> None:
+    """Atualiza a(s) linha(s) do usuário em finbot_user_connections pelo prefixo estável. Nunca usa upsert por user_phone:
+    o telefone criptografado muda a cada gravação e o upsert criaria uma linha nova a cada chamada. Atualiza TODAS as
+    linhas do prefixo (inclusive duplicatas antigas) para que qualquer leitura devolva o mesmo estado."""
+    _get_or_create_user_connection(user_phone)
+    get_db().table("finbot_user_connections").update(campos).ilike("user_phone", _q(user_phone)).execute()
+
 def obter_pdf_pendente(user_phone: str) -> tuple[str, str] | None:
     """Busca se o usuário possui algum PDF pendente de processamento na tabela de conexões, retornando a URL e o status."""
     try:
@@ -626,24 +637,14 @@ def obter_pdf_pendente(user_phone: str) -> tuple[str, str] | None:
 def salvar_pdf_aguardando_senha(user_phone: str, media_url: str, status: str = "aguardando_senha") -> None:
     """Registra que o usuário enviou um PDF que precisa de processamento ou senha."""
     try:
-        row = {
-            "user_phone": _s(user_phone),
-            "pending_pdf_url": media_url,
-            "status": status
-        }
-        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+        _atualizar_conexao(user_phone, {"pending_pdf_url": media_url, "status": status})
     except Exception as e:
         logger.error(f"Erro em salvar_pdf_aguardando_senha: {e}")
 
 def limpar_pdf_pendente(user_phone: str) -> None:
     """Limpa o estado de processamento de PDF do usuário após a conclusão ou erro."""
     try:
-        row = {
-            "user_phone": _s(user_phone),
-            "pending_pdf_url": None,
-            "status": "ativo"
-        }
-        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+        _atualizar_conexao(user_phone, {"pending_pdf_url": None, "status": "ativo"})
     except Exception as e:
         logger.error(f"Erro em limpar_pdf_pendente: {e}")
 
@@ -768,13 +769,7 @@ def get_pluggy_conta_padrao(user_phone: str) -> dict | None:
 def save_pluggy_conta_padrao(user_phone: str, account_id: str, item_id: str) -> None:
     """Salva a conta escolhida pelo usuário (via 'listar contas' + 'selecionar_conta') como padrão."""
     try:
-        _get_or_create_user_connection(user_phone)
-        row = {
-            "user_phone": _s(user_phone),
-            "pluggy_account_id": account_id,
-            "pluggy_item_id": item_id,
-        }
-        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+        _atualizar_conexao(user_phone, {"pluggy_account_id": account_id, "pluggy_item_id": item_id})
     except Exception as e:
         logger.error(f"Erro ao salvar conta padrão Pluggy de {user_phone}: {e}")
         raise e
@@ -884,11 +879,6 @@ def obter_transacoes_pendentes(user_phone: str, timeout_minutos: int = 10) -> st
 def limpar_transacoes_pendentes(user_phone: str) -> None:
     """Limpa o estado de categorização pendente após confirmação ou cancelamento."""
     try:
-        row = {
-            "user_phone": _s(user_phone),
-            "pending_transactions": None,
-            "status": "ativo"
-        }
-        get_db().table("finbot_user_connections").upsert(row, on_conflict="user_phone").execute()
+        _atualizar_conexao(user_phone, {"pending_transactions": None, "status": "ativo"})
     except Exception as e:
         logger.error(f"Erro em limpar_transacoes_pendentes: {e}")

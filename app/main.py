@@ -550,7 +550,7 @@ async def webhook(
     # ── CASO 2.3: RESPOSTA DIGITADA À CONFIRMAÇÃO DE ÁUDIO ("sim", "não", "crédito"...) ──
     # Só vale se há confirmação pendente E a mensagem é exatamente uma dessas palavras; o resto segue o fluxo normal.
     if audio_gasto.tem_pendente(user_phone):
-        acao = audio_gasto.interpretar_texto(user_message)
+        acao = audio_gasto.interpretar_texto(user_message, audio_gasto.obter(user_phone))
         if acao:
             resposta = await audio_gasto.confirmar(user_phone, acao)
             await asyncio.to_thread(_send_whatsapp, user_phone, resposta)

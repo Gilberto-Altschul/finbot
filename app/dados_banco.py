@@ -25,7 +25,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-10a · gasto por áudio com confirmação em um toque"
+VERSAO = "2026-11-10b · cartão real no crédito, sem linhas duplicadas"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -106,6 +106,35 @@ def _cartoes_com_ciclos(user_phone: str, account_id: str | None = None):
         ciclos = [ci for ci, _ in ler_faturas(user_phone, c["id"])]
         if ciclos:
             yield c, ciclos
+
+
+def cartoes_credito(user_phone: str) -> list[dict]:
+    """Cartões de crédito COM faturas guardadas: [{id, nome, ciclos}] (os sem ciclos ficam de fora)."""
+    try:
+        return [{"id": c["id"], "nome": c.get("nome") or "Cartão", "ciclos": ciclos}
+                for c, ciclos in _cartoes_com_ciclos(user_phone)]
+    except Exception as e:
+        logger.warning(f"cartoes_credito falhou: {e}")
+        return []
+
+
+def escolher_cartao(cartoes: list[dict], escolha: str | None) -> dict | None:
+    """Acha o cartão pelo id, pelo número da lista (1, 2...) ou por parte do nome. None = não achou/ambíguo."""
+    e = _norm_nome(escolha)
+    if not e:
+        return None
+    for c in cartoes:
+        if c["id"] == escolha:
+            return c
+    if e.isdigit() and 1 <= int(e) <= len(cartoes):
+        return cartoes[int(e) - 1]
+    achados = [c for c in cartoes if e in _norm_nome(c["nome"]) or _norm_nome(c["nome"]) in e]
+    return achados[0] if len(achados) == 1 else None
+
+
+def _norm_nome(t: str | None) -> str:
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFD", str(t or "")) if unicodedata.category(ch) != "Mn").lower().strip()
 
 
 def vencimento_do_mes(user_phone: str, ano: int, mes: int, account_id: str | None = None) -> date | None:

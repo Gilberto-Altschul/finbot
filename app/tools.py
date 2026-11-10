@@ -19,6 +19,7 @@ from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS, categoria_valida
 from app.categorizer import categorizar_gasto_hibrido, so_intermediario
 from app.pluggy_service import PluggyService
 from app import dados_banco as dbk
+from app import faturas as fat
 from app import titular
 from app.merchant import BENEFICIARIOS, beneficiario_de_texto, rotulo_beneficiario
 from app import parcelas as parcelas_proj
@@ -80,7 +81,8 @@ SCHEMAS: list[dict] = [
                 "beneficiario": {"type": "string"},
                 "data": {"type": "string"},
                 "payment_method": {"type": "string", "enum": ["debito", "credito", "dinheiro"]},
-                "parcelas": {"type": "integer"}
+                "parcelas": {"type": "integer"},
+                "cartao": {"type": "string", "description": "No crédito: nome do cartão (ex.: Itaú, C6) quando o usuário tem mais de um. Se faltar, a ferramenta devolve a lista para perguntar."}
             },
             "required": ["valor", "categoria", "descricao"]
         }
@@ -549,10 +551,23 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                 dia_corte, dia_vencimento = db.get_card_settings(user_phone)
                 _credito_date = lambda due: date(due.year, due.month, 1)
 
+                # Fatura pelo ciclo REAL do cartão (fechamento/vencimento guardados). Sem ciclos -> regra antiga (dia de corte global).
+                cartoes = dbk.cartoes_credito(user_phone)
+                ciclos, cartao_nome = None, None
+                if cartoes:
+                    escolha = args.get("cartao") or args.get("cartao_id")
+                    cartao = dbk.escolher_cartao(cartoes, escolha) if escolha else (cartoes[0] if len(cartoes) == 1 else None)
+                    if cartao is None:
+                        lista = "; ".join(f"{i}) {c['nome']}" for i, c in enumerate(cartoes, 1))
+                        return {"erro": f"Em qual cartão foi? {lista}. Me diga o nome do cartão."}
+                    ciclos, cartao_nome = cartao["ciclos"], cartao["nome"]
+                seq = fat.ciclos_da_compra(expense_date, ciclos, n_parcelas) if ciclos else None
+
                 if n_parcelas > 1:
                     plano = parcelas(expense_date, valor, n_parcelas, dia_corte, dia_vencimento)
-                    for p in plano:
-                        due = datetime.strptime(p["fatura_vencimento"], "%Y-%m-%d").date()
+                    for i, p in enumerate(plano):
+                        due = seq[i].vencimento if seq else datetime.strptime(p["fatura_vencimento"], "%Y-%m-%d").date()
+                        p["fatura_vencimento"], p["fatura_label"] = due.isoformat(), fatura_label(due)
                         db.save_expense_credit(user_phone, p["valor"], categoria, descricao, beneficiario, subcategoria, _credito_date(due), p["parcela"], p["total_parcelas"], purchase_date=expense_date)
 
                     # Calcula o total da categoria para cada mês afetado pelas parcelas
@@ -571,10 +586,12 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                         "descricao": descricao,
                         "valor": valor,
                         "categoria": categoria,
+                        "cartao": cartao_nome,
+                        "fatura_estimada": seq is None,
                         "detalhes": detalhes
                     }
                 else:
-                    due = fatura_vencimento(expense_date, dia_corte, dia_vencimento)
+                    due = seq[0].vencimento if seq else fatura_vencimento(expense_date, dia_corte, dia_vencimento)
                     db.save_expense_credit(user_phone, valor, category=categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, fatura_date=_credito_date(due), purchase_date=expense_date)
                     return {
                         "registrado": True, 
@@ -585,6 +602,8 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                         "descricao": descricao, 
                         "beneficiario": beneficiario, 
                         "data": expense_date.isoformat(), 
+                        "cartao": cartao_nome,
+                        "fatura_estimada": seq is None,
                         "fatura_vencimento": due.isoformat(), 
                         "fatura_label": fatura_label(due), 
                         "total_fatura": db.fatura_total(user_phone, due.isoformat(), dia_corte),

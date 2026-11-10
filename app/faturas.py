@@ -186,6 +186,20 @@ def ciclo_da_compra(d: date, ciclos: list[Ciclo], hoje: date | None = None) -> t
     return c, hoje > c.fechamento
 
 
+def ciclos_da_compra(d: date, ciclos: list[Ciclo], n: int = 1, hoje: date | None = None) -> list[Ciclo] | None:
+    """Faturas das `n` parcelas de uma compra feita em `d`: a 1ª é a do ciclo da compra e cada seguinte é o ciclo
+    seguinte (o que o banco já informou, ou estimado pelo dia típico). Sem ciclos conhecidos -> None."""
+    ini = ciclo_da_compra(d, ciclos, hoje)
+    if not ini:
+        return None
+    saida, dia = [ini[0]], _dia_venc_tipico(ciclos)
+    while len(saida) < max(1, n):
+        ant = saida[-1]
+        prox = next((c for c in ciclos if c.vencimento > ant.vencimento), None) or proximo_ciclo(ant, dia)
+        saida.append(prox)
+    return saida
+
+
 def ciclo_da_transacao(d: date, bill_id: str | None, pendente: bool, ciclos: list[Ciclo],
                        hoje: date | None = None) -> tuple[Ciclo, bool] | None:
     """

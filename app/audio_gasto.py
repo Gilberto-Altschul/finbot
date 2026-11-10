@@ -223,9 +223,19 @@ _TEXTO_PARA_ACAO = {
 }
 
 
-def interpretar_texto(texto: str) -> str | None:
-    """Resposta digitada à confirmação ('sim', 'não', 'crédito'...) -> ação; qualquer outra coisa -> None."""
-    return _TEXTO_PARA_ACAO.get(_sem_acento(texto))
+def interpretar_texto(texto: str, pend: dict | None = None) -> str | None:
+    """Resposta digitada à confirmação ('sim', 'não', 'crédito'...) -> ação; qualquer outra coisa -> None.
+    Com a pergunta 'qual cartão?' no ar, o número da lista ('2') ou o nome do cartão ('c6') viram 'cartao:<resposta>'."""
+    t = _sem_acento(texto)
+    if pend and pend.get("etapa") == "cartao":
+        if t in ("nao", "n", "cancelar", "cancela"):
+            return "no"
+        if t.isdigit() and 1 <= int(t) <= len(pend["cartoes"]):
+            return f"cartao:{t}"
+        if any(t and (t in _sem_acento(c["nome"]) or _sem_acento(c["nome"]) in t) for c in pend["cartoes"]):
+            return f"cartao:{t}"
+        return None
+    return _TEXTO_PARA_ACAO.get(t)
 
 
 def acao_do_botao(payload: str) -> str | None:
@@ -235,19 +245,26 @@ def acao_do_botao(payload: str) -> str | None:
 _FORMA_DA_ACAO = {"d": "debito", "c": "credito", "m": "dinheiro"}
 
 
-def _resumo_gravado(res: dict, args: dict) -> str:
+def _resumo_gravado(res: dict, args: dict, cartao: str | None = None) -> str:
     cat = args["categoria"] + (f" › {args['subcategoria']}" if args.get("subcategoria") else "")
     linha = f"✅ Registrado: R$ {_fmt(args['valor'])} · {args['descricao']} · {cat}"
     if res.get("tipo") == "parcelado":
         linha += f" · {args.get('parcelas')}x"
     elif res.get("fatura_label"):
-        linha += f" · fatura {res['fatura_label']}"
+        linha += f" · {cartao + ' · ' if cartao else ''}fatura {res['fatura_label']}"
+        if res.get("fatura_estimada"):
+            linha += " (estimada)"
     if args.get("categoria") == "Outros" and args.get("subcategoria") == "A classificar":
         linha += "\n🔎 Ficou em *A classificar*: digite *revisar* quando quiser escolher a categoria."
     return linha
 
 
-async def confirmar(user_phone: str, acao: str, executar=None) -> str:
+def _pergunta_cartao(pend: dict) -> str:
+    lista = "\n".join(f"{i}) {c['nome']}" for i, c in enumerate(pend["cartoes"], 1))
+    return f"💳 Em qual cartão foi?\n{lista}\n\nResponda com o número ou o nome (ou *não* para cancelar)."
+
+
+async def confirmar(user_phone: str, acao: str, executar=None, cartoes_fn=None) -> str:
     """Aplica o toque do usuário. Devolve a mensagem de resposta. Só aqui o gasto é gravado."""
     pend = obter(user_phone)
     if not pend:
@@ -256,10 +273,36 @@ async def confirmar(user_phone: str, acao: str, executar=None) -> str:
         limpar(user_phone)
         return "Cancelado. Nada foi registrado."
     args = dict(pend["args"])
-    if acao in _FORMA_DA_ACAO:
-        args["payment_method"] = _FORMA_DA_ACAO[acao]
-        if args["payment_method"] != "credito":
-            args.pop("parcelas", None)
+    if pend.get("etapa") == "cartao":
+        if not acao.startswith("cartao:"):
+            return _pergunta_cartao(pend)          # tocou num botão antigo: repete a pergunta
+        escolhido = dbk_escolher(pend["cartoes"], acao.split(":", 1)[1])
+        if not escolhido:
+            return _pergunta_cartao(pend)
+        args["cartao"] = escolhido["id"]
+    else:
+        if acao.startswith("cartao:"):
+            return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto)."
+        if acao in _FORMA_DA_ACAO:
+            args["payment_method"] = _FORMA_DA_ACAO[acao]
+            if args["payment_method"] != "credito":
+                args.pop("parcelas", None)
+        if args["payment_method"] == "credito":
+            # com mais de um cartão, a fatura depende de QUAL cartão: pergunta antes de gravar
+            if cartoes_fn is None:
+                from app import dados_banco
+                cartoes_fn = dados_banco.cartoes_credito
+            try:
+                cartoes = cartoes_fn(user_phone)
+            except Exception as exc:
+                logger.warning(f"Áudio: não consegui listar cartões ({type(exc).__name__}); segue sem escolher.")
+                cartoes = []
+            if len(cartoes) > 1:
+                pend.update(args=args, etapa="cartao", ts=time.time(),
+                            cartoes=[{"id": c["id"], "nome": c["nome"]} for c in cartoes])
+                return _pergunta_cartao(pend)
+            if len(cartoes) == 1:
+                args["cartao"] = cartoes[0]["id"]
     if executar is None:
         from app import tools
         executar = tools.execute
@@ -271,4 +314,9 @@ async def confirmar(user_phone: str, acao: str, executar=None) -> str:
         return "⚠️ Não consegui registrar agora. Pode mandar o áudio de novo?"
     if not res.get("registrado"):
         return f"⚠️ Não consegui registrar: {res.get('erro') or 'erro desconhecido'}."
-    return _resumo_gravado(res, args)
+    return _resumo_gravado(res, args, res.get("cartao"))
+
+
+def dbk_escolher(cartoes: list[dict], resposta: str) -> dict | None:
+    from app import dados_banco
+    return dados_banco.escolher_cartao(cartoes, resposta)
