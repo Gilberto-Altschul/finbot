@@ -675,8 +675,8 @@ _CHAT_CSS = r""".msg{max-width:86%;padding:10px 14px;border-radius:16px;line-hei
 #comp{position:fixed;left:0;right:0;bottom:72px;background:#fff;border-top:1px solid #DCE2DE;padding:8px;display:flex;gap:6px;align-items:flex-end}
 #comp .in{max-width:640px;margin:0 auto;width:100%;display:flex;gap:6px;align-items:flex-end}
 #comp textarea{flex:1;min-height:44px;max-height:120px;border-radius:22px;border:1.5px solid #8A9A93;padding:11px 14px;font:inherit;font-size:16px;resize:none;color:var(--ink)}
-#comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#E3ECE8;color:#0E6B57;font-size:20px;cursor:pointer}
-#comp button.env{background:#0E6B57;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#comp button.gr{background:#B42318;color:#fff}
+#comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#E3ECE8;color:#0E6B57;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}#comp button svg{display:block}
+#comp button.env{background:#0E6B57;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#gst{flex:1;display:none;flex-direction:column;justify-content:center;min-height:44px;padding-left:6px;min-width:0}#gst b{font-size:16px;color:var(--ink)}#gst b:before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:#B42318;margin-right:8px;animation:pisca 1s infinite}#gdica{font-size:12px;color:var(--mut)}@keyframes pisca{50%{opacity:.25}}#comp.gravando textarea,#comp.gravando #anexo,#comp.gravando #env{display:none}#comp.gravando #gst{display:flex}#comp.gravando #gcan{display:flex}#comp button.gr{background:#B42318;color:#fff}
 body.chat-on main{padding-bottom:150px}.senha{display:flex;gap:6px}.senha input{flex:1;min-height:44px;border-radius:12px;border:1.5px solid #8A9A93;padding:0 12px;font:inherit;font-size:16px}
 """
 _CHAT_JS = r"""// ── Chat (mesma lógica do WhatsApp, sem Twilio) ──
@@ -710,20 +710,35 @@ function cWav(bufs,taxa){let n=0;bufs.forEach(b=>n+=b.length);const all=new Floa
  const buf=new ArrayBuffer(44+len*2),dv=new DataView(buf),w=(p,t)=>{for(let i=0;i<t.length;i++)dv.setUint8(p+i,t.charCodeAt(i))};
  w(0,'RIFF');dv.setUint32(4,36+len*2,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);dv.setUint32(24,alvo,true);dv.setUint32(28,alvo*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,len*2,true);
  for(let i=0;i<len;i++)dv.setInt16(44+i*2,pcm[i],true);return new Blob([buf],{type:'audio/wav'})}
-function cMic(gravando){const b=document.getElementById('mic');if(!b)return;b.classList.toggle('gr',gravando);b.textContent=gravando?'■':'🎙️';b.setAttribute('aria-label',gravando?'Parar e enviar o áudio':'Gravar áudio')}
-async function cParar(enviar){if(!rec)return;const r=rec;rec=null;clearTimeout(r.timer);try{r.proc.disconnect();r.src.disconnect()}catch(e){}r.stream.getTracks().forEach(t=>t.stop());const taxa=r.ctx.sampleRate;try{r.ctx.close()}catch(e){}cMic(false);
- if(!enviar||Date.now()-r.t0<700)return;const fd=new FormData();fd.append('audio',cWav(r.bufs,taxa),'audio.wav');await cPost('/painel/api/chat/audio',{body:fd})}
+const IC_MIC='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+IC_STOP='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>',
+IC_CLIPE='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7L10 18a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></svg>',
+IC_X='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+function cMic(g){const b=document.getElementById('mic'),c=document.getElementById('comp');if(!b||!c)return;c.classList.toggle('gravando',g);b.classList.toggle('gr',g);b.innerHTML=g?IC_STOP:IC_MIC;b.setAttribute('aria-label',g?'Parar e enviar o áudio':'Gravar áudio')}
+function cRelogio(){if(!rec)return;const s=Math.floor((Date.now()-rec.t0)/1000),e=document.getElementById('gt'),h=document.getElementById('gdica');if(e)e.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');if(h)h.textContent=rec.falou?'Para sozinho quando você parar de falar':'Fale o gasto: "gastei 45 no mercado"'}
+async function cParar(enviar,motivo){if(!rec)return;const r=rec;rec=null;clearTimeout(r.timer);clearInterval(r.rel);try{r.proc.disconnect();r.src.disconnect()}catch(e){}r.stream.getTracks().forEach(t=>t.stop());const taxa=r.ctx.sampleRate;try{r.ctx.close()}catch(e){}cMic(false);
+ if(!enviar){if(motivo)cAviso(motivo);return}
+ if(Date.now()-r.t0<800||r.pico<0.006){cAviso('Não ouvi nada. Toque no microfone e fale o gasto.');return}
+ const fd=new FormData();fd.append('audio',cWav(r.bufs,taxa),'audio.wav');await cPost('/painel/api/chat/audio',{body:fd})}
 async function cGravar(){if(rec)return cParar(true);
- try{const stream=await navigator.mediaDevices.getUserMedia({audio:true}),AC=window.AudioContext||window.webkitAudioContext,ctx=new AC(),src=ctx.createMediaStreamSource(stream),proc=ctx.createScriptProcessor(4096,1,1),bufs=[];
-  proc.onaudioprocess=e=>bufs.push(new Float32Array(e.inputBuffer.getChannelData(0)));src.connect(proc);proc.connect(ctx.destination);
-  rec={stream,ctx,src,proc,bufs,t0:Date.now(),timer:setTimeout(()=>cParar(true),80000)};cMic(true);cAviso('Gravando… toque em ■ para enviar (até 80 s).')}
+ try{const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}),AC=window.AudioContext||window.webkitAudioContext,ctx=new AC(),src=ctx.createMediaStreamSource(stream),proc=ctx.createScriptProcessor(4096,1,1),bufs=[];
+  const r={stream,ctx,src,proc,bufs,t0:Date.now(),falou:false,pico:0,ruido:9,mudo:0};
+  // Para sozinho: depois que a pessoa falou, 1,5 s de silêncio encerra e envia. Limiar = acima do ruído de fundo medido nos primeiros 0,5 s.
+  proc.onaudioprocess=e=>{const x=new Float32Array(e.inputBuffer.getChannelData(0));bufs.push(x);if(rec!==r)return;let q=0;for(let i=0;i<x.length;i++)q+=x[i]*x[i];const v=Math.sqrt(q/x.length),agora=Date.now();r.pico=Math.max(r.pico,v);
+   if(agora-r.t0<500){r.ruido=Math.min(r.ruido,v);return}
+   const lim=Math.min(0.05,Math.max(0.015,r.ruido*2.5));
+   if(v>lim){r.falou=true;r.mudo=0}
+   else if(r.falou){if(!r.mudo)r.mudo=agora;else if(agora-r.mudo>1500)setTimeout(()=>cParar(true),0)}
+   else if(agora-r.t0>8000)setTimeout(()=>cParar(false,'Não ouvi nada. Toque no microfone e fale o gasto.'),0)};
+  src.connect(proc);proc.connect(ctx.destination);
+  r.timer=setTimeout(()=>cParar(true),80000);r.rel=setInterval(cRelogio,250);rec=r;cMic(true);cRelogio()}
  catch(e){cAviso('Não consegui usar o microfone. Permita o acesso no navegador ou digite o gasto.')}}
 function cMontar(){if(document.getElementById('comp'))return;const c=document.createElement('div');c.id='comp';
- c.innerHTML='<div class="in"><button type="button" id="anexo" aria-label="Anexar PDF do extrato">📎</button><textarea id="txt" rows="1" maxlength="1000" placeholder="Escreva aqui…" aria-label="Mensagem"></textarea><button type="button" id="mic" aria-label="Gravar áudio">🎙️</button><button type="button" class="env" id="env">Enviar</button></div><input type="file" id="arq" accept="application/pdf" hidden>';
+ c.innerHTML='<div class="in"><button type="button" id="anexo" aria-label="Anexar PDF do extrato">'+IC_CLIPE+'</button><textarea id="txt" rows="1" maxlength="1000" placeholder="Escreva aqui…" aria-label="Mensagem"></textarea><div id="gst" hidden><b id="gt">0:00</b><span id="gdica"></span></div><button type="button" id="gcan" hidden aria-label="Cancelar gravação">'+IC_X+'</button><button type="button" id="mic" aria-label="Gravar áudio">'+IC_MIC+'</button><button type="button" class="env" id="env">Enviar</button></div><input type="file" id="arq" accept="application/pdf" hidden>';
  document.body.appendChild(c);const t=document.getElementById('txt');
  const enviar=()=>{const v=t.value;t.value='';t.style.height='auto';cEnviar(v)};
  document.getElementById('env').onclick=enviar;t.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();enviar()}};t.oninput=()=>{t.style.height='auto';t.style.height=Math.min(120,t.scrollHeight)+'px'};
- document.getElementById('mic').onclick=cGravar;document.getElementById('anexo').onclick=()=>document.getElementById('arq').click();
+ document.getElementById('mic').onclick=cGravar;document.getElementById('gcan').onclick=()=>cParar(false);document.getElementById('anexo').onclick=()=>document.getElementById('arq').click();
  document.getElementById('arq').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;if(f.size>10*1024*1024){cAviso('PDF grande demais (máximo 10 MB).');return}cPdf=f;const fd=new FormData();fd.append('arquivo',f);fd.append('senha','');await cPost('/painel/api/chat/pdf',{body:fd})}}
 function cSair(){cAtivo=false;clearTimeout(cTimer);cParar(false);document.body.classList.remove('chat-on');const c=document.getElementById('comp');if(c)c.remove()}
 vistas.chat=async function(){ti.textContent='Chat';sub.innerHTML='';el.className='';el.innerHTML='<div id="msgs"></div>';document.body.classList.add('chat-on');cMontar();cAtivo=true;cUltimo=0;cOcupado=false;await cPoll(true)};
