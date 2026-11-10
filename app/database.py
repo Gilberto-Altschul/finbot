@@ -272,6 +272,25 @@ def monthly_by_category(user_phone: str, mes_ref: str | None = None, dia_inicio:
         logger.error(f"Erro agrupamento categorias: {exc}")
         return []
 
+def expenses_of_category_month(user_phone: str, category: str, mes_ref: str | None = None) -> list[dict]:
+    """Gastos do mês de UMA categoria (mesma regra do monthly_by_category: movement=expense, por billing_date,
+    categoria comparada já normalizada para juntar variações de acento/caixa). Usado no detalhe do painel."""
+    try:
+        ref = datetime.strptime(mes_ref, "%Y-%m").date() if mes_ref else date.today()
+        start = ref.replace(day=1).isoformat()
+        end = ref.replace(day=monthrange(ref.year, ref.month)[1]).isoformat()
+        res = get_db().table("finbot_expenses") \
+            .select("id, category, subcategory, description, amount, purchase_date, billing_date, payment_method, installment_of, installment_total, review_status") \
+            .ilike("user_phone", _q(user_phone)) \
+            .eq("movement", "expense") \
+            .gte("billing_date", start) \
+            .lte("billing_date", end).execute()
+        alvo = _normalize(category or "Outros")
+        return [r for r in (res.data or []) if _normalize((r.get("category") or "Outros").strip()) == alvo]
+    except Exception as exc:
+        logger.error(f"Erro ao buscar gastos da categoria {category}: {exc}")
+        return []
+
 def fatura_total(user_phone: str, fatura_date_iso: str, dia_corte: int) -> float:
     try:
         tgt = datetime.strptime(fatura_date_iso[:10], "%Y-%m-%d").date()

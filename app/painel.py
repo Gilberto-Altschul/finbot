@@ -208,6 +208,53 @@ def dados_resumo(user_phone: str, hoje: date | None = None) -> dict:
             "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats}
 
 
+def dados_categoria(user_phone: str, categoria: str, hoje: date | None = None) -> dict:
+    """Detalhe de UMA categoria no mês: subcategorias (do maior para o menor) e os lançamentos de cada uma.
+    Os totais batem com o Resumo: lançamentos do mês + parcelas previstas que o banco ainda não postou."""
+    hoje = hoje or date.today()
+    mes = hoje.strftime("%Y-%m")
+    alvo = _normalize(categoria)
+    linhas = db.expenses_of_category_month(user_phone, categoria, mes)
+    previstas = 0.0
+    try:
+        from app import dados_banco as dbk
+        _t, _n, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+        previstas = round(sum(v for c, v in prev_cat.items() if _normalize(c) == alvo), 2)
+    except Exception:
+        pass
+    grupos: dict[str, dict] = {}
+    for r in linhas:
+        sub = (r.get("subcategory") or "").strip() or "Sem subcategoria"
+        g = grupos.setdefault(_normalize(sub), {"nome": sub, "total": 0.0, "itens": []})
+        valor = round(float(r.get("amount") or 0), 2)
+        g["total"] += valor
+        parcela = (f"{r['installment_of']}/{r['installment_total']}"
+                   if r.get("installment_of") and r.get("installment_total") else None)
+        g["itens"].append({"descricao": (r.get("description") or "Sem descrição").strip(), "valor": valor,
+                           "data": (r.get("purchase_date") or r.get("billing_date") or "")[:10],
+                           "forma": (r.get("payment_method") or "").lower(), "parcela": parcela,
+                           "revisar": r.get("review_status") == "revisar"})
+    subs = sorted(grupos.values(), key=lambda g: -g["total"])
+    for g in subs:
+        g["total"] = round(g["total"], 2)
+        g["n"] = len(g["itens"])
+        g["itens"].sort(key=lambda i: (i["data"], i["valor"]), reverse=True)
+    total = round(sum(g["total"] for g in subs) + previstas, 2)
+    orc = next((float(b["amount"]) for b in db.get_all_budgets(user_phone, mes) if _normalize(b["category"]) == alvo), None)
+    pct = round(total / orc * 100) if orc else None
+    status = None if pct is None else ("estourado" if pct > 100 else ("atencao" if pct >= 80 else "saudavel"))
+    nome = next((r["category"].strip() for r in linhas if r.get("category")), categoria)
+    # Mês anterior (só o que foi lançado; parcelas previstas não existem mais para um mês fechado)
+    ini_ant = date(hoje.year - (hoje.month == 1), 12 if hoje.month == 1 else hoje.month - 1, 1)
+    anterior = round(sum(float(r.get("amount") or 0) for r in
+                         db.expenses_of_category_month(user_phone, categoria, ini_ant.strftime("%Y-%m"))), 2)
+    return {"mes": mes, "categoria": nome, "total": total, "orcamento": orc, "pct": pct, "status": status,
+            "previstas": previstas, "lancamentos": len(linhas), "subcategorias": subs,
+            "a_revisar": sum(1 for r in linhas if r.get("review_status") == "revisar"),
+            "mes_anterior": ini_ant.strftime("%Y-%m"), "anterior": anterior,
+            "dif": round(total - anterior, 2) if anterior else None}
+
+
 def _usuario(sessao: str | None) -> tuple[str, str]:
     """(telefone real, telefone dos dados). 401 sem sessão válida."""
     real = telefone_da_sessao(sessao)
@@ -266,6 +313,15 @@ def pagina(finflow_sessao: str | None = Cookie(default=None)):
 def api_resumo(finflow_sessao: str | None = Cookie(default=None)):
     _real, usuario = _usuario(finflow_sessao)
     return _json(dados_resumo(usuario))
+
+
+@router.get("/painel/api/categoria")
+def api_categoria(nome: str = "", finflow_sessao: str | None = Cookie(default=None)):
+    _real, usuario = _usuario(finflow_sessao)
+    nome = (nome or "").strip()[:80]
+    if not nome:
+        raise HTTPException(status_code=400, detail="categoria não informada")
+    return _json(dados_categoria(usuario, nome))
 
 
 @router.get("/painel/api/fluxo")
@@ -556,6 +612,21 @@ button.op:disabled{opacity:.5}select{min-height:44px;border-radius:14px;border:1
 .rev,.cx{display:flex;flex-direction:column;gap:10px}.feito{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--agua);font-size:14px}.ops{display:flex;flex-wrap:wrap;gap:8px}
 svg text{font:11px Inter,system-ui,sans-serif;fill:#9AABD3}
 pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:0}
+button.cat{width:100%;border:0;border-bottom:1px solid var(--lin);background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:0}
+button.cat:last-child{border-bottom:0}button.cat:active{background:#132550}button.cat .seta{color:var(--mut);margin-left:6px}
+button.cat:focus-visible,.voltar:focus-visible{outline:2px solid var(--vt);outline-offset:2px;border-radius:10px}
+.voltar{align-self:flex-start;border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;padding:0;cursor:pointer}
+.sub{padding:12px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:6px}.sub:last-child{border:0}
+.it{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 0;border-bottom:1px solid var(--lin)}.it:last-child{border:0}
+.it .n{display:flex;flex-direction:column;gap:2px;min-width:0}.it .n span{font-size:15px;overflow-wrap:anywhere}.it b{white-space:nowrap}
+details.gr{border-bottom:1px solid var(--lin)}details.gr:last-child{border:0}
+details.gr>summary{list-style:none;min-height:52px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+details.gr>summary::-webkit-details-marker{display:none}details.gr>summary .q{display:flex;align-items:center;gap:8px}
+details.gr>summary .q:after{content:"";width:8px;height:8px;border-right:2px solid var(--mut);border-bottom:2px solid var(--mut);transform:rotate(45deg);margin:-4px 2px 0}
+details.gr[open]>summary .q:after{transform:rotate(-135deg);margin-top:4px}details.gr .it:last-child{border:0}
+.avisorev{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#3A2A12;border:1px solid #5A4220;color:#FFE1BD;border-radius:18px;padding:12px 14px;font-size:14px}
+.avisorev button{min-height:44px;padding:0 14px;border-radius:12px;border:0;background:var(--farol);color:#2A1A05;font:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
+.compara{font-size:13px;font-weight:600}
 nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--lin);display:flex;gap:4px;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;border-radius:16px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
 nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
@@ -573,9 +644,10 @@ const vistas={
   sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
   el.className='';el.innerHTML='<div class="hero"><div class="lin"><span class="r">Receitas</span><b>'+brl(d.receitas)+'</b></div>'+
   '<div class="lin"><span class="r">Gastos</span><b>'+brl(d.gastos)+'</b></div><div class="lin"><span class="r">Saldo do mês</span><span class="saldo">'+brl(d.saldo)+'</span></div></div>'+
-  '<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<div class="cat"><div class="lin"><b>'+esc(c.nome)+'</b>'+
-  (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'</div>'+
-  (c.orcamento?'<div class="barra"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></div>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>'},
+  '<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
+  (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
+  (c.orcamento?'<div class="barra"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>';
+  el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
   if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
   const dm=i=>i.slice(8,10)+'/'+i.slice(5,7);const sem=i=>['dom','seg','ter','qua','qui','sex','sáb'][new Date(i+'T12:00:00').getDay()];
@@ -650,7 +722,33 @@ const vistas={
    if(b.classList.contains('ok2')){const c=card.querySelector('.sc').value,s=card.querySelector('.ss').value;if(!c||!s){alert('Escolha a categoria e a subcategoria.');return}confirmar(card,c,s)}
    else confirmar(card,b.dataset.c,b.dataset.s)}}
 };
-async function ir(a){document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
+const MESES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+async function abrirCategoria(nome,semHistorico){
+ if(!semHistorico)history.pushState({cat:nome},'','#'+encodeURIComponent(nome));
+ window.scrollTo(0,0);ti.textContent=nome;sub.innerHTML='<button type="button" class="voltar" id="voltar">← Resumo</button>';
+ document.getElementById('voltar').onclick=()=>history.back();
+ el.className='mut';el.textContent='Carregando…';
+ try{const d=await api('categoria?nome='+encodeURIComponent(nome));el.className='';ti.textContent=d.categoria;
+  const forma={credito:'Crédito',debito:'Débito',pix:'Pix',boleto:'Boleto'};
+  const dm=i=>i?i.slice(8,10)+'/'+i.slice(5,7):'';
+  const topo='<div class="hero"><div class="lin"><span class="r">Gasto no mês</span><span class="saldo">'+brl(d.total)+'</span></div>'+
+   (d.orcamento?'<div class="lin"><span class="r">Orçamento</span><b>'+brl(d.orcamento)+'</b></div><div class="barra"><i style="width:'+Math.min(d.pct,100)+'%"></i></div>'+
+    '<div class="lin"><span class="r">'+(d.total>d.orcamento?'Passou '+brl(d.total-d.orcamento):'Sobram '+brl(d.orcamento-d.total))+'</span><span class="pill '+d.status+'">'+d.pct+'%</span></div>':'')+
+   (d.dif!==null&&d.dif!==undefined?'<span class="compara '+(d.dif>0?'neg':'pos')+'">'+(d.dif>0?'↑ ':'↓ ')+brl(Math.abs(d.dif))+' '+(d.dif>0?'a mais':'a menos')+' que em '+MESES[Number(d.mes_anterior.slice(5))-1]+'</span>':
+    (d.mes_anterior?'<span class="r" style="font-size:13px">Sem gastos nesta categoria em '+MESES[Number(d.mes_anterior.slice(5))-1]+'</span>':''))+
+   '<span class="r" style="font-size:13px">'+d.lancamentos+(d.lancamentos===1?' lançamento':' lançamentos')+(d.previstas?' · inclui '+brl(d.previstas)+' em parcelas previstas':'')+'</span></div>'+
+   (d.a_revisar?'<div class="avisorev" role="status"><span>'+d.a_revisar+(d.a_revisar===1?' lançamento aguardando':' lançamentos aguardando')+' revisão</span><button type="button" id="irrev">Revisar</button></div>':'');
+  if(!d.subcategorias.length&&!d.previstas){el.innerHTML=topo+'<div class="card"><p class="mut">Nenhum gasto nesta categoria neste mês.</p></div>';return}
+  const base=d.total||1;
+  const subs='<div class="card"><h2>Por subcategoria</h2>'+d.subcategorias.map(s=>'<div class="sub"><div class="lin"><b>'+esc(s.nome)+'</b><b>'+brl(s.total)+'</b></div>'+
+   '<div class="barra"><i style="width:'+(s.total/base*100).toFixed(1)+'%"></i></div><div class="mut" style="font-size:13px">'+Math.round(s.total/base*100)+'% da categoria · '+s.n+(s.n===1?' lançamento':' lançamentos')+'</div></div>').join('')+
+   (d.previstas?'<div class="sub"><div class="lin"><b>Parcelas previstas</b><b>'+brl(d.previstas)+'</b></div><div class="mut" style="font-size:13px">Ainda não lançadas pelo banco</div></div>':'')+'</div>';
+  const lista='<div class="card"><h2>Lançamentos</h2>'+d.subcategorias.map((s,k)=>'<details class="gr"'+(k===0?' open':'')+'><summary><span>'+esc(s.nome)+' · '+s.n+'</span><span class="q">'+brl(s.total)+'</span></summary>'+
+   s.itens.map(i=>'<div class="it"><div class="n"><span>'+esc(i.descricao)+'</span><span class="tipo">'+[dm(i.data),forma[i.forma]||'',i.parcela?'parcela '+i.parcela:'',i.revisar?'aguardando revisão':''].filter(Boolean).join(' · ')+'</span></div><b>'+brl(i.valor)+'</b></div>').join('')+'</details>').join('')+'</div>';
+  el.innerHTML=topo+subs+lista;const bR=document.getElementById('irrev');if(bR)bR.onclick=()=>ir('revisar')}
+ catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
+window.addEventListener('popstate',e=>{if(e.state&&e.state.cat)abrirCategoria(e.state.cat,true);else ir('resumo')});
+async function ir(a){if(location.hash)history.replaceState(null,'',location.pathname);document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
  el.className='mut';el.textContent='Carregando…';try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>ir(b.dataset.a));
 document.getElementById('sair').onclick=async()=>{await fetch('/painel/sair',{method:'POST',credentials:'same-origin'});location.href='/painel/saiu'};
