@@ -512,9 +512,13 @@ _PAGINA_OFFLINE = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"ut
     "<button onclick=\"location.reload()\">Tentar de novo</button></main></body></html>")
 _PAGINA_ENTRAR = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Abrir o seu painel</h1>"
-    "<p>Toque no botão para entrar. O link abre uma única vez.</p>"
+    "<p id=\"msg\">Abrindo o painel… Se não abrir sozinho, toque no botão. O link abre uma única vez.</p>"
     "<form method=\"post\" action=\"/painel/entrar\"><input type=\"hidden\" name=\"c\" value=\"__CODIGO__\">"
-    "<button type=\"submit\" style=\"width:100%\">Abrir meu painel</button></form></main></body></html>")
+    "<button type=\"submit\" style=\"width:100%\">Abrir meu painel</button></form></main>"
+    # Entra sozinho quando um NAVEGADOR de verdade abre a página (sem toque extra). Pré-visualizadores e verificadores de link só leem o
+    # HTML (não rodam script, ou se identificam como automação), então não gastam o link de uso único; o botão continua como alternativa.
+    "<script>if(!navigator.webdriver){setTimeout(function(){var f=document.forms[0];if(f&&!window.__enviado){window.__enviado=1;f.submit()}},250)}</script>"
+    "</body></html>")
 
 _PAGINA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>FinFlow</title>
