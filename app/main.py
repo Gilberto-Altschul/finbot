@@ -25,6 +25,7 @@ import app.titular as titular
 import app.seguranca as seguranca
 import app.demo as demo_mod
 import app.painel as painel
+import app.audio_gasto as audio_gasto
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -216,6 +217,85 @@ async def _process(user_phone: str, user_message: str) -> None:
     await asyncio.to_thread(_send_whatsapp, user_phone, reply)
 
 
+# ── Áudio: confirmação em um toque (quick-reply) ─────────────────────────────
+_CONTENT_SIDS_CONFIRMA: dict[int, str] = {}
+
+
+def _content_sid_confirma(n_botoes: int) -> str:
+    """Template de quick-reply só com o texto (sem o 'digite outra categoria' da revisão). Criado uma vez e reaproveitado."""
+    if n_botoes in _CONTENT_SIDS_CONFIRMA:
+        return _CONTENT_SIDS_CONFIRMA[n_botoes]
+    nome = f"finbot_confirma_{n_botoes}"
+    auth = (settings.twilio_account_sid, settings.twilio_auth_token)
+    lista = requests.get("https://content.twilio.com/v1/Content", auth=auth, params={"PageSize": 200}, timeout=20)
+    lista.raise_for_status()
+    for c in lista.json().get("contents", []):
+        if c.get("friendly_name") == nome:
+            _CONTENT_SIDS_CONFIRMA[n_botoes] = c["sid"]
+            return c["sid"]
+    corpo = {
+        "friendly_name": nome, "language": "pt_BR",
+        "variables": {str(i): "x" for i in range(1, 2 + 2 * n_botoes)},
+        "types": {"twilio/quick-reply": {
+            "body": "🎙️ {{1}}",
+            "actions": [{"title": "{{%d}}" % (2 + 2 * i), "id": "{{%d}}" % (3 + 2 * i)} for i in range(n_botoes)],
+        }},
+    }
+    r = requests.post("https://content.twilio.com/v1/Content", auth=auth, json=corpo, timeout=20)
+    r.raise_for_status()
+    _CONTENT_SIDS_CONFIRMA[n_botoes] = r.json()["sid"]
+    return _CONTENT_SIDS_CONFIRMA[n_botoes]
+
+
+def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
+    """Uma mensagem só: texto + botões. Se os botões falharem, a mesma pergunta sai em texto ('sim'/'não')."""
+    linha, botoes = audio_gasto.texto_confirmacao(pend)
+    if USAR_BOTOES:
+        try:
+            variaveis = {"1": linha.replace("\n", " ")}
+            for i, (bid, titulo) in enumerate(botoes):
+                variaveis[str(2 + 2 * i)], variaveis[str(3 + 2 * i)] = titulo, bid
+            _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(to),
+                                    content_sid=_content_sid_confirma(len(botoes)), content_variables=json.dumps(variaveis))
+            return
+        except Exception as exc:
+            logger.warning(f"Botões de confirmação indisponíveis ({exc}); enviando em texto.")
+    _send_whatsapp(to, audio_gasto.texto_confirmacao_sem_botoes(pend))
+
+
+async def async_process_audio(user_phone: str, media_url: str, content_type: str | None) -> None:
+    """Baixa o áudio, transcreve e: gasto -> pede confirmação; outra coisa -> segue para o agente como texto."""
+    try:
+        if not seguranca.midia_twilio_ok(media_url):
+            logger.error("Áudio ignorado: o endereço da mídia não é da Twilio.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Não consegui abrir esse áudio. Mande de novo ou digite o gasto.")
+            return
+        auth_string = f"{settings.twilio_account_sid}:{settings.twilio_auth_token}"
+        headers = {"Authorization": f"Basic {base64.b64encode(auth_string.encode()).decode()}"}
+        resp = await http_client.get(media_url, headers=headers)
+        resp.raise_for_status()
+        audio = resp.content
+        if len(audio) > audio_gasto.MAX_BYTES:
+            await asyncio.to_thread(_send_whatsapp, user_phone, "🎙️ Esse áudio ficou longo demais. Mande um de até 1 minuto ou digite o gasto.")
+            return
+        logger.info(f"Áudio de {user_phone}: {len(audio)} bytes.")
+        dados = await audio_gasto.extrair(audio, content_type or resp.headers.get("Content-Type"))
+        del audio   # nada do áudio é guardado
+        if audio_gasto.eh_gasto(dados):
+            pend = await audio_gasto.preparar(user_phone, dados)
+            await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
+            return
+        # Não é um gasto (pergunta, comando...): segue como se tivesse sido digitado, mostrando o que foi ouvido.
+        reply = await agent.run(user_phone, dados["transcricao"])
+        await asyncio.to_thread(_send_whatsapp, user_phone, f"🎙️ _{dados['transcricao']}_\n\n{reply}")
+    except audio_gasto.AudioIlegivel as exc:
+        logger.warning(f"Áudio não entendido para {user_phone}: {exc}")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🎙️ Não consegui entender esse áudio. Pode repetir ou digitar o gasto?")
+    except Exception as exc:
+        logger.error(f"Erro ao processar áudio de {user_phone}: {exc}", exc_info=True)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Tive um problema com esse áudio. Pode digitar o gasto?")
+
+
 async def async_process_pdf_extract(user_phone: str, media_url: str, senha_fornecida: str = None):
     pediu_senha = False      # só nesse caso o estado "aguardando senha" deve sobreviver ao fim do processamento
     try:
@@ -370,7 +450,7 @@ async def webhook(
     background_tasks: BackgroundTasks,
     x_twilio_signature: str = Header(default=""),
     From: str = Form(...),
-    Body: str = Form(...),
+    Body: str = Form(""),   # áudio/imagem sem legenda chegam com Body vazio; "Form(...)" recusaria (422) em vez de responder
     MessageSid: str = Form(...),
     NumMedia: int = Form(0),
     MediaUrl0: str = Form(None),
@@ -418,6 +498,20 @@ async def webhook(
         await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao iniciar sua sessão. Por favor, tente novamente.")
         return Response(content="<Response/>", media_type="text/xml")
 
+    # ── CASO 0.9: TOQUE NOS BOTÕES DA CONFIRMAÇÃO DE ÁUDIO ("g:ok", "g:no", "g:d", "g:c") ──
+    if ButtonPayload and ButtonPayload.startswith("g:"):
+        acao = audio_gasto.acao_do_botao(ButtonPayload)
+        if acao:
+            resposta = await audio_gasto.confirmar(user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
+            return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 0.95: ÁUDIO — transcreve e pede confirmação (ou segue como pergunta) ──
+    if NumMedia > 0 and MediaUrl0 and str(MediaContentType0).lower().startswith("audio/"):
+        logger.info(f"Áudio recebido de {user_phone}.")
+        background_tasks.add_task(async_process_audio, user_phone, MediaUrl0, MediaContentType0)
+        return Response(content="<Response/>", media_type="text/xml")
+
     # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
     if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
         logger.info(f"PDF recebido de {user_phone}.")
@@ -425,6 +519,11 @@ async def webhook(
         db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="processando")
         await asyncio.to_thread(_send_whatsapp, user_phone, "🏦 *Extrato recebido!* Verificando o arquivo...")
         background_tasks.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
+        return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 1.5: OUTRA MÍDIA SEM TEXTO (imagem, figurinha, vídeo) — avisa em vez de ficar mudo ──
+    if NumMedia > 0 and MediaUrl0 and not user_message:
+        await asyncio.to_thread(_send_whatsapp, user_phone, "Por enquanto eu entendo *texto*, *áudio* e *PDF* do extrato. 🙂 Conte o gasto por áudio ou digite.")
         return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 2: SENHA DE PDF PENDENTE (prioridade alta) ─────────────────────
@@ -446,6 +545,15 @@ async def webhook(
             else:
                 logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
                 background_tasks.add_task(_process, user_phone, user_message)
+            return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 2.3: RESPOSTA DIGITADA À CONFIRMAÇÃO DE ÁUDIO ("sim", "não", "crédito"...) ──
+    # Só vale se há confirmação pendente E a mensagem é exatamente uma dessas palavras; o resto segue o fluxo normal.
+    if audio_gasto.tem_pendente(user_phone):
+        acao = audio_gasto.interpretar_texto(user_message)
+        if acao:
+            resposta = await audio_gasto.confirmar(user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
             return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 2.4: COMANDO "meu nome é ..." — cadastra o nome do titular (Pix entre contas próprias) ──
