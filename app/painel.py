@@ -9,19 +9,23 @@ Todas as rotas de dados exigem a sessão e usam o mesmo telefone do WhatsApp (ou
 """
 from __future__ import annotations
 
+import asyncio
 import html
+import json
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import date
 
-from fastapi import APIRouter, Cookie, Form, HTTPException, Request
+from fastapi import APIRouter, Cookie, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
 
 import app.database as db
 import app.demo as demo
+import app.canal as canal
 from app.utils import _normalize
 
 logger = logging.getLogger(__name__)
@@ -104,7 +108,56 @@ def criar_sessao(telefone: str) -> str:
     return sid
 
 
+# Sessão PERSISTENTE (padrão 30 dias): o cookie leva o telefone cifrado e assinado (Fernet com chave derivada da chave do app), então
+# sobrevive a reinício do Railway e o painel instalado não pede link novo todo dia. Desligar/encurtar: FINFLOW_SESSAO_DIAS=0 (volta às
+# sessões de 12 h em memória). "Sair" invalida o cookie na hora (lista em memória) e o apaga do navegador.
+_PREFIXO_PERSISTENTE = "p1."
+_REVOGADAS: set[str] = set()
+
+
+def dias_sessao() -> int:
+    try:
+        return max(0, min(90, int(os.environ.get("FINFLOW_SESSAO_DIAS", "30"))))
+    except ValueError:
+        return 30
+
+
+def _cifra_sessao():
+    """Fernet exclusivo das sessões do painel (derivado da chave do app, para o token não servir em outro lugar). None sem chave."""
+    try:
+        import base64, hashlib
+        from cryptography.fernet import Fernet
+        from app.config import get_settings
+        chave = str(get_settings().encryption_key or "")
+        if not chave:
+            return None
+        return Fernet(base64.urlsafe_b64encode(hashlib.sha256(b"finflow-sessao|" + chave.encode()).digest()))
+    except Exception:
+        return None
+
+
+def validade_cookie() -> int:
+    return dias_sessao() * 86400 if (dias_sessao() > 0 and _cifra_sessao()) else VALIDADE_SESSAO
+
+
+def criar_cookie_sessao(telefone: str) -> str:
+    """Valor do cookie ao abrir o link: persistente se possível, senão a sessão de 12 h em memória."""
+    cifra = _cifra_sessao()
+    if dias_sessao() > 0 and cifra:
+        return _PREFIXO_PERSISTENTE + cifra.encrypt(telefone.encode()).decode().rstrip("=")      # sem "=": o cookie não precisa de aspas
+    return criar_sessao(telefone)
+
+
 def telefone_da_sessao(sid: str | None) -> str | None:
+    if sid and sid.startswith(_PREFIXO_PERSISTENTE):
+        cifra = _cifra_sessao()
+        if not cifra or dias_sessao() <= 0 or sid in _REVOGADAS:
+            return None
+        try:
+            corpo = sid[len(_PREFIXO_PERSISTENTE):]
+            return cifra.decrypt((corpo + "=" * (-len(corpo) % 4)).encode(), ttl=dias_sessao() * 86400).decode()
+        except Exception:
+            return None
     item = _SESSOES.get(sid or "")
     if not item:
         return None
@@ -193,7 +246,7 @@ def entrar_confirmar(c: str = Form(default="")):
         return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
     logger.info("Painel: sessão aberta.")
     resp = RedirectResponse("/painel", status_code=303)
-    resp.set_cookie(COOKIE, criar_sessao(telefone), max_age=VALIDADE_SESSAO, httponly=True, samesite="lax",
+    resp.set_cookie(COOKIE, criar_cookie_sessao(telefone), max_age=validade_cookie(), httponly=True, samesite="lax",
                     secure=base_url().startswith("https://"), path="/")
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -272,9 +325,171 @@ def saiu():
 @router.post("/painel/sair")
 def sair(request: Request, finflow_sessao: str | None = Cookie(default=None)):
     _SESSOES.pop(finflow_sessao or "", None)
+    if finflow_sessao and finflow_sessao.startswith(_PREFIXO_PERSISTENTE):
+        _REVOGADAS.add(finflow_sessao)
     resp = JSONResponse({"status": "ok"})
     resp.delete_cookie(COOKIE, path="/")
     return resp
+
+
+# ── Chat no painel ───────────────────────────────────────────────────────────
+# Mesma lógica do WhatsApp (comandos, gastos, perguntas, áudio, PDF), mas a resposta vai para a TELA e não para a Twilio.
+# A lógica em si mora em main.py (registrar_chat); aqui ficam sessão, limites e a caixa de mensagens (app.canal).
+_CHAT: dict = {}
+_TAREFAS: set = set()
+MAX_TEXTO = 1000
+MAX_AUDIO = 3 * 1024 * 1024
+MAX_PDF = 10 * 1024 * 1024
+_PAYLOAD_OK = re.compile(r"^[rg]:[A-Za-z0-9:_\-]{1,60}$")
+
+
+def registrar_chat(**fns) -> None:
+    _CHAT.update(fns)
+
+
+def _origem_ok(request: Request) -> bool:
+    """Defesa extra além do SameSite: se o navegador informa a origem, ela tem que ser a do painel."""
+    origem = request.headers.get("origin")
+    return not origem or origem.rstrip("/") == base_url()
+
+
+def _disparar(real: str, fn, *args) -> None:
+    c = canal.caixa(real)
+    c.ocupado += 1
+
+    async def _rodar():
+        try:
+            await fn(*args)
+        finally:
+            c.ocupado -= 1
+    t = asyncio.get_running_loop().create_task(_rodar())
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
+
+
+def _checar_chat(request: Request, sessao: str | None) -> tuple[str, canal.Caixa]:
+    if not ligado():
+        raise HTTPException(status_code=503, detail="painel indisponível")
+    real, _dados = _usuario(sessao)
+    if not _CHAT:
+        raise HTTPException(status_code=503, detail="chat indisponível")
+    if request.method == "POST":
+        if not _origem_ok(request):
+            raise HTTPException(status_code=403, detail="origem não permitida")
+        c = canal.caixa(real)
+        if not c.pode_enviar():
+            raise HTTPException(status_code=429, detail="muitas mensagens; espere um instante")
+    return real, canal.caixa(real)
+
+
+class _Mensagem(BaseModel):
+    texto: str = ""
+    payload: str | None = None
+
+
+@router.get("/painel/api/chat/mensagens")
+def api_chat_mensagens(request: Request, depois: int = 0, finflow_sessao: str | None = Cookie(default=None)):
+    _real, c = _checar_chat(request, finflow_sessao)
+    return _json({"mensagens": c.depois_de(max(0, depois)), "ocupado": c.ocupado > 0, "ultimo": c.seq})
+
+
+@router.post("/painel/api/chat/enviar")
+async def api_chat_enviar(corpo: _Mensagem, request: Request, finflow_sessao: str | None = Cookie(default=None)):
+    real, c = _checar_chat(request, finflow_sessao)
+    texto = (corpo.texto or "").strip()
+    payload = (corpo.payload or "").strip() or None
+    if len(texto) > MAX_TEXTO:
+        raise HTTPException(status_code=413, detail="mensagem muito longa")
+    if payload and not _PAYLOAD_OK.match(payload):
+        raise HTTPException(status_code=400, detail="botão inválido")
+    if not texto and not payload:
+        raise HTTPException(status_code=400, detail="mensagem vazia")
+    if texto:
+        c.add("eu", texto)
+    _disparar(real, _CHAT["texto"], real, texto, payload)
+    return _json({"status": "ok", "ultimo": c.seq})
+
+
+@router.post("/painel/api/chat/audio")
+async def api_chat_audio(request: Request, audio: UploadFile = File(...), finflow_sessao: str | None = Cookie(default=None)):
+    real, c = _checar_chat(request, finflow_sessao)
+    tipo = (audio.content_type or "").lower()
+    if not tipo.startswith("audio/"):
+        raise HTTPException(status_code=415, detail="envie um áudio")
+    dados = await audio.read(MAX_AUDIO + 1)
+    if len(dados) > MAX_AUDIO:
+        raise HTTPException(status_code=413, detail="áudio longo demais")
+    if not dados:
+        raise HTTPException(status_code=400, detail="áudio vazio")
+    c.add("eu", "🎙️ Áudio", tipo="audio")
+    _disparar(real, _CHAT["audio"], real, dados, tipo)
+    return _json({"status": "ok", "ultimo": c.seq})
+
+
+@router.post("/painel/api/chat/pdf")
+async def api_chat_pdf(request: Request, arquivo: UploadFile = File(...), senha: str = Form(default=""),
+                       finflow_sessao: str | None = Cookie(default=None)):
+    real, c = _checar_chat(request, finflow_sessao)
+    dados = await arquivo.read(MAX_PDF + 1)
+    if len(dados) > MAX_PDF:
+        raise HTTPException(status_code=413, detail="PDF grande demais (máximo 10 MB)")
+    if not dados.startswith(b"%PDF"):
+        raise HTTPException(status_code=415, detail="envie um PDF")
+    nome = (arquivo.filename or "extrato.pdf")[:60]
+    c.add("eu", f"📎 {nome}", tipo="pdf")
+    _disparar(real, _CHAT["pdf"], real, dados, (senha or "")[:40] or None)
+    return _json({"status": "ok", "ultimo": c.seq})
+
+
+# ── PWA: instalar o painel na tela inicial ──────────────────────────────────
+# Tudo aqui é PÚBLICO e sem dado do usuário (manifesto, ícones, página offline). O service worker NÃO guarda páginas nem respostas
+# da API (são privadas): ele só mostra uma tela "sem conexão" quando a rede cai ao abrir o painel.
+PWA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "painel_pwa")
+_ICONES = {"icone-192.png": "image/png", "icone-512.png": "image/png", "icone-maskable-512.png": "image/png",
+           "apple-touch-icon.png": "image/png"}
+
+
+@router.get("/painel/manifest.webmanifest")
+def manifesto():
+    dados = {"id": "/painel", "name": "FinFlow", "short_name": "FinFlow", "description": "Suas finanças do WhatsApp em tela.",
+             "lang": "pt-BR", "start_url": "/painel", "scope": "/painel", "display": "standalone",
+             "background_color": "#F3F5F2", "theme_color": "#0E6B57",
+             "icons": [{"src": "/painel/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                       {"src": "/painel/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                       {"src": "/painel/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
+    return Response(json.dumps(dados, ensure_ascii=False), media_type="application/manifest+json",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/painel/{arquivo}.png")
+def icone(arquivo: str):
+    nome = f"{arquivo}.png"
+    if nome not in _ICONES:
+        raise HTTPException(status_code=404)
+    return FileResponse(os.path.join(PWA_DIR, nome), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+_SW = """// FinFlow: só mostra a tela "sem conexão" quando a rede cai ao ABRIR o painel. Nada privado fica guardado aqui.
+const V = 'finflow-pwa-v1', OFFLINE = '/painel/offline';
+self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll([OFFLINE, '/painel/icone-192.png'])).then(() => self.skipWaiting())); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('fetch', e => {
+  if (e.request.method === 'GET' && e.request.mode === 'navigate') {
+    e.respondWith(fetch(e.request).catch(() => caches.match(OFFLINE)));
+  }
+});
+"""
+
+
+@router.get("/painel/sw.js")
+def service_worker():
+    return Response(_SW, media_type="text/javascript",
+                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/painel"})
+
+
+@router.get("/painel/offline", response_class=HTMLResponse)
+def offline():
+    return HTMLResponse(_PAGINA_OFFLINE, headers={"Cache-Control": "no-cache"})
 
 
 # ── páginas ──────────────────────────────────────────────────────────────────
@@ -291,6 +506,10 @@ _PAGINA_SEM_SESSAO = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\
 _PAGINA_SAIU = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Você saiu do painel</h1>"
     "<p>Seus dados continuam guardados. Para entrar de novo, mande <b>painel</b> no WhatsApp e abra o link novo.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:12px;background:#0E6B57;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
+_PAGINA_OFFLINE = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Sem conexão</h1>"
+    "<p>Não consegui abrir o painel agora. Confira a internet e tente de novo.</p>"
+    "<button onclick=\"location.reload()\">Tentar de novo</button></main></body></html>")
 _PAGINA_ENTRAR = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Abrir o seu painel</h1>"
     "<p>Toque no botão para entrar. O link abre uma única vez.</p>"
@@ -431,3 +650,81 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>ir(b.dataset.a)
 document.getElementById('sair').onclick=async()=>{await fetch('/painel/sair',{method:'POST',credentials:'same-origin'});location.href='/painel/saiu'};
 ir('resumo');
 </script></body></html>"""
+
+
+# Cabeçalho PWA (manifesto, cor da barra, ícone do iPhone) em todas as páginas do painel + registro do service worker na principal.
+_PWA_HEAD = ('<meta name="robots" content="noindex"><meta name="theme-color" content="#0E6B57">'
+             '<link rel="manifest" href="/painel/manifest.webmanifest"><link rel="apple-touch-icon" href="/painel/apple-touch-icon.png">'
+             '<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
+             '<meta name="apple-mobile-web-app-title" content="FinFlow"><meta name="apple-mobile-web-app-status-bar-style" content="default">')
+_SW_REGISTRO = "if('serviceWorker' in navigator){navigator.serviceWorker.register('/painel/sw.js',{scope:'/painel'}).catch(function(){})}"
+for _n in ("_PAGINA", "_PAGINA_ENTRAR", "_PAGINA_SEM_SESSAO", "_PAGINA_EXPIRADA", "_PAGINA_SAIU", "_PAGINA_OFFLINE"):
+    globals()[_n] = globals()[_n].replace('<meta name="robots" content="noindex">', _PWA_HEAD, 1)
+_PAGINA = _PAGINA.replace("</script></body></html>", _SW_REGISTRO + "</script></body></html>")
+
+
+# ── Aba Chat (CSS + JS em strings cruas para não escapar barras) ──
+_CHAT_CSS = r""".msg{max-width:86%;padding:10px 14px;border-radius:16px;line-height:1.45;font-size:15px;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:8px}
+.msg.eu{align-self:flex-end;background:#0E6B57;color:#fff;border-bottom-right-radius:4px}.msg.bot{align-self:flex-start;background:#fff;border-bottom-left-radius:4px}
+.msg a{color:inherit;text-decoration:underline}#msgs{display:flex;flex-direction:column;gap:10px}
+.dig{align-self:flex-start;color:var(--mut);font-size:14px;padding:4px 8px}
+#comp{position:fixed;left:0;right:0;bottom:72px;background:#fff;border-top:1px solid #DCE2DE;padding:8px;display:flex;gap:6px;align-items:flex-end}
+#comp .in{max-width:640px;margin:0 auto;width:100%;display:flex;gap:6px;align-items:flex-end}
+#comp textarea{flex:1;min-height:44px;max-height:120px;border-radius:22px;border:1.5px solid #8A9A93;padding:11px 14px;font:inherit;font-size:16px;resize:none;color:var(--ink)}
+#comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#E3ECE8;color:#0E6B57;font-size:20px;cursor:pointer}
+#comp button.env{background:#0E6B57;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#comp button.gr{background:#B42318;color:#fff}
+body.chat-on main{padding-bottom:150px}.senha{display:flex;gap:6px}.senha input{flex:1;min-height:44px;border-radius:12px;border:1.5px solid #8A9A93;padding:0 12px;font:inherit;font-size:16px}
+"""
+_CHAT_JS = r"""// ── Chat (mesma lógica do WhatsApp, sem Twilio) ──
+let cAtivo=false,cUltimo=0,cOcupado=false,cTimer=null,cEnvio=0,cPdf=null,rec=null;
+const cFmt=t=>esc(t).replace(/\*([^*\n]+)\*/g,'<b>$1</b>').replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?])/g,'$1<i>$2</i>').replace(/(https:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>').replace(/\n/g,'<br>');
+function cAviso(t){const m=document.getElementById('msgs');if(!m)return;const d=document.createElement('div');d.className='dig';d.textContent=t;m.appendChild(d);setTimeout(()=>d.remove(),6000)}
+async function cPost(url,opts){const r=await fetch(url,Object.assign({method:'POST',credentials:'same-origin'},opts));
+ if(r.status===401){location.href='/painel';throw 0}
+ if(r.status===429){cAviso('Muitas mensagens seguidas. Espere um instante.');return false}
+ if(!r.ok){cAviso(r.status===413?'Esse arquivo é grande demais.':'Não consegui enviar agora. Tente de novo.');return false}
+ cEnvio=Date.now();cOcupado=true;cPoll(true);return true}
+function cRender(ms){const box=document.getElementById('msgs');if(!box)return;
+ const perto=(window.innerHeight+window.scrollY)>=document.body.scrollHeight-160;
+ box.querySelectorAll('.dig').forEach(x=>x.remove());
+ ms.forEach(m=>{cUltimo=Math.max(cUltimo,m.id);const d=document.createElement('div');d.className='msg '+(m.de==='eu'?'eu':'bot');d.dataset.id=m.id;d.innerHTML='<div>'+cFmt(m.texto)+'</div>';
+  if(m.botoes&&m.botoes.length){const o=document.createElement('div');o.className='ops';m.botoes.forEach(b=>{const x=document.createElement('button');x.className='op';x.type='button';x.textContent=b.titulo;x.dataset.bid=b.id;x.onclick=()=>cEnviar(b.titulo,b.id);o.appendChild(x)});d.appendChild(o)}
+  if(m.acao==='senha_pdf'){const f=document.createElement('form');f.className='senha';f.innerHTML='<input type="password" inputmode="numeric" autocomplete="off" placeholder="Senha do PDF" aria-label="Senha do PDF"><button class="op" type="submit">Enviar</button>';
+   f.onsubmit=async e=>{e.preventDefault();const s=f.querySelector('input').value;if(!cPdf){cAviso('Anexe o PDF de novo (📎).');return}f.remove();const fd=new FormData();fd.append('arquivo',cPdf);fd.append('senha',s);await cPost('/painel/api/chat/pdf',{body:fd})};d.appendChild(f)}
+  box.appendChild(d)});
+ const todas=[...box.querySelectorAll('.msg')];todas.forEach((d,i)=>d.querySelectorAll('button[data-bid]').forEach(b=>b.disabled=i!==todas.length-1));
+ if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt('Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio 🎙️. Aqui é o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
+ if(cOcupado){const d=document.createElement('div');d.className='dig';d.textContent='digitando…';box.appendChild(d)}
+ if(perto||ms.length)window.scrollTo(0,document.body.scrollHeight)}
+async function cPoll(rapido){if(!cAtivo)return;clearTimeout(cTimer);
+ try{const d=await api('chat/mensagens?depois='+cUltimo);cOcupado=d.ocupado;cRender(d.mensagens)}catch(e){if(e===0)return}
+ cTimer=setTimeout(()=>cPoll(),(cOcupado||Date.now()-cEnvio<20000)?1000:5000)}
+async function cEnviar(texto,payload){texto=(texto||'').trim();if(!texto&&!payload)return;await cPost('/painel/api/chat/enviar',{headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:texto,payload:payload||null})})}
+function cWav(bufs,taxa){let n=0;bufs.forEach(b=>n+=b.length);const all=new Float32Array(n);let o=0;bufs.forEach(b=>{all.set(b,o);o+=b.length});
+ const alvo=16000,r=taxa/alvo,len=Math.floor(n/r),pcm=new Int16Array(len);
+ for(let i=0;i<len;i++){const a=Math.floor(i*r),z=Math.min(n,Math.floor((i+1)*r));let s=0,c=0;for(let j=a;j<z;j++){s+=all[j];c++}const v=Math.max(-1,Math.min(1,c?s/c:0));pcm[i]=v<0?v*32768:v*32767}
+ const buf=new ArrayBuffer(44+len*2),dv=new DataView(buf),w=(p,t)=>{for(let i=0;i<t.length;i++)dv.setUint8(p+i,t.charCodeAt(i))};
+ w(0,'RIFF');dv.setUint32(4,36+len*2,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);dv.setUint32(24,alvo,true);dv.setUint32(28,alvo*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,len*2,true);
+ for(let i=0;i<len;i++)dv.setInt16(44+i*2,pcm[i],true);return new Blob([buf],{type:'audio/wav'})}
+function cMic(gravando){const b=document.getElementById('mic');if(!b)return;b.classList.toggle('gr',gravando);b.textContent=gravando?'■':'🎙️';b.setAttribute('aria-label',gravando?'Parar e enviar o áudio':'Gravar áudio')}
+async function cParar(enviar){if(!rec)return;const r=rec;rec=null;clearTimeout(r.timer);try{r.proc.disconnect();r.src.disconnect()}catch(e){}r.stream.getTracks().forEach(t=>t.stop());const taxa=r.ctx.sampleRate;try{r.ctx.close()}catch(e){}cMic(false);
+ if(!enviar||Date.now()-r.t0<700)return;const fd=new FormData();fd.append('audio',cWav(r.bufs,taxa),'audio.wav');await cPost('/painel/api/chat/audio',{body:fd})}
+async function cGravar(){if(rec)return cParar(true);
+ try{const stream=await navigator.mediaDevices.getUserMedia({audio:true}),AC=window.AudioContext||window.webkitAudioContext,ctx=new AC(),src=ctx.createMediaStreamSource(stream),proc=ctx.createScriptProcessor(4096,1,1),bufs=[];
+  proc.onaudioprocess=e=>bufs.push(new Float32Array(e.inputBuffer.getChannelData(0)));src.connect(proc);proc.connect(ctx.destination);
+  rec={stream,ctx,src,proc,bufs,t0:Date.now(),timer:setTimeout(()=>cParar(true),80000)};cMic(true);cAviso('Gravando… toque em ■ para enviar (até 80 s).')}
+ catch(e){cAviso('Não consegui usar o microfone. Permita o acesso no navegador ou digite o gasto.')}}
+function cMontar(){if(document.getElementById('comp'))return;const c=document.createElement('div');c.id='comp';
+ c.innerHTML='<div class="in"><button type="button" id="anexo" aria-label="Anexar PDF do extrato">📎</button><textarea id="txt" rows="1" maxlength="1000" placeholder="Escreva aqui…" aria-label="Mensagem"></textarea><button type="button" id="mic" aria-label="Gravar áudio">🎙️</button><button type="button" class="env" id="env">Enviar</button></div><input type="file" id="arq" accept="application/pdf" hidden>';
+ document.body.appendChild(c);const t=document.getElementById('txt');
+ const enviar=()=>{const v=t.value;t.value='';t.style.height='auto';cEnviar(v)};
+ document.getElementById('env').onclick=enviar;t.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();enviar()}};t.oninput=()=>{t.style.height='auto';t.style.height=Math.min(120,t.scrollHeight)+'px'};
+ document.getElementById('mic').onclick=cGravar;document.getElementById('anexo').onclick=()=>document.getElementById('arq').click();
+ document.getElementById('arq').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;if(f.size>10*1024*1024){cAviso('PDF grande demais (máximo 10 MB).');return}cPdf=f;const fd=new FormData();fd.append('arquivo',f);fd.append('senha','');await cPost('/painel/api/chat/pdf',{body:fd})}}
+function cSair(){cAtivo=false;clearTimeout(cTimer);cParar(false);document.body.classList.remove('chat-on');const c=document.getElementById('comp');if(c)c.remove()}
+vistas.chat=async function(){ti.textContent='Chat';sub.innerHTML='';el.className='';el.innerHTML='<div id="msgs"></div>';document.body.classList.add('chat-on');cMontar();cAtivo=true;cUltimo=0;cOcupado=false;await cPoll(true)};
+const irOriginal=ir;ir=async function(a){if(a!=='chat')cSair();return irOriginal(a)};
+"""
+_PAGINA = _PAGINA.replace("</style></head><body><main>", _CHAT_CSS + "</style></head><body><main>", 1)
+_PAGINA = _PAGINA.replace('<button data-a="resumo" aria-current="page">Resumo</button>', '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="chat">Chat</button>', 1)
+_PAGINA = _PAGINA.replace("\nir('resumo');", "\n" + _CHAT_JS + "ir('resumo');", 1)

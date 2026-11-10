@@ -305,8 +305,15 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
             "oct": 10, "october": 10, "outubro": 10, "nov": 11, "november": 11, "novembro": 11,
             "dec": 12, "december": 12, "dezembro": 12
         }
+        def _ano_proximo(mes: int) -> int:     # mês sem ano: a ocorrência mais próxima de hoje (em nov, "janeiro" = jan do ano que vem)
+            hoje = date.today()
+            return min((hoje.year - 1, hoje.year, hoje.year + 1), key=lambda a: abs((date(a, mes, 15) - hoje).days))
         if raw_str in meses_map:
-            return date.today().year, meses_map[raw_str]
+            return _ano_proximo(meses_map[raw_str]), meses_map[raw_str]
+        m_nome_ano = re.match(r"^([a-zç]+)[\s/.-]+(\d{4}|\d{2})$", raw_str)      # "janeiro 2027", "janeiro/2027", "jan/27"
+        if m_nome_ano and m_nome_ano.group(1) in meses_map:
+            ano = int(m_nome_ano.group(2)); ano += 2000 if ano < 100 else 0
+            return ano, meses_map[m_nome_ano.group(1)]
             
         # 2. Número isolado (ex: "5" ou "05")
         if raw_str.isdigit():

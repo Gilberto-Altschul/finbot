@@ -27,6 +27,7 @@ import app.seguranca as seguranca
 import app.demo as demo_mod
 import app.painel as painel
 import app.audio_gasto as audio_gasto
+import app.canal as canal
 from app.config import get_settings
 from app.ofx_schema import OpenFinancePayload
 
@@ -155,8 +156,31 @@ def _enviar_quick_reply(to: str, cabeca: str, botoes: list[tuple[str, str]]) -> 
                             content_sid=_content_sid(len(botoes)), content_variables=json.dumps(variaveis))
 
 
+def _emitir_no_painel(to: str, body: str) -> None:
+    """Chat do painel: a resposta vai para a tela, não para a Twilio. A pergunta de revisão vira botões, como no WhatsApp."""
+    if not body or not str(body).strip():
+        return
+    if demo_mod.eh_telefone_demo(to):
+        body = BANNER_DEMO + body
+    try:
+        est = revisao.ler_estado(to) if "ou digite uma palavra" in body else None
+        bts = revisao.botoes(est) if est else []
+        if bts and body.endswith(est["texto"]):
+            prefixo = body[: -len(est["texto"])].strip()
+            if prefixo:
+                canal.emitir(prefixo)
+            canal.emitir(est["cabeca"], bts)
+            return
+    except Exception as exc:
+        logger.warning(f"Painel: falha ao preparar botões da revisão: {exc}")
+    canal.emitir(body)
+
+
 def _send_whatsapp(to: str, body: str) -> None:
     """Envia texto; se o final da mensagem for uma pergunta de revisão, troca por botões."""
+    if canal.ativo():
+        _emitir_no_painel(to, body)
+        return
     if body and demo_mod.eh_telefone_demo(to):
         body = BANNER_DEMO + body   # modo demonstração: avisa em toda resposta que os dados são fictícios
     if USAR_BOTOES and body and "ou digite uma palavra" in body:
@@ -251,6 +275,9 @@ def _content_sid_confirma(n_botoes: int) -> str:
 def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
     """Uma mensagem só: texto + botões. Se os botões falharem, a mesma pergunta sai em texto ('sim'/'não')."""
     linha, botoes = audio_gasto.texto_confirmacao(pend)
+    if canal.ativo():
+        canal.emitir(f"🎙️ {linha}", botoes)
+        return
     if USAR_BOTOES:
         try:
             variaveis = {"1": linha.replace("\n", " ")}
@@ -262,6 +289,18 @@ def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
         except Exception as exc:
             logger.warning(f"Botões de confirmação indisponíveis ({exc}); enviando em texto.")
     _send_whatsapp(to, audio_gasto.texto_confirmacao_sem_botoes(pend))
+
+
+async def _processar_audio_bytes(user_phone: str, audio: bytes, content_type: str | None) -> None:
+    """Transcreve e: gasto -> pede confirmação; outra coisa -> segue para o agente como texto. Levanta AudioIlegivel/erros: quem chama trata."""
+    dados = await audio_gasto.extrair(audio, content_type)
+    if audio_gasto.eh_gasto(dados):
+        pend = await audio_gasto.preparar(user_phone, dados)
+        await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
+        return
+    # Não é um gasto (pergunta, comando...): segue como se tivesse sido digitado, mostrando o que foi ouvido.
+    reply = await agent.run(user_phone, dados["transcricao"])
+    await asyncio.to_thread(_send_whatsapp, user_phone, f"🎙️ _{dados['transcricao']}_\n\n{reply}")
 
 
 async def async_process_audio(user_phone: str, media_url: str, content_type: str | None) -> None:
@@ -280,21 +319,83 @@ async def async_process_audio(user_phone: str, media_url: str, content_type: str
             await asyncio.to_thread(_send_whatsapp, user_phone, "🎙️ Esse áudio ficou longo demais. Mande um de até 1 minuto ou digite o gasto.")
             return
         logger.info(f"Áudio de {user_phone}: {len(audio)} bytes.")
-        dados = await audio_gasto.extrair(audio, content_type or resp.headers.get("Content-Type"))
-        del audio   # nada do áudio é guardado
-        if audio_gasto.eh_gasto(dados):
-            pend = await audio_gasto.preparar(user_phone, dados)
-            await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
-            return
-        # Não é um gasto (pergunta, comando...): segue como se tivesse sido digitado, mostrando o que foi ouvido.
-        reply = await agent.run(user_phone, dados["transcricao"])
-        await asyncio.to_thread(_send_whatsapp, user_phone, f"🎙️ _{dados['transcricao']}_\n\n{reply}")
+        await _processar_audio_bytes(user_phone, audio, content_type or resp.headers.get("Content-Type"))
     except audio_gasto.AudioIlegivel as exc:
         logger.warning(f"Áudio não entendido para {user_phone}: {exc}")
         await asyncio.to_thread(_send_whatsapp, user_phone, "🎙️ Não consegui entender esse áudio. Pode repetir ou digitar o gasto?")
     except Exception as exc:
         logger.error(f"Erro ao processar áudio de {user_phone}: {exc}", exc_info=True)
         await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Tive um problema com esse áudio. Pode digitar o gasto?")
+
+
+async def _processar_pdf_conteudo(user_phone: str, conteudo: bytes, senha_fornecida: str | None, media_url: str | None,
+                                  start_time: float, download_time: float) -> bool:
+    """Lê o PDF (já baixado), pede/usa a senha e importa os lançamentos. Devolve True se ficou aguardando a senha.
+    `media_url=None` = veio do chat do painel (sem arquivo guardado). Levanta erros: quem chama trata."""
+    pdf_final_content = conteudo
+    reader = PdfReader(io.BytesIO(pdf_final_content))
+
+    if reader.is_encrypted:
+        if not senha_fornecida:
+            if media_url is None:      # chat do painel: o arquivo não fica guardado; o painel pede a senha e reenvia
+                canal.emitir("🏦 *Extrato recebido!* O arquivo está protegido. Informe a senha do PDF "
+                             "(geralmente os 4 ou 6 primeiros dígitos do seu CPF).", acao="senha_pdf")
+                return False
+            db.salvar_pdf_aguardando_senha(user_phone, media_url, status="aguardando_senha")
+            reply = (
+                "🏦 *Extrato recebido!* O arquivo está protegido.\n\n"
+                "Por favor, *digite a senha do PDF* para eu processar "
+                "(geralmente os 4 ou 6 primeiros dígitos do seu CPF)."
+            )
+            await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+            return True
+
+        if not reader.decrypt(senha_fornecida):
+            await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Senha incorreta. Envie o PDF novamente para tentar outra vez.")
+            db.limpar_pdf_pendente(user_phone)
+            return False
+
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        with io.BytesIO() as output:
+            writer.write(output)
+            pdf_final_content = output.getvalue()
+
+    db.limpar_pdf_pendente(user_phone)
+
+    num_pages = len(reader.pages)
+    logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone}")
+    await asyncio.to_thread(_send_whatsapp, user_phone, f"🔍 *PDF de {num_pages} páginas lido!* A IA está organizando seus gastos... Só mais um momento.")
+
+    all_extracted_transactions = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
+    try:   # o vencimento impresso na fatura vale mais que o dia padrão (12) usado quando o banco não informa
+        dia_venc = pdf_import.dia_vencimento_do_pdf(await asyncio.to_thread(pdf_import._extrair_texto_pdf, pdf_final_content))
+        if dia_venc:
+            cfg = db.get_user_settings(user_phone) or {}
+            if cfg.get("cartao_dia_vencimento") != dia_venc:
+                db.save_user_settings(user_phone, dia_venc, None)   # só o vencimento; o corte não é alterado
+                logger.info(f"Vencimento do cartão ajustado para o dia {dia_venc} (lido do PDF).")
+    except Exception as e:
+        logger.warning(f"Não consegui ler o vencimento do PDF ({e}); mantendo o dia configurado.")
+    llm_time = time.perf_counter() - start_time - download_time
+
+    # ingestion agora retorna (mensagem, lista_outros_ou_None)
+    async def _andamento(feitos: int, total: int, n_novos: int):
+        if feitos == 0:
+            texto = f"📄 Encontrei *{n_novos}* lançamentos novos. Estou classificando, isso pode levar um ou dois minutos."
+        else:
+            texto = f"⏳ Classificando… {feitos} de {total} estabelecimentos."
+        await asyncio.to_thread(_send_whatsapp, user_phone, texto)
+
+    mensagem, transacoes_outros = await ingestion.processar_ingestion_unificada(
+        user_phone, all_extracted_transactions, _andamento)
+
+    total_time = time.perf_counter() - start_time
+    logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
+
+    await asyncio.to_thread(_send_whatsapp, user_phone, mensagem)
+    return False
 
 
 async def async_process_pdf_extract(user_phone: str, media_url: str, senha_fornecida: str = None):
@@ -321,67 +422,7 @@ async def async_process_pdf_extract(user_phone: str, media_url: str, senha_forne
             db.limpar_pdf_pendente(user_phone)
             return
 
-        pdf_final_content = response.content
-        reader = PdfReader(io.BytesIO(pdf_final_content))
-
-        if reader.is_encrypted:
-            if not senha_fornecida:
-                pediu_senha = True
-                db.salvar_pdf_aguardando_senha(user_phone, media_url, status="aguardando_senha")
-                reply = (
-                    "🏦 *Extrato recebido!* O arquivo está protegido.\n\n"
-                    "Por favor, *digite a senha do PDF* para eu processar "
-                    "(geralmente os 4 ou 6 primeiros dígitos do seu CPF)."
-                )
-                await asyncio.to_thread(_send_whatsapp, user_phone, reply)
-                return
-
-            if not reader.decrypt(senha_fornecida):
-                await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Senha incorreta. Envie o PDF novamente para tentar outra vez.")
-                db.limpar_pdf_pendente(user_phone)
-                return
-
-            writer = PdfWriter()
-            for page in reader.pages:
-                writer.add_page(page)
-            with io.BytesIO() as output:
-                writer.write(output)
-                pdf_final_content = output.getvalue()
-
-        db.limpar_pdf_pendente(user_phone)
-
-        num_pages = len(reader.pages)
-        logger.info(f"Iniciando extração de {num_pages} páginas para {user_phone}")
-        await asyncio.to_thread(_send_whatsapp, user_phone, f"🔍 *PDF de {num_pages} páginas lido!* A IA está organizando seus gastos... Só mais um momento.")
-
-        all_extracted_transactions = await pdf_import.converter_pdf_nativo_para_json(pdf_final_content, user_phone)
-        try:   # o vencimento impresso na fatura vale mais que o dia padrão (12) usado quando o banco não informa
-            dia_venc = pdf_import.dia_vencimento_do_pdf(await asyncio.to_thread(pdf_import._extrair_texto_pdf, pdf_final_content))
-            if dia_venc:
-                cfg = db.get_user_settings(user_phone) or {}
-                if cfg.get("cartao_dia_vencimento") != dia_venc:
-                    db.save_user_settings(user_phone, dia_venc, None)   # só o vencimento; o corte não é alterado
-                    logger.info(f"Vencimento do cartão ajustado para o dia {dia_venc} (lido do PDF).")
-        except Exception as e:
-            logger.warning(f"Não consegui ler o vencimento do PDF ({e}); mantendo o dia configurado.")
-        llm_time = time.perf_counter() - start_time - download_time
-
-        # ingestion agora retorna (mensagem, lista_outros_ou_None)
-        async def _andamento(feitos: int, total: int, n_novos: int):
-            if feitos == 0:
-                texto = f"📄 Encontrei *{n_novos}* lançamentos novos. Estou classificando, isso pode levar um ou dois minutos."
-            else:
-                texto = f"⏳ Classificando… {feitos} de {total} estabelecimentos."
-            await asyncio.to_thread(_send_whatsapp, user_phone, texto)
-
-        mensagem, transacoes_outros = await ingestion.processar_ingestion_unificada(
-            user_phone, all_extracted_transactions, _andamento)
-
-        total_time = time.perf_counter() - start_time
-        logger.info(f"PDF Processed for {user_phone} in {total_time:.2f}s (DL: {download_time:.2f}s, LLM: {llm_time:.2f}s)")
-
-        await asyncio.to_thread(_send_whatsapp, user_phone, mensagem)
-
+        pediu_senha = await _processar_pdf_conteudo(user_phone, response.content, senha_fornecida, media_url, start_time, download_time)
     except ValueError as ve:
         logger.error(f"Falha na Extração IA para {user_phone}: {ve}")
         db.limpar_pdf_pendente(user_phone)
@@ -445,6 +486,206 @@ async def cron_sync(background_tasks: BackgroundTasks, x_cron_secret: str = Head
     return {"status": "iniciado"}
 
 
+async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, ButtonPayload: str | None = None,
+                           NumMedia: int = 0, MediaUrl0: str | None = None, MediaContentType0: str | None = None) -> None:
+    """Núcleo do chat: decide o que fazer com UMA mensagem (comandos, confirmações, revisão, agente). É chamado pelo webhook do
+    WhatsApp (agenda = BackgroundTasks) e pelo chat do painel (agenda = _Agenda, que roda as tarefas na hora). As respostas saem por
+    _send_whatsapp, que no painel vão para a tela (app.canal)."""
+    # Modo demonstração: "modo demo" / "sair do demo" / "limpar demo" valem sempre, ligado ou não.
+    cmd_demo = demo_mod.comando(user_message)
+    if cmd_demo:
+        resposta = await asyncio.to_thread(demo_mod.executar, real_phone, cmd_demo)
+        await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
+        return
+    await asyncio.to_thread(demo_mod.limpar_se_expirou, real_phone)   # demo vencido: desliga e apaga os dados fictícios
+    user_phone = demo_mod.efetivo(real_phone)   # = real_phone, ou o usuário sintético se o modo demo estiver ligado
+
+    # Toque em botão da revisão: o id vem em ButtonPayload ("r:<qid>:<n>"), o Body é só o título.
+    if ButtonPayload and ButtonPayload.startswith("r:"):
+        escolha = await asyncio.to_thread(revisao.resolver_payload, user_phone, ButtonPayload)
+        if escolha is None:
+            await asyncio.to_thread(_send_whatsapp, user_phone, "Essa pergunta já foi respondida 😉 Se quiser rever o que sobrou, digite *revisar*.")
+            return
+        user_message = escolha
+
+    try:
+        db._get_or_create_user_connection(user_phone)
+    except Exception as exc:
+        logger.error(f"Falha ao criar conexão para {user_phone}: {exc}")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao iniciar sua sessão. Por favor, tente novamente.")
+        return
+
+    # ── CASO 0.9: TOQUE NOS BOTÕES DA CONFIRMAÇÃO DE ÁUDIO ("g:ok", "g:no", "g:d", "g:c") ──
+    if ButtonPayload and ButtonPayload.startswith("g:"):
+        acao = audio_gasto.acao_do_botao(ButtonPayload)
+        if acao:
+            resposta = await audio_gasto.confirmar(user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
+            return
+
+    # ── CASO 0.95: ÁUDIO — transcreve e pede confirmação (ou segue como pergunta) ──
+    if NumMedia > 0 and MediaUrl0 and str(MediaContentType0).lower().startswith("audio/"):
+        logger.info(f"Áudio recebido de {user_phone}.")
+        agenda.add_task(async_process_audio, user_phone, MediaUrl0, MediaContentType0)
+        return
+
+    # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
+    if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
+        logger.info(f"PDF recebido de {user_phone}.")
+        # "processando": só vira "aguardando_senha" se o processamento descobrir que o PDF tem senha.
+        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="processando")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🏦 *Extrato recebido!* Verificando o arquivo...")
+        agenda.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
+        return
+
+    # ── CASO 1.5: OUTRA MÍDIA SEM TEXTO (imagem, figurinha, vídeo) — avisa em vez de ficar mudo ──
+    if NumMedia > 0 and MediaUrl0 and not user_message:
+        await asyncio.to_thread(_send_whatsapp, user_phone, "Por enquanto eu entendo *texto*, *áudio* e *PDF* do extrato. 🙂 Conte o gasto por áudio ou digite.")
+        return
+
+    # ── CASO 2: SENHA DE PDF PENDENTE (prioridade alta) ─────────────────────
+    pending_pdf_info = db.obter_pdf_pendente(user_phone)
+    if pending_pdf_info:
+        pdf_pendente_url, pdf_status = pending_pdf_info
+        if pdf_status == "aguardando_senha":
+            logger.info(f"Senha recebida de {user_phone}.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Descriptografando e processando...")
+            agenda.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
+            return
+        elif pdf_status == "processando":
+            # Se parece senha (só números), guarda para usar depois
+            if user_message.strip().isdigit() and len(user_message.strip()) >= 4:
+                logger.info(f"Possível senha recebida durante processamento para {user_phone}. Guardando.")
+                db.salvar_pdf_aguardando_senha(user_phone, pdf_pendente_url, status="aguardando_senha")
+                await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Processando seu extrato...")
+                agenda.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
+            else:
+                logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
+                agenda.add_task(_process, user_phone, user_message)
+            return
+
+    # ── CASO 2.3: RESPOSTA DIGITADA À CONFIRMAÇÃO DE ÁUDIO ("sim", "não", "crédito"...) ──
+    # Só vale se há confirmação pendente E a mensagem é exatamente uma dessas palavras; o resto segue o fluxo normal.
+    if audio_gasto.tem_pendente(user_phone):
+        acao = audio_gasto.interpretar_texto(user_message, audio_gasto.obter(user_phone))
+        if acao:
+            resposta = await audio_gasto.confirmar(user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
+            return
+
+    # ── CASO 2.35: RESPOSTA AO AJUSTE DE FECHAMENTO DO CARTÃO ("sim", "só ajuste", "não") ──
+    if fechamento_cartao.tem_pendente(user_phone):
+        acao = fechamento_cartao.interpretar_resposta(user_message)
+        if acao:
+            resposta = await asyncio.to_thread(fechamento_cartao.confirmar, user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
+            return
+
+    # ── CASO 2.36: COMANDO "o Itaú fecha dia 20 em dezembro" — ajusta o fechamento de uma fatura ──
+    if fechamento_cartao.eh_comando(user_message):
+        reply = await asyncio.to_thread(fechamento_cartao.responder, user_phone, user_message)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+        return
+
+    # ── CASO 2.4: COMANDO "meu nome é ..." — cadastra o nome do titular (Pix entre contas próprias) ──
+    if titular.eh_comando(user_message):
+        reply = await asyncio.to_thread(titular.responder, user_phone, user_message)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+        return
+
+    # ── CASO 2.45: COMANDO "painel" — manda o link de uso único do painel web ──
+    if painel.eh_comando(user_message):
+        await asyncio.to_thread(_send_whatsapp, real_phone, painel.mensagem_link(real_phone))
+        return
+
+    # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──
+    if revisao.eh_comando_revisar(user_message):
+        agenda.add_task(async_process_retomar_revisao, user_phone)
+        return
+
+    # ── CASO 3: RESPOSTA À PERGUNTA DE REVISÃO ───────────────────────────────
+    # As transações já estão salvas; isto só reclassifica. Conversa normal passa direto (CASO 4).
+    if revisao.ler_estado(user_phone) and revisao.eh_resposta_de_revisao(user_message, ingestion._resolver_categoria):
+        logger.info(f"Resposta de revisão recebida de {user_phone}: {user_message}")
+        agenda.add_task(async_process_revisao, user_phone, user_message)
+        return
+
+    # ── CASO 4: MENSAGEM NORMAL ───────────────────────────────────────────────
+    logger.info(f"Incoming message from {user_phone}: {user_message}")
+    agenda.add_task(_process, user_phone, user_message)
+    return
+
+
+# ── Chat do painel: mesma lógica do WhatsApp, sem Twilio ─────────────────────
+class _Agenda:
+    """Faz o papel do BackgroundTasks no painel: guarda as tarefas e roda na hora, na mesma sessão do usuário."""
+    def __init__(self) -> None:
+        self.tarefas: list = []
+
+    def add_task(self, fn, *args, **kwargs) -> None:
+        self.tarefas.append((fn, args, kwargs))
+
+
+MAX_PDF_PAINEL = 10 * 1024 * 1024
+
+
+async def _painel_texto(real_phone: str, texto: str, payload: str | None = None) -> None:
+    c = canal.caixa(real_phone)
+    async with c.trava:
+        with canal.usando(c):
+            try:
+                if painel.eh_comando(texto):
+                    canal.emitir("Você já está no painel 🙂 Escreva aqui o que quiser: gastos, perguntas, comandos.")
+                    return
+                agenda = _Agenda()
+                await _tratar_mensagem(real_phone, texto, agenda, ButtonPayload=payload)
+                for fn, args, kwargs in agenda.tarefas:
+                    await fn(*args, **kwargs)
+            except Exception as exc:
+                logger.error(f"Erro no chat do painel ({real_phone}): {exc}", exc_info=True)
+                canal.emitir("⚠️ Tive um problema para responder agora. Tente de novo.")
+
+
+async def _painel_audio(real_phone: str, audio: bytes, content_type: str | None) -> None:
+    c = canal.caixa(real_phone)
+    async with c.trava:
+        with canal.usando(c):
+            user_phone = demo_mod.efetivo(real_phone)
+            try:
+                db._get_or_create_user_connection(user_phone)
+                await _processar_audio_bytes(user_phone, audio, content_type)
+            except audio_gasto.AudioIlegivel as exc:
+                logger.warning(f"Áudio do painel não entendido ({exc})")
+                canal.emitir("🎙️ Não consegui entender esse áudio. Pode repetir ou digitar o gasto?")
+            except Exception as exc:
+                logger.error(f"Erro ao processar áudio do painel: {exc}", exc_info=True)
+                canal.emitir("⚠️ Tive um problema com esse áudio. Pode digitar o gasto?")
+
+
+async def _painel_pdf(real_phone: str, conteudo: bytes, senha: str | None) -> None:
+    c = canal.caixa(real_phone)
+    async with c.trava:
+        with canal.usando(c):
+            user_phone = demo_mod.efetivo(real_phone)
+            if not conteudo.startswith(b"%PDF"):
+                canal.emitir("❌ O arquivo enviado não parece ser um PDF válido. Envie o extrato original do banco.")
+                return
+            try:
+                db._get_or_create_user_connection(user_phone)
+                inicio = time.perf_counter()
+                await _processar_pdf_conteudo(user_phone, conteudo, senha or None, None, inicio, 0.0)
+            except ValueError as ve:
+                logger.error(f"Falha na extração IA (painel): {ve}")
+                canal.emitir("⚠️ No momento, não consegui analisar seu extrato devido a alta demanda na IA. Tente novamente em alguns instantes.")
+            except Exception as exc:
+                logger.error(f"Erro crítico no PDF do painel: {exc}", exc_info=True)
+                canal.emitir("❌ Tive um problema técnico ao processar seu extrato. O arquivo parece correto: tente de novo em instantes.")
+
+
+painel.registrar_chat(texto=_painel_texto, audio=_painel_audio, pdf=_painel_pdf)
+
+
+
 @app.post("/webhook/whatsapp")
 async def webhook(
     request: Request,
@@ -475,128 +716,8 @@ async def webhook(
     real_phone = From.strip()
     user_message = Body.strip()
 
-    # Modo demonstração: "modo demo" / "sair do demo" / "limpar demo" valem sempre, ligado ou não.
-    cmd_demo = demo_mod.comando(user_message)
-    if cmd_demo:
-        resposta = await asyncio.to_thread(demo_mod.executar, real_phone, cmd_demo)
-        await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
-        return Response(content="<Response/>", media_type="text/xml")
-    await asyncio.to_thread(demo_mod.limpar_se_expirou, real_phone)   # demo vencido: desliga e apaga os dados fictícios
-    user_phone = demo_mod.efetivo(real_phone)   # = real_phone, ou o usuário sintético se o modo demo estiver ligado
-
-    # Toque em botão da revisão: o id vem em ButtonPayload ("r:<qid>:<n>"), o Body é só o título.
-    if ButtonPayload and ButtonPayload.startswith("r:"):
-        escolha = await asyncio.to_thread(revisao.resolver_payload, user_phone, ButtonPayload)
-        if escolha is None:
-            await asyncio.to_thread(_send_whatsapp, user_phone, "Essa pergunta já foi respondida 😉 Se quiser rever o que sobrou, digite *revisar*.")
-            return Response(content="<Response/>", media_type="text/xml")
-        user_message = escolha
-
-    try:
-        db._get_or_create_user_connection(user_phone)
-    except Exception as exc:
-        logger.error(f"Falha ao criar conexão para {user_phone}: {exc}")
-        await asyncio.to_thread(_send_whatsapp, user_phone, "❌ Tive um problema técnico ao iniciar sua sessão. Por favor, tente novamente.")
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 0.9: TOQUE NOS BOTÕES DA CONFIRMAÇÃO DE ÁUDIO ("g:ok", "g:no", "g:d", "g:c") ──
-    if ButtonPayload and ButtonPayload.startswith("g:"):
-        acao = audio_gasto.acao_do_botao(ButtonPayload)
-        if acao:
-            resposta = await audio_gasto.confirmar(user_phone, acao)
-            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
-            return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 0.95: ÁUDIO — transcreve e pede confirmação (ou segue como pergunta) ──
-    if NumMedia > 0 and MediaUrl0 and str(MediaContentType0).lower().startswith("audio/"):
-        logger.info(f"Áudio recebido de {user_phone}.")
-        background_tasks.add_task(async_process_audio, user_phone, MediaUrl0, MediaContentType0)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
-    if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
-        logger.info(f"PDF recebido de {user_phone}.")
-        # "processando": só vira "aguardando_senha" se o processamento descobrir que o PDF tem senha.
-        db.salvar_pdf_aguardando_senha(user_phone, MediaUrl0, status="processando")
-        await asyncio.to_thread(_send_whatsapp, user_phone, "🏦 *Extrato recebido!* Verificando o arquivo...")
-        background_tasks.add_task(async_process_pdf_extract, user_phone, MediaUrl0)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 1.5: OUTRA MÍDIA SEM TEXTO (imagem, figurinha, vídeo) — avisa em vez de ficar mudo ──
-    if NumMedia > 0 and MediaUrl0 and not user_message:
-        await asyncio.to_thread(_send_whatsapp, user_phone, "Por enquanto eu entendo *texto*, *áudio* e *PDF* do extrato. 🙂 Conte o gasto por áudio ou digite.")
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2: SENHA DE PDF PENDENTE (prioridade alta) ─────────────────────
-    pending_pdf_info = db.obter_pdf_pendente(user_phone)
-    if pending_pdf_info:
-        pdf_pendente_url, pdf_status = pending_pdf_info
-        if pdf_status == "aguardando_senha":
-            logger.info(f"Senha recebida de {user_phone}.")
-            await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Descriptografando e processando...")
-            background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
-            return Response(content="<Response/>", media_type="text/xml")
-        elif pdf_status == "processando":
-            # Se parece senha (só números), guarda para usar depois
-            if user_message.strip().isdigit() and len(user_message.strip()) >= 4:
-                logger.info(f"Possível senha recebida durante processamento para {user_phone}. Guardando.")
-                db.salvar_pdf_aguardando_senha(user_phone, pdf_pendente_url, status="aguardando_senha")
-                await asyncio.to_thread(_send_whatsapp, user_phone, "🔑 Senha recebida! Processando seu extrato...")
-                background_tasks.add_task(async_process_pdf_extract, user_phone, pdf_pendente_url, senha_fornecida=user_message)
-            else:
-                logger.info(f"PDF ainda processando para {user_phone}. Mensagem tratada como conversa normal.")
-                background_tasks.add_task(_process, user_phone, user_message)
-            return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.3: RESPOSTA DIGITADA À CONFIRMAÇÃO DE ÁUDIO ("sim", "não", "crédito"...) ──
-    # Só vale se há confirmação pendente E a mensagem é exatamente uma dessas palavras; o resto segue o fluxo normal.
-    if audio_gasto.tem_pendente(user_phone):
-        acao = audio_gasto.interpretar_texto(user_message, audio_gasto.obter(user_phone))
-        if acao:
-            resposta = await audio_gasto.confirmar(user_phone, acao)
-            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
-            return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.35: RESPOSTA AO AJUSTE DE FECHAMENTO DO CARTÃO ("sim", "só ajuste", "não") ──
-    if fechamento_cartao.tem_pendente(user_phone):
-        acao = fechamento_cartao.interpretar_resposta(user_message)
-        if acao:
-            resposta = await asyncio.to_thread(fechamento_cartao.confirmar, user_phone, acao)
-            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
-            return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.36: COMANDO "o Itaú fecha dia 20 em dezembro" — ajusta o fechamento de uma fatura ──
-    if fechamento_cartao.eh_comando(user_message):
-        reply = await asyncio.to_thread(fechamento_cartao.responder, user_phone, user_message)
-        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.4: COMANDO "meu nome é ..." — cadastra o nome do titular (Pix entre contas próprias) ──
-    if titular.eh_comando(user_message):
-        reply = await asyncio.to_thread(titular.responder, user_phone, user_message)
-        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.45: COMANDO "painel" — manda o link de uso único do painel web ──
-    if painel.eh_comando(user_message):
-        await asyncio.to_thread(_send_whatsapp, real_phone, painel.mensagem_link(real_phone))
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──
-    if revisao.eh_comando_revisar(user_message):
-        background_tasks.add_task(async_process_retomar_revisao, user_phone)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 3: RESPOSTA À PERGUNTA DE REVISÃO ───────────────────────────────
-    # As transações já estão salvas; isto só reclassifica. Conversa normal passa direto (CASO 4).
-    if revisao.ler_estado(user_phone) and revisao.eh_resposta_de_revisao(user_message, ingestion._resolver_categoria):
-        logger.info(f"Resposta de revisão recebida de {user_phone}: {user_message}")
-        background_tasks.add_task(async_process_revisao, user_phone, user_message)
-        return Response(content="<Response/>", media_type="text/xml")
-
-    # ── CASO 4: MENSAGEM NORMAL ───────────────────────────────────────────────
-    logger.info(f"Incoming message from {user_phone}: {user_message}")
-    background_tasks.add_task(_process, user_phone, user_message)
+    await _tratar_mensagem(real_phone, user_message, background_tasks, ButtonPayload=ButtonPayload,
+                           NumMedia=NumMedia, MediaUrl0=MediaUrl0, MediaContentType0=MediaContentType0)
     return Response(content="<Response/>", media_type="text/xml")
 
 @app.post("/webhook/pluggy")

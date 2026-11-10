@@ -191,6 +191,16 @@ _KEYWORD_TOOLS = {
     "parcelamentos": "listar_parcelamentos"
 }
 
+def _ano_do_mes(mes: int, texto: str = "") -> int:
+    """Ano de um mês dito sem ano ('listar janeiro'): o ano escrito na frase, senão a ocorrência MAIS PRÓXIMA de hoje
+    (em novembro, 'janeiro' é janeiro do ano que vem: é onde caem as parcelas e faturas futuras)."""
+    m = re.search(r"\b(20\d{2})\b", texto or "")
+    if m:
+        return int(m.group(1))
+    hoje = date.today()
+    return min((hoje.year - 1, hoje.year, hoje.year + 1), key=lambda a: abs((date(a, mes, 15) - hoje).days))
+
+
 _MESES_MAP = {
     "janeiro": "01", "fevereiro": "02", "marco": "03", "março": "03", "abril": "04",
     "maio": "05", "junho": "06", "julho": "07", "agosto": "08",
@@ -337,7 +347,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
         args_fatura: dict = {"pagina": pagina}
         for m_nome, m_num in _MESES_MAP.items():
             if m_nome in msg_norm:
-                args_fatura["mes"] = f"{date.today().year}-{m_num}"
+                args_fatura["mes"] = f"{_ano_do_mes(int(m_num), msg_norm)}-{m_num}"
                 break
         if _extrair_cartao(msg_norm):
             args_fatura["cartao"] = _extrair_cartao(msg_norm)
@@ -406,7 +416,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
                 mes_ref = date.today().strftime("%Y-%m")
                 for m_nome, m_num in _MESES_MAP.items():
                     if m_nome in msg_norm:
-                        mes_ref = f"{date.today().year}-{m_num}"
+                        mes_ref = f"{_ano_do_mes(int(m_num), msg_norm)}-{m_num}"
                         break
                 
                 logger.info(f"Fast Path Limite detectado: {cat_final} | {valor_limit} | {mes_ref}")
@@ -490,7 +500,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     mes_encontrado = None
     for m_nome, m_num in _MESES_MAP.items():
         if m_nome in msg_norm:
-            target_month = f"{date.today().year}-{m_num}"
+            target_month = f"{_ano_do_mes(int(m_num), msg_norm)}-{m_num}"
             mes_encontrado = m_nome
             break
 
