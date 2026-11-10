@@ -453,7 +453,7 @@ _ICONES = {"icone-192.png": "image/png", "icone-512.png": "image/png", "icone-ma
 def manifesto():
     dados = {"id": "/painel", "name": "FinFlow", "short_name": "FinFlow", "description": "Suas finanças do WhatsApp em tela.",
              "lang": "pt-BR", "start_url": "/painel", "scope": "/painel", "display": "standalone",
-             "background_color": "#F3F5F2", "theme_color": "#0E6B57",
+             "background_color": "#081226", "theme_color": "#081226",
              "icons": [{"src": "/painel/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
                        {"src": "/painel/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
                        {"src": "/painel/icone-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
@@ -470,7 +470,7 @@ def icone(arquivo: str):
 
 
 _SW = """// FinFlow: só mostra a tela "sem conexão" quando a rede cai ao ABRIR o painel. Nada privado fica guardado aqui.
-const V = 'finflow-pwa-v1', OFFLINE = '/painel/offline';
+const V = 'finflow-pwa-v2', OFFLINE = '/painel/offline';
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll([OFFLINE, '/painel/icone-192.png'])).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
@@ -493,19 +493,19 @@ def offline():
 
 
 # ── páginas ──────────────────────────────────────────────────────────────────
-_ESTILO = """<style>body{margin:0;font-family:system-ui,sans-serif;background:#F3F5F2;color:#15221E;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
-main{max-width:360px;display:flex;flex-direction:column;gap:12px}h1{font-size:24px;margin:0}p{margin:0;line-height:1.5;color:#5B6B65}
-button{min-height:52px;border:0;border-radius:12px;background:#0E6B57;color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer}</style>"""
+_ESTILO = """<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Inter:wght@400;500;600;700&display=swap"><style>body{margin:0;font-family:Inter,system-ui,sans-serif;background:#081226;color:#EAF0FF;color-scheme:dark;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+main{max-width:360px;display:flex;flex-direction:column;gap:12px}h1{font-family:"Bricolage Grotesque",Inter,sans-serif;font-size:26px;font-weight:800;letter-spacing:-.03em;margin:0}p{margin:0;line-height:1.5;color:#9AABD3}
+button{min-height:52px;border:0;border-radius:16px;background:#2A62F5;color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer}</style>"""
 _PAGINA_EXPIRADA = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Link vencido ou já usado</h1>"
     "<p>Mande <b>painel</b> no WhatsApp para receber um link novo. Cada link vale por 10 minutos e abre uma única vez.</p></main></body></html>")
 _PAGINA_SEM_SESSAO = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Sessão não encontrada</h1>"
     "<p>Mande <b>painel</b> no WhatsApp para receber um link novo. Se você acabou de abrir um link e caiu aqui, abra o link no navegador do celular (Chrome ou Safari), "
-    "não no navegador interno de outro aplicativo, e permita cookies.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:12px;background:#0E6B57;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
+    "não no navegador interno de outro aplicativo, e permita cookies.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:16px;background:#2A62F5;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
 _PAGINA_SAIU = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Você saiu do painel</h1>"
-    "<p>Seus dados continuam guardados. Para entrar de novo, mande <b>painel</b> no WhatsApp e abra o link novo.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:12px;background:#0E6B57;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
+    "<p>Seus dados continuam guardados. Para entrar de novo, mande <b>painel</b> no WhatsApp e abra o link novo.</p><a href=\"__WA__\" style=\"display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:16px;background:#2A62F5;color:#fff;font-weight:700;text-decoration:none\">Abrir o WhatsApp</a></main></body></html>")
 _PAGINA_OFFLINE = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<meta name=\"robots\" content=\"noindex\"><title>FinFlow</title>" + _ESTILO + "</head><body><main><h1>Sem conexão</h1>"
     "<p>Não consegui abrir o painel agora. Confira a internet e tente de novo.</p>"
@@ -522,41 +522,43 @@ _PAGINA_ENTRAR = ("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf
 
 _PAGINA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>FinFlow</title>
-<style>
-:root{--v:#0E6B57;--ink:#15221E;--mut:#5B6B65;--bg:#F3F5F2;--card:#fff;--lin:#E6EAE7}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
-main{max-width:640px;margin:0 auto;padding:24px 16px 96px;display:flex;flex-direction:column;gap:16px}
-h1{margin:0;font-size:28px;letter-spacing:-.5px}.mut{color:var(--mut);font-size:14px}
-.card{background:var(--card);border-radius:16px;padding:16px}
-.hero{background:#0E3B31;color:#fff;border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:10px}
-.lin{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.hero .r{color:#BFD6CD}.saldo{font-size:30px;font-weight:700}
-.tag{display:inline-block;padding:4px 10px;border-radius:99px;background:#E3ECE8;color:#24473D;font-size:12px}
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Inter:wght@400;500;600;700&display=swap"><style>
+/* Identidade "Maré": azul profundo + Água (entradas), Coral (saídas), Farol (alertas). Display: Bricolage Grotesque; texto: Inter. */
+:root{--v:#2A62F5;--vt:#8FB2FF;--ink:#EAF0FF;--mut:#9AABD3;--bg:#081226;--card:#0F1D3B;--lin:#1E3160;--corr:#12245A;--borda:#2A4486;--agua:#5FE3C0;--coral:#FF8A7A;--farol:#FFB45C;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+h1,h2,.saldo,.prev .grande{font-family:"Bricolage Grotesque",Inter,system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:24px 16px 104px;display:flex;flex-direction:column;gap:14px}
+h1{margin:0;font-size:28px;font-weight:800;letter-spacing:-.03em}.mut{color:var(--mut);font-size:14px}a{color:var(--vt)}
+.card{background:var(--card);border:1px solid var(--lin);border-radius:22px;padding:18px}
+.hero{background:var(--corr);border:1px solid var(--borda);color:var(--ink);border-radius:26px;padding:20px;display:flex;flex-direction:column;gap:10px}
+.lin{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.hero .r{color:#C9D6F5}.saldo{font-size:32px;font-weight:800;letter-spacing:-.03em}
+.tag{display:inline-block;padding:5px 11px;border-radius:99px;background:#16295A;color:#C9D6F5;font-size:12px}
 .cat{padding:14px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:8px}.cat:last-child{border:0}
-.barra{height:8px;border-radius:4px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;background:var(--v)}
+.barra{height:8px;border-radius:99px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;border-radius:99px;background:var(--v)}
 .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700}
-.saudavel{background:#E3F1EA;color:#0E6B57}.atencao{background:#FFF4E5;color:#7A3B00}.estourado{background:#FDECEA;color:#8A1C12}
-#conteudo{display:flex;flex-direction:column;gap:16px}h2{margin:0;font-size:17px}
-.alerta{border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px}.alerta.ruim{background:#FDECEA;color:#8A1C12}.alerta.bom{background:#E3F1EA;color:#0B4F40}
+.saudavel{background:#0F3A3A;color:var(--agua)}.atencao{background:#3A2A12;color:var(--farol)}.estourado{background:#3A1E26;color:var(--coral)}
+#conteudo{display:flex;flex-direction:column;gap:14px}h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.02em}
+.alerta{border-radius:22px;padding:16px;display:flex;flex-direction:column;gap:6px}.alerta.ruim{background:#3A1E26;color:#FFD2CB;border:1px solid #5A2A33}.alerta.bom{background:#0F3A3A;color:#BFF5E6;border:1px solid #1D5A55}
 .alerta b{font-size:18px}.alerta span{font-size:14px;line-height:1.45}
 .soma{display:flex;flex-direction:column}.soma .lin{padding:10px 0;border-bottom:1px solid var(--lin)}.soma .lin:last-child{border:0;font-weight:700;font-size:16px}
-.neg{color:#B42318}.pos{color:#0E6B57}.dia{padding:14px 0;border-bottom:1px solid var(--lin);display:grid;grid-template-columns:52px 1fr;gap:4px 12px}.dia:last-child{border:0}
+.neg{color:var(--coral)}.pos{color:var(--agua)}.dia{padding:14px 0;border-bottom:1px solid var(--lin);display:grid;grid-template-columns:52px 1fr;gap:4px 12px}.dia:last-child{border:0}
 .dia .d{font-weight:700;font-size:15px}.dia .d small{display:block;font-weight:400;color:var(--mut);font-size:12px}
 .ev{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:2px 0}.ev .n{display:flex;flex-direction:column;gap:2px;min-width:0}.ev .n span{font-size:15px;overflow-wrap:anywhere}.ev b{white-space:nowrap}.lin span:last-child{white-space:nowrap}
 .tipo{font-size:12px;color:var(--mut)}.sd{font-size:13px;color:var(--mut);margin-top:4px}
-details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:var(--v)}details p{margin:0;font-size:13px;line-height:1.5;color:var(--mut)}
-h3{margin:0;font-size:15px}.prev{display:flex;flex-direction:column;gap:4px}.prev .grande{font-size:30px;font-weight:700;letter-spacing:-.5px}
-.pb{position:relative;height:10px;border-radius:5px;background:var(--lin)}.pb i{position:absolute;top:0;bottom:0;display:block}.pb u{position:absolute;top:-3px;bottom:-3px;width:2px;background:#15221E}
+details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:700;color:var(--vt)}details p{margin:0;font-size:13px;line-height:1.5;color:var(--mut)}
+h3{margin:0;font-size:15px}.prev{display:flex;flex-direction:column;gap:4px}.prev .grande{font-size:32px;font-weight:800;letter-spacing:-.03em}
+.pb{position:relative;height:10px;border-radius:5px;background:var(--lin)}.pb i{position:absolute;top:0;bottom:0;display:block}.pb u{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
 .leg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut)}.leg span:before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
 .cp{padding:14px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:8px}.cp:last-child{border:0}
-.ok{background:#E3F1EA;color:#0E6B57}.estoura{background:#FDECEA;color:#8A1C12}
-button.op{min-height:44px;padding:0 14px;border-radius:12px;border:1.5px solid var(--v);background:#fff;color:var(--v);font:inherit;font-size:14px;font-weight:700;cursor:pointer;text-align:left}
-button.op:disabled{opacity:.5}select{min-height:44px;border-radius:12px;border:1.5px solid #8A9A93;background:#fff;font:inherit;font-size:15px;padding:0 10px;color:var(--ink);width:100%}
-.rev,.cx{display:flex;flex-direction:column;gap:10px}.feito{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--v);font-size:14px}.ops{display:flex;flex-wrap:wrap;gap:8px}
-svg text{font:11px system-ui,sans-serif;fill:#5B6B65}
+.ok{background:#0F3A3A;color:var(--agua)}.estoura{background:#3A1E26;color:var(--coral)}
+button.op{min-height:44px;padding:0 14px;border-radius:14px;border:1px solid var(--borda);background:var(--corr);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer;text-align:left}
+button.op:disabled{opacity:.5}select{min-height:44px;border-radius:14px;border:1px solid var(--borda);background:var(--bg);font:inherit;font-size:15px;padding:0 10px;color:var(--ink);width:100%}
+.rev,.cx{display:flex;flex-direction:column;gap:10px}.feito{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--agua);font-size:14px}.ops{display:flex;flex-wrap:wrap;gap:8px}
+svg text{font:11px Inter,system-ui,sans-serif;fill:#9AABD3}
 pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin:0}
-nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #DCE2DE;display:flex;padding:6px 8px 10px}
-nav button{flex:1;min-height:56px;border:0;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
-nav button[aria-current=page]{color:var(--v)}.sair{border:0;background:none;color:var(--v);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
+nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--lin);display:flex;gap:4px;padding:6px 8px 10px}
+nav button{flex:1;min-height:56px;border:0;border-radius:16px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
+nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
 </style></head><body><main>
 <div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
 <h1 id="titulo">FinFlow</h1><div id="conteudo" class="mut">Carregando…</div></main>
@@ -586,9 +588,9 @@ const vistas={
   const pts=S.map(x=>X(x.data).toFixed(1)+','+Y(x.saldo).toFixed(1)).join(' ');
   const graf='<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" aria-label="Saldo projetado de '+m(d.saldo_inicial)+' hoje para '+m(d.saldo_final)+' em '+dm(d.fim)+'">'+
    '<defs><clipPath id="cima"><rect x="0" y="0" width="'+W+'" height="'+y0.toFixed(1)+'"/></clipPath><clipPath id="baixo"><rect x="0" y="'+y0.toFixed(1)+'" width="'+W+'" height="'+H+'"/></clipPath></defs>'+
-   '<line x1="'+P+'" x2="'+(W-P)+'" y1="'+y0.toFixed(1)+'" y2="'+y0.toFixed(1)+'" stroke="#9AA9A2" stroke-dasharray="3 3"/>'+
-   '<polyline points="'+pts+'" fill="none" stroke="#0E6B57" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#cima)"/>'+
-   '<polyline points="'+pts+'" fill="none" stroke="#B42318" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#baixo)"/>'+
+   '<line x1="'+P+'" x2="'+(W-P)+'" y1="'+y0.toFixed(1)+'" y2="'+y0.toFixed(1)+'" stroke="#3A5290" stroke-dasharray="3 3"/>'+
+   '<polyline points="'+pts+'" fill="none" stroke="#5FE3C0" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#cima)"/>'+
+   '<polyline points="'+pts+'" fill="none" stroke="#FF8A7A" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#baixo)"/>'+
    '<text x="'+P+'" y="'+(H-2)+'">'+dm(d.inicio)+'</text><text x="'+(W-P)+'" y="'+(H-2)+'" text-anchor="end">'+dm(d.fim)+'</text>'+
    '<text x="'+(W-P)+'" y="'+(y0-4).toFixed(1)+'" text-anchor="end">R$ 0</text></svg>';
   const soma='<div class="card soma"><h2>De onde vem o saldo de '+dm(d.fim)+'</h2>'+
@@ -609,8 +611,8 @@ const vistas={
   const pc=d.previsto>0?Math.min(d.realizado/d.previsto*100,100):0;
   let comp='';if(d.dif!==null&&d.mes_anterior){const up=d.dif>0;comp='<div class="mut" style="font-size:13px">'+(up?'↑ ':'↓ ')+m(Math.abs(d.dif))+' ('+Math.abs(d.dif_pct)+'%) '+(up?'acima':'abaixo')+' do mês passado ('+m(d.mes_anterior)+')</div>'}
   const topo='<div class="card prev"><span class="mut" style="font-size:13px">Previsto para o fim do mês</span><span class="grande">'+m(d.previsto)+'</span>'+
-   '<div class="pb" role="img" aria-label="Já gasto '+m(d.realizado)+' de '+m(d.previsto)+' previstos"><i style="left:0;width:'+pc.toFixed(1)+'%;background:#0E6B57;border-radius:5px 0 0 5px"></i><i style="left:'+pc.toFixed(1)+'%;right:0;background:#8FB9AC;border-radius:0 5px 5px 0"></i></div>'+
-   '<div class="leg"><span style="--c:#0E6B57">Já gasto '+m(d.realizado)+'</span><span style="--c:#8FB9AC">Ainda por vir</span></div>'+
+   '<div class="pb" role="img" aria-label="Já gasto '+m(d.realizado)+' de '+m(d.previsto)+' previstos"><i style="left:0;width:'+pc.toFixed(1)+'%;background:#2A62F5;border-radius:5px 0 0 5px"></i><i style="left:'+pc.toFixed(1)+'%;right:0;background:#9EBBFF;border-radius:0 5px 5px 0"></i></div>'+
+   '<div class="leg"><span style="--c:#2A62F5">Já gasto '+m(d.realizado)+'</span><span style="--c:#9EBBFF">Ainda por vir</span></div>'+
    '<div class="mut" style="font-size:13px">Faltam '+d.restam+' dia'+(d.restam!==1?'s':'')+' para fechar o mês</div>'+comp+'</div>';
   const est=d.categorias.filter(c=>c.status==='estoura');
   const alerta=est.length?'<div class="alerta ruim" role="alert"><b>'+est.length+(est.length>1?' categorias devem':' categoria deve')+' passar do orçamento</b><span>'+est.map(c=>esc(c.nome)+' (+'+m(c.excede)+')').join(' · ')+'</span></div>':'';
@@ -618,11 +620,11 @@ const vistas={
   const rot={ok:'Dentro',atencao:'Atenção',estoura:'Estoura'};const cls={ok:'ok',atencao:'atencao',estoura:'estoura'};
   const lin=c=>{const r=c.realizado/escala*100,rest=Math.max(c.previsto-c.realizado,0)/escala*100;
    return '<div class="cp"><div class="lin"><b>'+esc(c.nome)+'</b>'+(c.limite?'<span class="pill '+cls[c.status]+'">'+rot[c.status]+'</span>':'')+'</div>'+
-   '<div class="pb"><i style="left:0;width:'+r.toFixed(1)+'%;background:#0E6B57;border-radius:5px 0 0 5px"></i><i style="left:'+r.toFixed(1)+'%;width:'+rest.toFixed(1)+'%;background:#8FB9AC"></i>'+(c.limite?'<u style="left:'+(c.limite/escala*100).toFixed(1)+'%"></u>':'')+'</div>'+
+   '<div class="pb"><i style="left:0;width:'+r.toFixed(1)+'%;background:#2A62F5;border-radius:5px 0 0 5px"></i><i style="left:'+r.toFixed(1)+'%;width:'+rest.toFixed(1)+'%;background:#9EBBFF"></i>'+(c.limite?'<u style="left:'+(c.limite/escala*100).toFixed(1)+'%"></u>':'')+'</div>'+
    '<div class="mut" style="font-size:13px">'+m(c.previsto)+' previsto'+(c.limite?' de '+m(c.limite):'')+' · já gasto '+m(c.realizado)+'</div></div>'};
   const vis=d.categorias.slice(0,8),resto=d.categorias.slice(8);
   const lista='<div class="card"><h2>Por categoria</h2>'+vis.map(lin).join('')+(resto.length?'<details><summary>Ver mais '+resto.length+' categorias</summary>'+resto.map(lin).join('')+'</details>':'')+
-   '<p class="mut" style="font-size:12px;margin:8px 0 0">Barra escura: já gasto. Barra clara: previsto até o fim do mês. Traço preto: orçamento.</p></div>';
+   '<p class="mut" style="font-size:12px;margin:8px 0 0">Barra escura: já gasto. Barra clara: previsto até o fim do mês. Traço branco: orçamento.</p></div>';
   el.innerHTML=topo+alerta+lista+'<details class="card"><summary>Como calculamos</summary><p>Soma o que já foi gasto no mês com a média diária dos gastos de débito e Pix por categoria (últimos 60 dias), as contas fixas que ainda vão vencer e as parcelas previstas do cartão. Compras novas no cartão caem na fatura do mês seguinte e não entram aqui.</p></details>'}
 , async revisar(){const d=await api('revisar');ti.textContent='Revisar lançamentos';sub.innerHTML='';el.className='';
   if(!d.itens.length){el.className='card';el.innerHTML='<b>Tudo revisado 🎉</b><p class="mut" style="margin:6px 0 0">Não há lançamentos aguardando classificação.</p>';return}
@@ -657,10 +659,10 @@ ir('resumo');
 
 
 # Cabeçalho PWA (manifesto, cor da barra, ícone do iPhone) em todas as páginas do painel + registro do service worker na principal.
-_PWA_HEAD = ('<meta name="robots" content="noindex"><meta name="theme-color" content="#0E6B57">'
+_PWA_HEAD = ('<meta name="robots" content="noindex"><meta name="theme-color" content="#081226">'
              '<link rel="manifest" href="/painel/manifest.webmanifest"><link rel="apple-touch-icon" href="/painel/apple-touch-icon.png">'
              '<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
-             '<meta name="apple-mobile-web-app-title" content="FinFlow"><meta name="apple-mobile-web-app-status-bar-style" content="default">')
+             '<meta name="apple-mobile-web-app-title" content="FinFlow"><meta name="apple-mobile-web-app-status-bar-style" content="black">')
 _SW_REGISTRO = "if('serviceWorker' in navigator){navigator.serviceWorker.register('/painel/sw.js',{scope:'/painel'}).catch(function(){})}"
 for _n in ("_PAGINA", "_PAGINA_ENTRAR", "_PAGINA_SEM_SESSAO", "_PAGINA_EXPIRADA", "_PAGINA_SAIU", "_PAGINA_OFFLINE"):
     globals()[_n] = globals()[_n].replace('<meta name="robots" content="noindex">', _PWA_HEAD, 1)
@@ -669,15 +671,15 @@ _PAGINA = _PAGINA.replace("</script></body></html>", _SW_REGISTRO + "</script></
 
 # ── Aba Chat (CSS + JS em strings cruas para não escapar barras) ──
 _CHAT_CSS = r""".msg{max-width:86%;padding:10px 14px;border-radius:16px;line-height:1.45;font-size:15px;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:8px}
-.msg.eu{align-self:flex-end;background:#0E6B57;color:#fff;border-bottom-right-radius:4px}.msg.bot{align-self:flex-start;background:#fff;border-bottom-left-radius:4px}
+.msg.eu{align-self:flex-end;background:#2A62F5;color:#fff;border-bottom-right-radius:4px}.msg.bot{align-self:flex-start;background:var(--card);border:1px solid var(--lin);border-bottom-left-radius:4px}
 .msg a{color:inherit;text-decoration:underline}#msgs{display:flex;flex-direction:column;gap:10px}
 .dig{align-self:flex-start;color:var(--mut);font-size:14px;padding:4px 8px}
-#comp{position:fixed;left:0;right:0;bottom:72px;background:#fff;border-top:1px solid #DCE2DE;padding:8px;display:flex;gap:6px;align-items:flex-end}
+#comp{position:fixed;left:0;right:0;bottom:72px;background:var(--card);border-top:1px solid var(--lin);padding:8px;display:flex;gap:6px;align-items:flex-end}
 #comp .in{max-width:640px;margin:0 auto;width:100%;display:flex;gap:6px;align-items:flex-end}
-#comp textarea{flex:1;min-height:44px;max-height:120px;border-radius:22px;border:1.5px solid #8A9A93;padding:11px 14px;font:inherit;font-size:16px;resize:none;color:var(--ink)}
-#comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#E3ECE8;color:#0E6B57;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}#comp button svg{display:block}
-#comp button.env{background:#0E6B57;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#gst{flex:1;display:none;flex-direction:column;justify-content:center;min-height:44px;padding-left:6px;min-width:0}#gst b{font-size:16px;color:var(--ink)}#gst b:before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:#B42318;margin-right:8px;animation:pisca 1s infinite}#gdica{font-size:12px;color:var(--mut)}@keyframes pisca{50%{opacity:.25}}#comp.gravando textarea,#comp.gravando #anexo,#comp.gravando #env{display:none}#comp.gravando #gst{display:flex}#comp.gravando #gcan{display:flex}#comp button.gr{background:#B42318;color:#fff}
-body.chat-on main{padding-bottom:150px}.senha{display:flex;gap:6px}.senha input{flex:1;min-height:44px;border-radius:12px;border:1.5px solid #8A9A93;padding:0 12px;font:inherit;font-size:16px}
+#comp textarea{flex:1;min-height:44px;max-height:120px;border-radius:22px;border:1px solid var(--borda);background:var(--bg);padding:11px 14px;font:inherit;font-size:16px;resize:none;color:var(--ink)}
+#comp button{min-width:44px;min-height:44px;border-radius:22px;border:0;background:#16295A;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}#comp button svg{display:block}
+#comp button.env{background:#2A62F5;color:#fff;font-size:15px;font-weight:700;padding:0 16px}#gst{flex:1;display:none;flex-direction:column;justify-content:center;min-height:44px;padding-left:6px;min-width:0}#gst b{font-size:16px;color:var(--ink)}#gst b:before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:#B42318;margin-right:8px;animation:pisca 1s infinite}#gdica{font-size:12px;color:var(--mut)}@keyframes pisca{50%{opacity:.25}}#comp.gravando textarea,#comp.gravando #anexo,#comp.gravando #env{display:none}#comp.gravando #gst{display:flex}#comp.gravando #gcan{display:flex}#comp button.gr{background:#B42318;color:#fff}
+body.chat-on main{padding-bottom:150px}.senha{display:flex;gap:6px}.senha input{flex:1;min-height:44px;border-radius:14px;border:1px solid var(--borda);background:var(--bg);color:var(--ink);padding:0 12px;font:inherit;font-size:16px}
 """
 _CHAT_JS = r"""// ── Chat (mesma lógica do WhatsApp, sem Twilio) ──
 let cAtivo=false,cUltimo=0,cOcupado=false,cTimer=null,cEnvio=0,cPdf=null,rec=null;
