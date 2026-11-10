@@ -141,7 +141,7 @@ def save_expense(user_phone: str, valor: float, category: str, description: str,
         logger.error(f"Erro ao salvar transação manual: {exc}")
         raise exc
 
-def save_expense_credit(user_phone: str, valor: float, category: str, description: str, beneficiario: str | None = None, subcategoria: str | None = None, fatura_date: date | None = None, p_atual: int | None = None, p_total: int | None = None, purchase_date: date | None = None) -> dict:
+def save_expense_credit(user_phone: str, valor: float, category: str, description: str, beneficiario: str | None = None, subcategoria: str | None = None, fatura_date: date | None = None, p_atual: int | None = None, p_total: int | None = None, purchase_date: date | None = None, account_id: str | None = None) -> dict:
     try:
         _get_or_create_user_connection(user_phone)
         dt_fat = fatura_date or date.today()
@@ -160,6 +160,8 @@ def save_expense_credit(user_phone: str, valor: float, category: str, descriptio
             "purchase_date": (purchase_date or date.today()).isoformat(),
             "billing_date": dt_fat.isoformat()
         }
+        if account_id:
+            row["account_id"] = account_id          # qual cartão (permite reclassificar a fatura se o fechamento mudar)
         res = get_db().table("finbot_expenses").insert(row).execute()
         return res.data[0] if res.data else {}
     except Exception as exc:

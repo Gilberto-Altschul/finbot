@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import calendar
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
 from app import bancos, itens
@@ -198,6 +198,34 @@ def ciclos_da_compra(d: date, ciclos: list[Ciclo], n: int = 1, hoje: date | None
         prox = next((c for c in ciclos if c.vencimento > ant.vencimento), None) or proximo_ciclo(ant, dia)
         saida.append(prox)
     return saida
+
+
+def ciclos_ajustados(ciclos: list[Ciclo], ate: date, ajustes: dict | None = None, extra: int = 0) -> list[Ciclo]:
+    """Lista de ciclos estendida (estimando os que faltam) até cobrir `ate` e mais `extra` ciclos, com os AJUSTES do usuário
+    ({mes_ref: fechamento}) aplicados. O ajuste só vale em ciclo ainda estimado (o fechamento que o banco informa de verdade
+    manda) e é aplicado DEPOIS de estimar, então não desloca os ciclos seguintes."""
+    L = list(ciclos)
+    if not L:
+        return L
+    dia = _dia_venc_tipico(L)
+    for _ in range(60):
+        if L[-1].fechamento >= ate:
+            break
+        L.append(proximo_ciclo(L[-1], dia))
+    for _ in range(max(0, extra)):
+        L.append(proximo_ciclo(L[-1], dia))
+    if ajustes:
+        L = [replace(c, fechamento=ajustes[c.mes_ref], fechamento_estimado=True)
+             if c.mes_ref in ajustes and (c.estimado or c.fechamento_estimado) else c for c in L]
+    return L
+
+
+def ciclos_da_compra_ajustada(d: date, ciclos: list[Ciclo], n: int = 1, ajustes: dict | None = None,
+                              hoje: date | None = None) -> list[Ciclo] | None:
+    """Como ciclos_da_compra, respeitando os ajustes de fechamento informados pelo usuário."""
+    if not ciclos:
+        return None
+    return ciclos_da_compra(d, ciclos_ajustados(ciclos, d, ajustes, extra=max(1, n) + 1), n, hoje)
 
 
 def ciclo_da_transacao(d: date, bill_id: str | None, pendente: bool, ciclos: list[Ciclo],

@@ -22,6 +22,7 @@ import app.pdf_import as pdf_import
 import app.ingestion as ingestion
 import app.revisao as revisao
 import app.titular as titular
+import app.fechamento_cartao as fechamento_cartao
 import app.seguranca as seguranca
 import app.demo as demo_mod
 import app.painel as painel
@@ -555,6 +556,20 @@ async def webhook(
             resposta = await audio_gasto.confirmar(user_phone, acao)
             await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
             return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 2.35: RESPOSTA AO AJUSTE DE FECHAMENTO DO CARTÃO ("sim", "só ajuste", "não") ──
+    if fechamento_cartao.tem_pendente(user_phone):
+        acao = fechamento_cartao.interpretar_resposta(user_message)
+        if acao:
+            resposta = await asyncio.to_thread(fechamento_cartao.confirmar, user_phone, acao)
+            await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
+            return Response(content="<Response/>", media_type="text/xml")
+
+    # ── CASO 2.36: COMANDO "o Itaú fecha dia 20 em dezembro" — ajusta o fechamento de uma fatura ──
+    if fechamento_cartao.eh_comando(user_message):
+        reply = await asyncio.to_thread(fechamento_cartao.responder, user_phone, user_message)
+        await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+        return Response(content="<Response/>", media_type="text/xml")
 
     # ── CASO 2.4: COMANDO "meu nome é ..." — cadastra o nome do titular (Pix entre contas próprias) ──
     if titular.eh_comando(user_message):

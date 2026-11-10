@@ -25,12 +25,13 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-10b · cartão real no crédito, sem linhas duplicadas"
+VERSAO = "2026-11-10c · ajuste do fechamento da fatura pelo WhatsApp"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
 
 T_CONTAS, T_HIST, T_FATURAS = "finbot_contas", "finbot_saldo_historico", "finbot_faturas"
+T_AJUSTES = "finbot_cartao_ajustes"
 
 
 # ── tempo ────────────────────────────────────────────────────────────────────
@@ -108,10 +109,33 @@ def _cartoes_com_ciclos(user_phone: str, account_id: str | None = None):
             yield c, ciclos
 
 
-def cartoes_credito(user_phone: str) -> list[dict]:
-    """Cartões de crédito COM faturas guardadas: [{id, nome, ciclos}] (os sem ciclos ficam de fora)."""
+def ler_ajustes(user_phone: str, account_id: str) -> dict[date, date]:
+    """Ajustes de fechamento informados pelo usuário para o cartão: {dia 1 do mês de vencimento: data de fechamento}.
+    Falha na leitura = sem ajustes (nunca derruba o registro do gasto)."""
     try:
-        return [{"id": c["id"], "nome": c.get("nome") or "Cartão", "ciclos": ciclos}
+        res = (db.get_db().table(T_AJUSTES).select("vencimento_mes, fechamento")
+               .eq("user_key", get_lookup_prefix(user_phone)).eq("account_id", account_id).execute())
+        return {date.fromisoformat(str(r["vencimento_mes"])[:10]): date.fromisoformat(str(r["fechamento"])[:10])
+                for r in (res.data or [])}
+    except Exception as e:
+        logger.warning(f"ler_ajustes falhou: {e}")
+        return {}
+
+
+def gravar_ajuste(user_phone: str, account_id: str, mes_ref: date, fechamento: date) -> None:
+    """Um ajuste por cartão e mês de vencimento (troca o anterior)."""
+    chave = get_lookup_prefix(user_phone)
+    (db.get_db().table(T_AJUSTES).delete().eq("user_key", chave).eq("account_id", account_id)
+     .eq("vencimento_mes", mes_ref.isoformat()).execute())
+    db.get_db().table(T_AJUSTES).insert({"user_key": chave, "account_id": account_id,
+                                         "vencimento_mes": mes_ref.isoformat(), "fechamento": fechamento.isoformat()}).execute()
+
+
+def cartoes_credito(user_phone: str) -> list[dict]:
+    """Cartões de crédito COM faturas guardadas: [{id, nome, ciclos, ajustes}] (os sem ciclos ficam de fora)."""
+    try:
+        return [{"id": c["id"], "nome": c.get("nome") or "Cartão", "ciclos": ciclos,
+                 "ajustes": ler_ajustes(user_phone, c["id"])}
                 for c, ciclos in _cartoes_com_ciclos(user_phone)]
     except Exception as e:
         logger.warning(f"cartoes_credito falhou: {e}")

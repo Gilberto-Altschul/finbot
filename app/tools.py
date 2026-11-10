@@ -553,22 +553,22 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
 
                 # Fatura pelo ciclo REAL do cartão (fechamento/vencimento guardados). Sem ciclos -> regra antiga (dia de corte global).
                 cartoes = dbk.cartoes_credito(user_phone)
-                ciclos, cartao_nome = None, None
+                ciclos, cartao_nome, cartao_id, ajustes = None, None, None, None
                 if cartoes:
                     escolha = args.get("cartao") or args.get("cartao_id")
                     cartao = dbk.escolher_cartao(cartoes, escolha) if escolha else (cartoes[0] if len(cartoes) == 1 else None)
                     if cartao is None:
                         lista = "; ".join(f"{i}) {c['nome']}" for i, c in enumerate(cartoes, 1))
                         return {"erro": f"Em qual cartão foi? {lista}. Me diga o nome do cartão."}
-                    ciclos, cartao_nome = cartao["ciclos"], cartao["nome"]
-                seq = fat.ciclos_da_compra(expense_date, ciclos, n_parcelas) if ciclos else None
+                    ciclos, cartao_nome, cartao_id, ajustes = cartao["ciclos"], cartao["nome"], cartao["id"], cartao.get("ajustes")
+                seq = fat.ciclos_da_compra_ajustada(expense_date, ciclos, n_parcelas, ajustes) if ciclos else None
 
                 if n_parcelas > 1:
                     plano = parcelas(expense_date, valor, n_parcelas, dia_corte, dia_vencimento)
                     for i, p in enumerate(plano):
                         due = seq[i].vencimento if seq else datetime.strptime(p["fatura_vencimento"], "%Y-%m-%d").date()
                         p["fatura_vencimento"], p["fatura_label"] = due.isoformat(), fatura_label(due)
-                        db.save_expense_credit(user_phone, p["valor"], categoria, descricao, beneficiario, subcategoria, _credito_date(due), p["parcela"], p["total_parcelas"], purchase_date=expense_date)
+                        db.save_expense_credit(user_phone, p["valor"], categoria, descricao, beneficiario, subcategoria, _credito_date(due), p["parcela"], p["total_parcelas"], purchase_date=expense_date, account_id=cartao_id)
 
                     # Calcula o total da categoria para cada mês afetado pelas parcelas
                     detalhes = []
@@ -592,7 +592,7 @@ async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
                     }
                 else:
                     due = seq[0].vencimento if seq else fatura_vencimento(expense_date, dia_corte, dia_vencimento)
-                    db.save_expense_credit(user_phone, valor, category=categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, fatura_date=_credito_date(due), purchase_date=expense_date)
+                    db.save_expense_credit(user_phone, valor, category=categoria, description=descricao, beneficiario=beneficiario, subcategoria=subcategoria, fatura_date=_credito_date(due), purchase_date=expense_date, account_id=cartao_id)
                     return {
                         "registrado": True, 
                         "tipo": "credito", 
