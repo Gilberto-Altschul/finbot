@@ -588,8 +588,14 @@ class PluggyService:
             # é só o registro administrativo de quitação, frequentemente
             # duplicado (boleto + confirmação de recebimento pelo mesmo valor).
             desc_lower_check = descricao.lower()
-            if any(p in desc_lower_check for p in ["pagamento de fatura", "pagamento recebido", "pagto fatura", "pag fatura"]):
+            if any(p in desc_lower_check for p in ["pagamento de fatura", "pagamento recebido", "pagto fatura", "pag fatura",
+                                                   "pagamento com saldo"]):
                 logger.info(f"Ignorando pagamento de fatura (não é gasto real): {descricao}")
+                continue
+            # No cartão, um CRÉDITO que começa com "pagamento" é a quitação da fatura (Itaú: "PAGAMENTO COM SALDO",
+            # "PAGAMENTO EFETUADO"...). Não é estorno: se entrasse, abateria os gastos do mês como se fosse devolução.
+            if eh_credito and (tx.get("type") or "").upper() == "CREDIT" and desc_lower_check.startswith(("pagamento", "pagto", "pgto")):
+                logger.info(f"Ignorando crédito de pagamento de fatura no cartão: {descricao}")
                 continue
 
             moeda = tx.get("currencyCode", "BRL")
@@ -865,4 +871,4 @@ class PluggyService:
                     resumo += "\n\n" + pergunta
             except Exception as e:
                 logger.error(f"Falha ao iniciar revisão após sincronização: {e}")
-        return resumo, rows
+        return resumo, rows
