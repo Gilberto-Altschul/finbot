@@ -664,7 +664,7 @@ h1{margin:0;font-size:28px;font-weight:800;letter-spacing:-.03em}.mut{color:var(
 .lin{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.hero .r{color:#C9D6F5}.saldo{font-size:32px;font-weight:800;letter-spacing:-.03em}
 .tag{display:inline-block;padding:5px 11px;border-radius:99px;background:#16295A;color:#C9D6F5;font-size:12px}
 .cat{padding:14px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:8px}.cat:last-child{border:0}
-.barra{height:8px;border-radius:99px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;border-radius:99px;background:var(--v)}
+.barra{height:8px;border-radius:99px;background:var(--lin);overflow:hidden}.barra i{display:block;height:8px;border-radius:99px;background:var(--v)}.barra.b-est i{background:var(--coral)}.barra.b-aten i{background:var(--farol)}
 .pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700}
 .saudavel{background:#0F3A3A;color:var(--agua)}.atencao{background:#3A2A12;color:var(--farol)}.estourado{background:#3A1E26;color:var(--coral)}
 #conteudo{display:flex;flex-direction:column;gap:14px}h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.02em}
@@ -716,11 +716,11 @@ async function api(p){const r=await fetch('/painel/api/'+p,{credentials:'same-or
 const vistas={
  async resumo(){const d=await api('resumo');ti.textContent='Resumo '+d.mes.slice(5)+'/'+d.mes.slice(0,4);
   sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
-  el.className='';el.innerHTML='<div class="hero"><div class="lin"><span class="r">Receitas</span><b>'+brl(d.receitas)+'</b></div>'+
-  '<div class="lin"><span class="r">Gastos</span><b>'+brl(d.gastos)+'</b></div><div class="lin"><span class="r">Saldo do mês</span><span class="saldo">'+brl(d.saldo)+'</span></div></div>'+
+  el.className='';el.innerHTML='<div class="hero"><div class="lin"><span class="r">Receitas</span><b class="pos">'+brl(d.receitas)+'</b></div>'+
+  '<div class="lin"><span class="r">Gastos</span><b class="neg">'+brl(d.gastos)+'</b></div><div class="lin"><span class="r">Saldo do mês</span><span class="saldo '+(d.saldo<0?'neg':'pos')+'">'+brl(d.saldo)+'</span></div></div>'+
   '<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
-  (c.orcamento?'<div class="barra"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>';
+  (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>';
   el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
   if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
@@ -732,13 +732,21 @@ const vistas={
   const vs=S.map(x=>x.saldo),lo=Math.min(0,...vs),hi=Math.max(0,...vs),sp=(hi-lo)||1;
   const X=i=>P+(new Date(i).getTime()-t0)/((t1-t0)||1)*(W-2*P),Y=v=>P+(hi-v)/sp*(H-2*P-12),y0=Y(0);
   const pts=S.map(x=>X(x.data).toFixed(1)+','+Y(x.saldo).toFixed(1)).join(' ');
+  const cm=v=>(v<0?'-':'')+'R$ '+(Math.abs(v)>=1000?(Math.abs(v)/1000).toFixed(1).replace('.',',')+' mil':Math.round(Math.abs(v)));
+  let marcas='';
+  const fat=new Set(d.dias.filter(x=>x.eventos.some(e=>e.tipo==='fatura')).map(x=>x.data));
+  S.forEach(x=>{if(fat.has(x.data))marcas+='<circle cx="'+X(x.data).toFixed(1)+'" cy="'+Y(x.saldo).toFixed(1)+'" r="3" fill="#FFB45C" stroke="#081226" stroke-width="1"/>'});
+  if(hi>0&&hi>d.saldo_inicial)marcas+='<text x="'+P+'" y="'+(Y(hi)-4).toFixed(1)+'">'+cm(hi)+'</text>';
+  if(d.minimo<0||d.minimo<d.saldo_inicial){const mx=X(d.data_minimo),my=Y(d.minimo);
+   marcas+='<circle cx="'+mx.toFixed(1)+'" cy="'+my.toFixed(1)+'" r="4" fill="#FF8A7A" stroke="#081226" stroke-width="1.5"/>'+
+    '<text x="'+(mx>W*0.6?mx-7:mx+7).toFixed(1)+'" y="'+(my-14).toFixed(1)+'" text-anchor="'+(mx>W*0.6?'end':'start')+'" style="fill:#FF8A7A;font-weight:700">'+cm(d.minimo)+' · '+dm(d.data_minimo)+'</text>'}
   const graf='<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" aria-label="Saldo projetado de '+m(d.saldo_inicial)+' hoje para '+m(d.saldo_final)+' em '+dm(d.fim)+'">'+
    '<defs><clipPath id="cima"><rect x="0" y="0" width="'+W+'" height="'+y0.toFixed(1)+'"/></clipPath><clipPath id="baixo"><rect x="0" y="'+y0.toFixed(1)+'" width="'+W+'" height="'+H+'"/></clipPath></defs>'+
    '<line x1="'+P+'" x2="'+(W-P)+'" y1="'+y0.toFixed(1)+'" y2="'+y0.toFixed(1)+'" stroke="#3A5290" stroke-dasharray="3 3"/>'+
    '<polyline points="'+pts+'" fill="none" stroke="#5FE3C0" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#cima)"/>'+
    '<polyline points="'+pts+'" fill="none" stroke="#FF8A7A" stroke-width="2.5" stroke-linejoin="round" clip-path="url(#baixo)"/>'+
    '<text x="'+P+'" y="'+(H-2)+'">'+dm(d.inicio)+'</text><text x="'+(W-P)+'" y="'+(H-2)+'" text-anchor="end">'+dm(d.fim)+'</text>'+
-   '<text x="'+(W-P)+'" y="'+(y0-4).toFixed(1)+'" text-anchor="end">R$ 0</text></svg>';
+   '<text x="'+(W-P)+'" y="'+(y0-4).toFixed(1)+'" text-anchor="end">R$ 0</text>'+marcas+'</svg>';
   const soma='<div class="card soma"><h2>De onde vem o saldo de '+dm(d.fim)+'</h2>'+
    '<div class="lin"><span>Saldo hoje</span><span class="'+cl(d.saldo_inicial)+'">'+m(d.saldo_inicial)+'</span></div>'+
    '<div class="lin"><span>Entradas previstas</span><span class="pos">+'+brl(d.entradas)+'</span></div>'+
@@ -749,7 +757,7 @@ const vistas={
   const linhas=d.dias.length?d.dias.map(x=>'<div class="dia"><div class="d">'+dm(x.data)+'<small>'+sem(x.data)+'</small></div><div>'+
    x.eventos.map(e=>'<div class="ev"><div class="n"><span>'+esc(e.nome)+'</span><span class="tipo">'+(rot[e.tipo]||'')+'</span></div><b class="'+(e.valor>0?'pos':'')+'">'+(e.valor>0?'+':'-')+brl(Math.abs(e.valor))+'</b></div>').join('')+
    '<div class="sd">Saldo depois: <b class="'+cl(x.saldo)+'">'+m(x.saldo)+'</b></div></div></div>').join(''):'<p class="mut">Nenhuma entrada ou vencimento conhecido nesse período.</p>';
-  el.innerHTML=alerta+'<div class="card"><h2>Saldo projetado</h2>'+graf+'</div>'+soma+'<div class="card"><h2>Próximos movimentos</h2>'+linhas+'</div>'+
+  el.innerHTML=alerta+'<div class="card"><h2>Saldo projetado</h2>'+graf+(fat.size?'<div class="mut" style="font-size:12px;margin-top:4px"><span style="color:#FFB45C">●</span> vencimento de fatura</div>':'')+'</div>'+soma+'<div class="card"><h2>Próximos movimentos</h2>'+linhas+'</div>'+
    '<details class="card"><summary>Como calculamos</summary><p>Parte do saldo atual das contas correntes. Soma as entradas recorrentes detectadas no histórico, desconta as faturas dos cartões e as contas fixas, e aplica a média de gastos do dia a dia'+(d.ritmo_texto?' ('+esc(d.ritmo_texto)+')':' dos últimos 60 dias')+'. Compras futuras no cartão e gastos fora do padrão não entram.</p></details>'},
  async previsao(){const d=await api('previsao');ti.textContent='Previsão de '+(d.vazio?'':d.mes);sub.innerHTML='';el.className='';
   if(d.vazio){ti.textContent='Previsão do mês';el.className='card';el.innerHTML='<p class="mut">Ainda não tenho gastos suficientes neste mês para prever o fechamento.</p>';return}
@@ -904,7 +912,7 @@ function cRender(ms){const box=document.getElementById('msgs');if(!box)return;
    f.onsubmit=async e=>{e.preventDefault();const s=f.querySelector('input').value;if(!cPdf){cAviso('Anexe o PDF de novo (📎).');return}f.remove();const fd=new FormData();fd.append('arquivo',cPdf);fd.append('senha',s);await cPost('/painel/api/chat/pdf',{body:fd})};d.appendChild(f)}
   box.appendChild(d)});
  const todas=[...box.querySelectorAll('.msg,.gst')];todas.forEach((d,i)=>d.querySelectorAll('button[data-bid]').forEach(b=>b.disabled=i!==todas.length-1));
- if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt('Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio 🎙️. Aqui é o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
+ if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt('Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio. Aqui é o Flow, o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
  if(cOcupado){const d=document.createElement('div');d.className='dig';d.textContent='digitando…';box.appendChild(d)}
  if(perto||ms.length)window.scrollTo(0,document.body.scrollHeight)}
 async function cPoll(rapido){if(!cAtivo)return;clearTimeout(cTimer);
