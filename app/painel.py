@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 import secrets
 import time
 from datetime import date
@@ -249,18 +250,26 @@ def dados_resumo(user_phone: str, hoje: date | None = None) -> dict:
     """Mesmos números do `resumo` do WhatsApp, como dados: receitas, gastos, saldo e categorias com orçamento."""
     hoje = hoje or date.today()
     mes = hoje.strftime("%Y-%m")
-    gastos = db.monthly_total(user_phone, mes)
-    receitas = db.monthly_income_total(user_phone, mes)
-    orc = {_normalize(b["category"]): float(b["amount"]) for b in db.get_all_budgets(user_phone, mes)}
-    # Previstas (parcelas que o banco ainda não postou) contam como lançadas, como no Resumo do WhatsApp.
-    prev_total, prev_cat = 0.0, {}
-    try:
-        from app import dados_banco as dbk
-        prev_total, _n, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
-    except Exception:
-        pass
+    def _previstas():
+        try:
+            from app import dados_banco as dbk
+            return dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+        except Exception:
+            return 0.0, 0, {}       # Previstas (parcelas que o banco ainda não postou) contam como lançadas, como no WhatsApp
+
+    # As cinco consultas são independentes: rodam juntas (o tempo vira o da mais lenta, não a soma).
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        f_gastos = ex.submit(db.monthly_total, user_phone, mes)
+        f_receitas = ex.submit(db.monthly_income_total, user_phone, mes)
+        f_orc = ex.submit(db.get_all_budgets, user_phone, mes)
+        f_prev = ex.submit(_previstas)
+        f_cats = ex.submit(db.monthly_by_category, user_phone, mes)
+        gastos, receitas = f_gastos.result(), f_receitas.result()
+        orc = {_normalize(b["category"]): float(b["amount"]) for b in f_orc.result()}
+        prev_total, _n, prev_cat = f_prev.result()
+        linhas_cat = f_cats.result()
     por_cat = {}
-    for r in db.monthly_by_category(user_phone, mes):
+    for r in linhas_cat:
         por_cat[r["category"]] = float(r["total"])
     for c, v in prev_cat.items():
         por_cat[c] = round(por_cat.get(c, 0.0) + v, 2)
@@ -752,6 +761,7 @@ const brl=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,max
 const el=document.getElementById('conteudo'),ti=document.getElementById('titulo'),sub=document.getElementById('sub');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(p){const r=await fetch('/painel/api/'+p,{credentials:'same-origin'});if(r.status===401){location.href='/painel';throw 0}return r.json()}
+let atual=null;const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
 const vistas={
  async resumo(){const d=await api('resumo');ti.textContent='Resumo '+d.mes.slice(5)+'/'+d.mes.slice(0,4);
   sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
@@ -844,7 +854,7 @@ const vistas={
    else confirmar(card,b.dataset.c,b.dataset.s)}}
 };
 const MESES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-async function abrirCategoria(nome,semHistorico){
+async function abrirCategoria(nome,semHistorico){atual=null;
  if(!semHistorico)history.pushState({cat:nome},'','#'+encodeURIComponent(nome));
  window.scrollTo(0,0);ti.textContent=nome;sub.innerHTML='<button type="button" class="voltar" id="voltar">← Resumo</button>';
  document.getElementById('voltar').onclick=()=>history.back();
@@ -870,7 +880,10 @@ async function abrirCategoria(nome,semHistorico){
  catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
 window.addEventListener('popstate',e=>{if(e.state&&e.state.cat)abrirCategoria(e.state.cat,true);else ir('resumo')});
 async function ir(a){if(location.hash)history.replaceState(null,'',location.pathname);document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
- el.className='mut';el.textContent='Carregando…';try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
+ if(atual&&atual!=='chat'&&el.className!=='mut'&&el.childNodes.length)memo[atual]={nos:[...el.childNodes],cls:el.className,tit:ti.textContent,sub:sub.innerHTML};
+ atual=a;const m=a==='chat'?null:memo[a];
+ if(m){el.className=m.cls;el.replaceChildren(...m.nos);ti.textContent=m.tit;sub.innerHTML=m.sub}else{el.className='mut';el.textContent='Carregando…'}
+ try{await vistas[a]()}catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>ir(b.dataset.a));
 document.getElementById('sair').onclick=async()=>{await fetch('/painel/sair',{method:'POST',credentials:'same-origin'});location.href='/painel/saiu'};
 ir('resumo');
