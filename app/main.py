@@ -237,8 +237,24 @@ def _send_whatsapp_texto(to: str, body: str) -> None:
             time.sleep(0.4)
 
 
+def _com_convite_painel(user_phone: str, user_message: str, reply: str) -> str:
+    """Anexa o convite do painel à resposta do WhatsApp quando é hora (ver painel.convite). Nunca no chat do painel,
+    nunca no modo demo e nunca se a resposta deixaria de caber em UM envio (o convite não pode gerar mensagem extra)."""
+    try:
+        # 300 = folga para o convite (texto + link): se não couber no mesmo envio, nem gera o convite (fica para a próxima).
+        if canal.ativo() or not reply or demo_mod.eh_telefone_demo(user_phone) or len(reply) + 300 > WHATSAPP_MAX_CHARS:
+            return reply
+        extra = painel.convite(user_phone, user_message, lambda: len(revisao._buscar_pendentes(user_phone)))
+        if extra and len(reply) + len(extra) <= WHATSAPP_MAX_CHARS:
+            return reply + extra
+    except Exception as exc:
+        logger.warning(f"Convite do painel indisponível ({type(exc).__name__}).")
+    return reply
+
+
 async def _process(user_phone: str, user_message: str) -> None:
     reply = await agent.run(user_phone, user_message)
+    reply = await asyncio.to_thread(_com_convite_painel, user_phone, user_message, reply)
     await asyncio.to_thread(_send_whatsapp, user_phone, reply)
 
 

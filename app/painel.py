@@ -167,6 +167,60 @@ def telefone_da_sessao(sid: str | None) -> str | None:
     return item[0]
 
 
+# ── Convite para o painel nas respostas do WhatsApp ─────────────────────────
+# Vai JUNTO de uma resposta que já seria enviada (nunca cria mensagem nova) e só se couber no mesmo envio.
+# Regras: 1x por dia (convite geral) + quando a pergunta é algo que a tela mostra melhor (no máx. 1x a cada 4 h).
+# Quem usou o painel nas últimas 24 h não recebe convite. Desligar: FINFLOW_CONVITE_PAINEL=0.
+# Tudo em memória: se o app reiniciar, no pior caso sai um convite a mais naquele dia.
+_ULTIMO_USO: dict[str, float] = {}          # telefone real -> último acesso ao painel
+_CONVITES: dict[str, dict] = {}             # telefone real -> {"dia": "AAAA-MM-DD", "ctx": timestamp}
+INTERVALO_CONTEXTUAL = 4 * 3600
+_PALAVRAS_TELA = ("resumo", "fluxo", "previs", "saldo", "fatura", "categoria", "orcamento", "limite", "gastei no mes",
+                  "quanto gastei", "gastos do mes", "extrato")
+
+
+def registrar_uso(telefone_real: str) -> None:
+    _ULTIMO_USO[telefone_real] = time.time()
+    if len(_ULTIMO_USO) > MAX_REGISTROS:
+        _ULTIMO_USO.pop(next(iter(_ULTIMO_USO)))
+
+
+def _convite_ligado() -> bool:
+    return ligado() and os.environ.get("FINFLOW_CONVITE_PAINEL", "1").strip() not in ("0", "false", "nao", "não")
+
+
+def convite(telefone_real: str, pergunta: str = "", a_revisar=0, agora: float | None = None, hoje: str | None = None) -> str:
+    """`a_revisar`: número, ou função que o devolve (só é chamada quando o convite vai mesmo sair: evita consulta à toa)."""
+    """Texto para anexar ao fim de uma resposta do WhatsApp convidando para o painel, ou "" quando não é hora."""
+    if not _convite_ligado():
+        return ""
+    agora = agora or time.time()
+    if agora - _ULTIMO_USO.get(telefone_real, 0) < 86400:
+        return ""                                     # já está usando o painel (ou instalou na tela inicial)
+    hoje = hoje or date.today().isoformat()
+    est = _CONVITES.setdefault(telefone_real, {"dia": "", "ctx": 0.0})
+    p = _normalize(pergunta or "")
+    contextual = any(w in p for w in _PALAVRAS_TELA) and agora - est["ctx"] >= INTERVALO_CONTEXTUAL
+    diario = est["dia"] != hoje
+    if not (contextual or diario):
+        return ""
+    link = f"{base_url()}/painel/entrar?c={criar_codigo(telefone_real)}"
+    est["dia"], est["ctx"] = hoje, (agora if contextual else est["ctx"])
+    if len(_CONVITES) > MAX_REGISTROS:
+        _CONVITES.pop(next(iter(_CONVITES)))
+    try:
+        a_revisar = int(a_revisar() if callable(a_revisar) else a_revisar)
+    except Exception:
+        a_revisar = 0
+    if a_revisar > 1:
+        motivo = f"Você tem *{a_revisar} lançamentos para revisar*: no painel é um toque em cada."
+    elif contextual:
+        motivo = "Isso fica mais claro no painel, com gráfico e detalhe de cada categoria."
+    else:
+        motivo = "Resumo, fluxo de caixa e revisão em tela, e o chat de lá não tem limite de mensagens."
+    return f"\n\n📊 *Painel FinFlow* · {motivo}\n{link}\n_Link pessoal, vale 10 min._"
+
+
 def mensagem_link(telefone: str) -> str:
     """Resposta do comando `painel` no WhatsApp."""
     if not ligado():
@@ -260,6 +314,7 @@ def _usuario(sessao: str | None) -> tuple[str, str]:
     real = telefone_da_sessao(sessao)
     if not real:
         raise HTTPException(status_code=401, detail="sessão expirada")
+    registrar_uso(real)
     return real, demo.efetivo(real)
 
 
