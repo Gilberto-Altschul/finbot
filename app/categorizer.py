@@ -259,6 +259,13 @@ async def categorizar_gasto_hibrido(
         logger.info(f"Camada 0.9 (Intermediador de pagamento) — sem loja identificável: '{descricao}' -> A classificar")
         return A_CLASSIFICAR
 
+    # Camada 0.95: tributos e concessionárias que o texto do boleto já entrega (o boleto não diz "IPTU", mas diz "PREF MUN").
+    # Sem isso, o modelo respondia "Moradia > Contas" e o gasto ia parar em Celular.
+    if re.search(r"\b(iptu|prefeitura|pref\s*mun\w*)\b", desc_norm):
+        return "Impostos", "IPTU"
+    if re.search(r"\b(enel|sabesp|comgas|naturgy|cpfl|elektro|energisa|cemig|copel|equatorial)\b", desc_norm):
+        return "Moradia", "Energia, Água e Gás"
+
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
     # Se além da categoria já existe uma subcategoria-dica de uma resolução
     # anterior EXATA desse mesmo merchant, usa ela direto — evita chamar
@@ -304,8 +311,8 @@ async def categorizar_gasto_hibrido(
     # Camada 2.5: Sugestão da extração inicial (PDF/Gemini) — só é confiável se a
     # subcategoria sugerida REALMENTE existir na taxonomia oficial (o extrator de
     # PDF usa texto livre para subcategoria, então pode sugerir algo inventado).
-    if fallback and traduzir(*fallback) != A_CLASSIFICAR:
-        fb_categoria, fb_subcategoria = traduzir(*fallback)
+    if fallback and traduzir(*fallback, desc_norm) != A_CLASSIFICAR:
+        fb_categoria, fb_subcategoria = traduzir(*fallback, desc_norm)
         if (not categoria_conhecida or fb_categoria == categoria_conhecida) and db.get_subcategory_id_by_name(fb_subcategoria):
             logger.info(f"Camada 2.5 (PDF Fallback, validado) utilizada: {descricao} -> {fb_categoria}/{fb_subcategoria}")
             return fb_categoria, fb_subcategoria
@@ -344,7 +351,7 @@ async def categorizar_gasto_hibrido(
             content = match.group(0)
 
         data = json.loads(content)
-        cat, sub = traduzir(categoria_conhecida or data.get("categoria"), data.get("subcategoria"))   # só nome da taxonomia v2
+        cat, sub = traduzir(categoria_conhecida or data.get("categoria"), data.get("subcategoria"), desc_norm)   # só nome da taxonomia v2
         if categoria_conhecida and cat != categoria_conhecida:
             cat, sub = A_CLASSIFICAR
 

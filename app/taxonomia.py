@@ -1,6 +1,7 @@
 # app/taxonomia.py
 # Taxonomia v2 (fonte única no código). A fonte da verdade dos dados é o banco (finbot_categories / finbot_subcategories);
 # aqui ficam só a lista de nomes válidos, atalhos de palavras para categoria e a tradução dos nomes antigos.
+import re
 import unicodedata
 
 A_CLASSIFICAR = ("Outros", "A classificar")
@@ -120,7 +121,6 @@ LEGADO = {
     ('Moradia', 'Casa'): ('Moradia', 'Reforma e Manutenção'),
     ('Moradia', 'Celular'): ('Moradia', 'Celular'),
     ('Moradia', 'Condomínio'): ('Moradia', 'Condomínio'),
-    ('Moradia', 'Contas'): ('Moradia', 'Celular'),
     ('Moradia', 'Faxina'): ('Moradia', 'Faxina e Serviços Domésticos'),
     ('Moradia', 'Reforma e Manutenção'): ('Moradia', 'Reforma e Manutenção'),
     ('Moradia', 'Utensílios'): ('Moradia', 'Móveis e Utensílios'),
@@ -199,9 +199,30 @@ def _norm(t: str) -> str:
     t = unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode()
     return " ".join(t.lower().split())
 
-def traduzir(categoria: str | None, subcategoria: str | None) -> tuple[str, str]:
-    """Qualquer par (novo ou antigo) -> par válido na taxonomia v2. Sem tradução, "Outros > A classificar"."""
+_TRIBUTO = re.compile(r"\b(iptu|prefeitura|pref\s*mun\w*|tributo\w*|imposto\w*)\b")
+_CELULAR = re.compile(r"\b(celular|telefon\w*|vivo|claro|tim|oi)\b")
+_NET = re.compile(r"\b(internet|fibra|net\s*virtua|tv\s*a\s*cabo)\b")
+
+
+def _conta_generica(texto_norm: str | None) -> tuple[str, str]:
+    """"Moradia > Contas" é genérico (boleto de casa). NUNCA vira Celular só por ser "conta": decide pelo texto.
+    Sem texto, ou sem pista, assume o que o nome antigo queria dizer: luz, água e gás."""
+    t = texto_norm or ""
+    if _TRIBUTO.search(t):
+        return 'Impostos', 'IPTU'
+    if _CELULAR.search(t):
+        return 'Moradia', 'Celular'
+    if _NET.search(t):
+        return 'Moradia', 'Internet e TV'
+    return 'Moradia', 'Energia, Água e Gás'
+
+
+def traduzir(categoria: str | None, subcategoria: str | None, texto_norm: str | None = None) -> tuple[str, str]:
+    """Qualquer par (novo ou antigo) -> par válido na taxonomia v2. Sem tradução, "Outros > A classificar".
+    `texto_norm` (descrição normalizada, opcional) desambigua o antigo "Moradia > Contas"."""
     par = (categoria or "", subcategoria or "")
+    if par == ('Moradia', 'Contas'):
+        return _conta_generica(texto_norm)
     if par in VALIDAS:
         return par
     if par in LEGADO:
