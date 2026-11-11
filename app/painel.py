@@ -371,12 +371,15 @@ def _abrir_sessao(telefone: str) -> RedirectResponse:
 
 
 @router.get("/painel/entrar")
-def entrar(request: Request, c: str = ""):
+def entrar(request: Request, c: str = "", finflow_sessao: str | None = Cookie(default=None)):
     """Navegação de pessoa: entra DIRETO (sem a tela intermediária). Pré-visualização do WhatsApp, verificadores de link e
     qualquer pedido sem os cabeçalhos de navegação recebem só a tela com botão: o código NÃO é gasto no GET deles."""
     if not ligado():
         raise HTTPException(status_code=503, detail="painel indisponível")
     agente = (request.headers.get("user-agent") or "")[:80]
+    if _navegacao_de_pessoa(request) and telefone_da_sessao(finflow_sessao):
+        logger.info("Painel: link aberto com sessão ainda válida; indo direto ao painel.")
+        return RedirectResponse("/painel", status_code=303, headers={"Cache-Control": "no-store"})   # o link pode ter sido usado antes: não importa
     if not codigo_valido(c):
         logger.info(f"Painel: link inválido, vencido ou já usado (agente: {agente}).")
         return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
