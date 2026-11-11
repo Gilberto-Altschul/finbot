@@ -8,7 +8,10 @@ guardado é mostrado com um aviso.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
 
 import app.database as db
@@ -25,7 +28,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-11g · link usado com sessão válida vai direto"
+VERSAO = "2026-11-11h · fluxo e previsão mais rápidos"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -69,6 +72,10 @@ def ordenar(contas: list[dict]) -> list[dict]:
 
 
 def ler_contas(user_phone: str) -> list[dict]:
+    return list(_memo(("contas", user_phone), lambda: _ler_contas_bd(user_phone)))
+
+
+def _ler_contas_bd(user_phone: str) -> list[dict]:
     res = db.get_db().table(T_CONTAS).select("*").eq("user_key", get_lookup_prefix(user_phone)).execute()
     return ordenar([{"id": r["account_id"], "item_id": r.get("item_id"), "tipo": r["tipo"],
                      "nome": r.get("apelido") or r.get("nome"), "nome_auto": r.get("nome"), "apelido": r.get("apelido"),
@@ -78,6 +85,10 @@ def ler_contas(user_phone: str) -> list[dict]:
 
 
 def ler_faturas(user_phone: str, account_id: str) -> list[tuple[fat.Ciclo, str]]:
+    return list(_memo(("faturas", user_phone, account_id), lambda: _ler_faturas_bd(user_phone, account_id)))
+
+
+def _ler_faturas_bd(user_phone: str, account_id: str) -> list[tuple[fat.Ciclo, str]]:
     """[(Ciclo, status)] do mais antigo ao mais novo, a partir do que está guardado."""
     res = (db.get_db().table(T_FATURAS).select("*")
            .eq("user_key", get_lookup_prefix(user_phone)).eq("account_id", account_id).execute())
@@ -100,6 +111,47 @@ def nomes_cartoes(user_phone: str) -> list[str]:
         return []
 
 
+# ── leituras sem repetição ──────────────────────────────────────────────────
+# Fluxo e Previsão repetiam as mesmas consultas (contas, faturas, ajustes, parcelas, gastos do mês) para cada cartão e cada mês.
+# Dentro de `consulta_unica()` a mesma leitura só vai ao banco uma vez; `_paralelo` roda as independentes juntas.
+# Só vale durante UMA chamada (nada fica guardado entre pedidos, então não há dado velho).
+_MEMO: contextvars.ContextVar = contextvars.ContextVar("dados_banco_memo", default=None)
+
+
+@contextmanager
+def consulta_unica():
+    if _MEMO.get() is not None:
+        yield
+        return
+    token = _MEMO.set({})
+    try:
+        yield
+    finally:
+        _MEMO.reset(token)
+
+
+def _memo(chave, fn):
+    m = _MEMO.get()
+    if m is None:
+        return fn()
+    if chave not in m:
+        m[chave] = fn()
+    return m[chave]
+
+
+def _paralelo(*chamadas):
+    """Executa leituras independentes ao mesmo tempo (compartilhando o memo) e devolve os resultados na mesma ordem."""
+    if len(chamadas) == 1:
+        return [chamadas[0]()]
+    with ThreadPoolExecutor(max_workers=len(chamadas)) as ex:
+        futuros = [ex.submit(contextvars.copy_context().run, f) for f in chamadas]
+        return [f.result() for f in futuros]
+
+
+def _parcelas_ativas(user_phone: str) -> list[dict]:
+    return list(_memo(("parcelas", user_phone), lambda: db.get_active_installments(user_phone)))
+
+
 def _cartoes_com_ciclos(user_phone: str, account_id: str | None = None):
     for c in ler_contas(user_phone):
         if c["tipo"] != "CREDIT" or (account_id and c["id"] != account_id):
@@ -110,6 +162,10 @@ def _cartoes_com_ciclos(user_phone: str, account_id: str | None = None):
 
 
 def ler_ajustes(user_phone: str, account_id: str) -> dict[date, date]:
+    return dict(_memo(("ajustes", user_phone, account_id), lambda: _ler_ajustes_bd(user_phone, account_id)))
+
+
+def _ler_ajustes_bd(user_phone: str, account_id: str) -> dict[date, date]:
     """Ajustes de fechamento informados pelo usuário para o cartão: {dia 1 do mês de vencimento: data de fechamento}.
     Falha na leitura = sem ajustes (nunca derruba o registro do gasto)."""
     try:
@@ -396,6 +452,10 @@ async def sincronizar_todas(pluggy, user_phone: str, contas: list[dict]) -> str:
 
 # ── fatura por cartão ────────────────────────────────────────────────────────
 def _gastos_da_fatura(user_phone: str, due: date) -> list[dict]:
+    return list(_memo(("gastos", user_phone, due.year, due.month), lambda: __gastos_da_fatura_bd(user_phone, due)))
+
+
+def __gastos_da_fatura_bd(user_phone: str, due: date) -> list[dict]:
     ini = date(due.year, due.month, 1).isoformat()
     fim = date(due.year, due.month, monthrange(due.year, due.month)[1]).isoformat()
     res = (db.get_db().table("finbot_expenses")
@@ -406,6 +466,10 @@ def _gastos_da_fatura(user_phone: str, due: date) -> list[dict]:
 
 
 def _creditos_da_fatura(user_phone: str, due: date) -> list[dict]:
+    return list(_memo(("creditos", user_phone, due.year, due.month), lambda: __creditos_da_fatura_bd(user_phone, due)))
+
+
+def __creditos_da_fatura_bd(user_phone: str, due: date) -> list[dict]:
     """Créditos no cartão (estornos, 'Inclusão de Pagamento'...) que o banco abate da fatura."""
     ini = date(due.year, due.month, 1).isoformat()
     fim = date(due.year, due.month, monthrange(due.year, due.month)[1]).isoformat()
@@ -525,7 +589,7 @@ async def mensagem_fatura_cartoes(pluggy_factory, user_phone: str, due: date,
         previstas = None
         if total_banco is None or fecha_em:   # fatura ainda aberta/futura: as parcelas que o banco ainda não lançou entram como previsão
             try:
-                meus = [x for x in db.get_active_installments(user_phone) if x.get("account_id") == c["id"]]
+                meus = [x for x in _parcelas_ativas(user_phone) if x.get("account_id") == c["id"]]
                 mes_c = date(due_c.year, due_c.month, 1)
                 tot_p, n_p = parcelas_proj.previstas_do_mes(meus, mes_c, hoje_local())
                 previstas = (tot_p, n_p, parcelas_proj.previstas_detalhe(meus, mes_c, hoje_local()),
@@ -643,11 +707,18 @@ def _faturas_projetadas(user_phone: str, quantos: int = 6) -> dict[date, list[di
     hoje = hoje_local()
     cartoes = [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]
     try:
-        parcelas = db.get_active_installments(user_phone)
+        parcelas = _parcelas_ativas(user_phone)
     except Exception as e:
         logger.warning(f"Parcelas indisponíveis para a previsão: {e}")
         parcelas = []
     por_mes: dict[date, list[dict]] = {}
+    base0 = date(hoje.year, hoje.month, 1)
+    meses = [parcelas_proj._soma_meses(base0, i) for i in range(quantos + 1)]
+    if cartoes and _MEMO.get() is not None:      # busca de uma vez o que o laço usa (gastos e créditos de cada mês, faturas de cada cartão)
+        _paralelo(*([lambda m=m: _gastos_da_fatura(user_phone, m) for m in meses] +
+                    [lambda m=m: _creditos_da_fatura(user_phone, m) for m in meses] +
+                    [lambda c=c: ler_faturas(user_phone, c["id"]) for c in cartoes] +
+                    [lambda c=c: ler_ajustes(user_phone, c["id"]) for c in cartoes]))
     for c in cartoes:
         ciclos = [ci for ci, _ in ler_faturas(user_phone, c["id"])]
         meus = [x for x in parcelas if x.get("account_id") == c["id"]]
@@ -675,7 +746,7 @@ def parcelas_previstas_do_mes(user_phone: str, mes: date) -> tuple[float, int, d
     hoje = hoje_local()
     total, qtd, por_cat = 0.0, 0, {}
     try:
-        parcelas = db.get_active_installments(user_phone)
+        parcelas = _parcelas_ativas(user_phone)
         for c in [c for c in ler_contas(user_phone) if c["tipo"] == "CREDIT"]:
             ci = next((k for k, _ in ler_faturas(user_phone, c["id"])
                        if (k.vencimento.year, k.vencimento.month) == (mes.year, mes.month)), None)
@@ -738,17 +809,20 @@ def fluxo_projecao(user_phone: str, dias: int = 30) -> dict | None:
     """Projeção do saldo das contas correntes dia a dia (None se não há conta corrente com saldo): faturas a vencer,
     contas fixas, entradas recorrentes e o ritmo dos gastos do dia a dia."""
     hoje = hoje_local()
-    contas = [c for c in ler_contas(user_phone) if c["tipo"] == "BANK" and c.get("saldo") is not None]
+    with consulta_unica():
+        todas, faturas_proj, receitas, despesas = _paralelo(      # independentes: rodam juntas
+            lambda: ler_contas(user_phone), lambda: _faturas_projetadas(user_phone, 3 + dias // 30),
+            lambda: _receitas_recentes(user_phone, hoje), lambda: _despesas_conta_recentes(user_phone, hoje))
+    contas = [c for c in todas if c["tipo"] == "BANK" and c.get("saldo") is not None]
     if not contas:
         return None
     eventos: list[fluxo_mod.Evento] = []
-    for itens in _faturas_projetadas(user_phone, 3 + dias // 30).values():
+    for itens in faturas_proj.values():
         for c in itens:
             total = c["banco"] if c.get("banco") is not None else round(c["lancado"] + c["previsto"], 2)
             if total > 0:
                 eventos.append(fluxo_mod.Evento(c["vence"], f"{c['nome']} (fatura)", -total))
-    eventos += fluxo_mod.entradas_recorrentes(_receitas_recentes(user_phone, hoje), hoje, dias)
-    despesas = _despesas_conta_recentes(user_phone, hoje)
+    eventos += fluxo_mod.entradas_recorrentes(receitas, hoje, dias)
     fixas, chaves_fixas = fluxo_mod.saidas_recorrentes(despesas, hoje, dias)
     eventos += fixas
     ritmo = fluxo_mod.ritmo_projecao(despesas, chaves_fixas, hoje)   # média, ou ajustada por dia da semana/parte do mês
@@ -769,19 +843,25 @@ def previsao_dados(user_phone: str):
     mes_ref = hoje.strftime("%Y-%m")
     fim_mes = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
     restam = (fim_mes - hoje).days
-    realizado = {r["category"]: r["total"] for r in db.monthly_by_category(user_phone, mes_ref)}
+    with consulta_unica():
+        linhas_mes, previstas, despesas, orcs, resumo_ant = _paralelo(     # independentes: rodam juntas
+            lambda: db.monthly_by_category(user_phone, mes_ref),
+            lambda: parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1)),
+            lambda: _despesas_conta_recentes(user_phone, hoje),
+            lambda: db.get_all_budgets(user_phone, mes_ref),
+            lambda: db.get_resumo_mes_anterior(user_phone))
+    realizado = {r["category"]: r["total"] for r in linhas_mes}
     # Parcelas que o banco ainda não postou contam como já lançadas (inclusive de cartão com vencimento já passado).
-    _tot_prev, _n_prev, prev_cat = parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+    _tot_prev, _n_prev, prev_cat = previstas
     for cat, v in prev_cat.items():
         realizado[cat] = round(realizado.get(cat, 0.0) + v, 2)
-    despesas = _despesas_conta_recentes(user_phone, hoje)
     fixas, chaves = fluxo_mod.saidas_recorrentes(despesas, hoje, restam)
     restante = {c: v * restam for c, v in previsao_mod.ritmo_por_categoria(despesas, chaves, hoje).items()}
     for e in fixas:
         cat = previsao_mod.categoria_da_conta_fixa(despesas, e.descricao)
         restante[cat] = restante.get(cat, 0.0) + abs(e.valor)
-    limites = {b["category"]: b["amount"] for b in db.get_all_budgets(user_phone, mes_ref)}
-    anterior = db.get_resumo_mes_anterior(user_phone).get("gastos") or None
+    limites = {b["category"]: b["amount"] for b in orcs}
+    anterior = resumo_ant.get("gastos") or None
     return previsao_mod.montar(realizado, restante, limites), hoje, fim_mes, anterior
 
 
