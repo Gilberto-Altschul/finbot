@@ -237,6 +237,31 @@ def _send_whatsapp_texto(to: str, body: str) -> None:
             time.sleep(0.4)
 
 
+# Botão "Acesso" (modelo Twilio "call to action": corpo curto + botão URL .../painel/entrar?c={{1}}).
+# FINFLOW_ACESSO_SID troca o modelo; "0" desliga o botão (volta ao link em texto).
+ACESSO_SID_PADRAO = "HX63942d935d54f021631033d309e1c008"
+
+
+def _acesso_sid() -> str:
+    v = os.environ.get("FINFLOW_ACESSO_SID", ACESSO_SID_PADRAO).strip()
+    return "" if v in ("", "0") else v
+
+
+def _enviar_acesso_painel(real_phone: str, codigo: str | None = None) -> bool:
+    """Manda o botão "Acesso" (uma mensagem). False se o botão está desligado ou falhou: quem chamou usa o link em texto."""
+    sid = _acesso_sid()
+    if not sid or not painel.ligado() or canal.ativo() or demo_mod.eh_telefone_demo(real_phone):
+        return False
+    try:
+        codigo = codigo or painel.criar_codigo(real_phone)
+        _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(real_phone),
+                                content_sid=sid, content_variables=json.dumps({"1": codigo}))
+        return True
+    except Exception as exc:
+        logger.warning(f"Botão Acesso do painel falhou ({type(exc).__name__}); usando link em texto.")
+        return False
+
+
 def _com_convite_painel(user_phone: str, user_message: str, reply: str) -> str:
     """Anexa o convite do painel à resposta do WhatsApp quando é hora (ver painel.convite). Nunca no chat do painel,
     nunca no modo demo e nunca se a resposta deixaria de caber em UM envio (o convite não pode gerar mensagem extra)."""
@@ -244,6 +269,8 @@ def _com_convite_painel(user_phone: str, user_message: str, reply: str) -> str:
         # 300 = folga para o convite (texto + link): se não couber no mesmo envio, nem gera o convite (fica para a próxima).
         if canal.ativo() or not reply or demo_mod.eh_telefone_demo(user_phone) or len(reply) + 300 > WHATSAPP_MAX_CHARS:
             return reply
+        if _acesso_sid():
+            return reply          # com o botão, o convite sai depois da resposta (ver _process), sem URL no texto
         extra = painel.convite(user_phone, user_message, lambda: len(revisao._buscar_pendentes(user_phone)))
         if extra and len(reply) + len(extra) <= WHATSAPP_MAX_CHARS:
             return reply + extra
@@ -256,6 +283,19 @@ async def _process(user_phone: str, user_message: str) -> None:
     reply = await agent.run(user_phone, user_message)
     reply = await asyncio.to_thread(_com_convite_painel, user_phone, user_message, reply)
     await asyncio.to_thread(_send_whatsapp, user_phone, reply)
+    await asyncio.to_thread(_convite_botao_depois, user_phone, user_message)
+
+
+def _convite_botao_depois(user_phone: str, user_message: str) -> None:
+    """Convite como botão "Acesso" logo após a resposta (1x/dia, ou quando a pergunta pede tela). Falha nunca atrapalha a resposta."""
+    try:
+        if not _acesso_sid() or canal.ativo() or demo_mod.eh_telefone_demo(user_phone):
+            return
+        codigo = painel.convite_botao(user_phone, user_message)
+        if codigo:
+            _enviar_acesso_painel(user_phone, codigo)
+    except Exception as exc:
+        logger.warning(f"Convite do painel (botão) indisponível ({type(exc).__name__}).")
 
 
 # ── Áudio: confirmação em um toque (quick-reply) ─────────────────────────────
@@ -654,7 +694,8 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
 
     # ── CASO 2.45: COMANDO "painel" — manda o link de uso único do painel web ──
     if painel.eh_comando(user_message):
-        await asyncio.to_thread(_send_whatsapp, real_phone, painel.mensagem_link(real_phone))
+        if not await asyncio.to_thread(_enviar_acesso_painel, real_phone):
+            await asyncio.to_thread(_send_whatsapp, real_phone, painel.mensagem_link(real_phone))
         return
 
     # ── CASO 2.5: COMANDO "revisar" — retoma a fila de pendentes quando o usuário quiser ──

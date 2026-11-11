@@ -189,25 +189,39 @@ def _convite_ligado() -> bool:
     return ligado() and os.environ.get("FINFLOW_CONVITE_PAINEL", "1").strip() not in ("0", "false", "nao", "não")
 
 
-def convite(telefone_real: str, pergunta: str = "", a_revisar=0, agora: float | None = None, hoje: str | None = None) -> str:
-    """`a_revisar`: número, ou função que o devolve (só é chamada quando o convite vai mesmo sair: evita consulta à toa)."""
-    """Texto para anexar ao fim de uma resposta do WhatsApp convidando para o painel, ou "" quando não é hora."""
+def _convite_devido(telefone_real: str, pergunta: str, agora: float | None, hoje: str | None) -> tuple[bool, bool]:
+    """(devido, contextual). Se devido, JÁ registra que o convite saiu (1x por dia / 1x a cada 4 h no contextual)."""
     if not _convite_ligado():
-        return ""
+        return False, False
     agora = agora or time.time()
     if agora - _ULTIMO_USO.get(telefone_real, 0) < 86400:
-        return ""                                     # já está usando o painel (ou instalou na tela inicial)
+        return False, False                           # já está usando o painel (ou instalou na tela inicial)
     hoje = hoje or date.today().isoformat()
     est = _CONVITES.setdefault(telefone_real, {"dia": "", "ctx": 0.0})
     p = _normalize(pergunta or "")
     contextual = any(w in p for w in _PALAVRAS_TELA) and agora - est["ctx"] >= INTERVALO_CONTEXTUAL
     diario = est["dia"] != hoje
     if not (contextual or diario):
-        return ""
-    link = f"{base_url()}/painel/entrar?c={criar_codigo(telefone_real)}"
+        return False, False
     est["dia"], est["ctx"] = hoje, (agora if contextual else est["ctx"])
     if len(_CONVITES) > MAX_REGISTROS:
         _CONVITES.pop(next(iter(_CONVITES)))
+    return True, contextual
+
+
+def convite_botao(telefone_real: str, pergunta: str = "", agora: float | None = None, hoje: str | None = None) -> str | None:
+    """Convite como BOTÃO "Acesso" (modelo da Twilio): devolve o código de uso único para a variável do botão, ou None se não é hora."""
+    devido, _ = _convite_devido(telefone_real, pergunta, agora, hoje)
+    return criar_codigo(telefone_real) if devido else None
+
+
+def convite(telefone_real: str, pergunta: str = "", a_revisar=0, agora: float | None = None, hoje: str | None = None) -> str:
+    """Texto para anexar ao fim de uma resposta do WhatsApp convidando para o painel, ou "" quando não é hora.
+    `a_revisar`: número, ou função que o devolve (só é chamada quando o convite vai mesmo sair: evita consulta à toa)."""
+    devido, contextual = _convite_devido(telefone_real, pergunta, agora, hoje)
+    if not devido:
+        return ""
+    link = f"{base_url()}/painel/entrar?c={criar_codigo(telefone_real)}"
     try:
         a_revisar = int(a_revisar() if callable(a_revisar) else a_revisar)
     except Exception:
@@ -323,16 +337,45 @@ def _json(dados: dict) -> JSONResponse:
 
 
 # ── rotas ────────────────────────────────────────────────────────────────────
+_ROBOS = re.compile(r"whatsapp|facebookexternalhit|facebot|twitterbot|telegram|slack|discord|linkedin|skype|preview|"
+                    r"bot\b|crawl|spider|curl|wget|python|okhttp|java/|go-http|headless|lighthouse", re.I)
+
+
+def _navegacao_de_pessoa(request: Request) -> bool:
+    """O GET veio de alguém ABRINDO a página (navegação de verdade) e não de pré-visualização/verificador de link?
+    Navegadores atuais mandam Sec-Fetch-Dest: document + Sec-Fetch-Mode: navigate; pré-visualizadores (WhatsApp etc.) e
+    verificadores não mandam. Na dúvida devolve False: aí vale a tela com botão (que gasta o código só no clique)."""
+    h = request.headers
+    if (h.get("sec-fetch-dest") or "").lower() != "document" or (h.get("sec-fetch-mode") or "").lower() != "navigate":
+        return False
+    if (h.get("purpose") or h.get("sec-purpose") or "").lower().startswith("prefetch") or "prefetch" in (h.get("x-moz") or ""):
+        return False
+    return not _ROBOS.search(h.get("user-agent") or "")
+
+
+def _abrir_sessao(telefone: str) -> RedirectResponse:
+    resp = RedirectResponse("/painel", status_code=303)
+    resp.set_cookie(COOKIE, criar_cookie_sessao(telefone), max_age=validade_cookie(), httponly=True, samesite="lax",
+                    secure=base_url().startswith("https://"), path="/")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @router.get("/painel/entrar")
 def entrar(request: Request, c: str = ""):
-    """Só mostra o botão: o código NÃO é gasto aqui. Quem gasta é o POST (clique da pessoa), para que a
-    pré-visualização do WhatsApp, verificadores de link e navegadores que carregam a página antes não queimem o link."""
+    """Navegação de pessoa: entra DIRETO (sem a tela intermediária). Pré-visualização do WhatsApp, verificadores de link e
+    qualquer pedido sem os cabeçalhos de navegação recebem só a tela com botão: o código NÃO é gasto no GET deles."""
     if not ligado():
         raise HTTPException(status_code=503, detail="painel indisponível")
     agente = (request.headers.get("user-agent") or "")[:80]
     if not codigo_valido(c):
         logger.info(f"Painel: link inválido, vencido ou já usado (agente: {agente}).")
         return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
+    if _navegacao_de_pessoa(request):
+        telefone = consumir_codigo(c)
+        if telefone:
+            logger.info("Painel: sessão aberta direto pelo link.")
+            return _abrir_sessao(telefone)
     logger.info(f"Painel: página de entrada aberta (agente: {agente}).")
     return HTMLResponse(_PAGINA_ENTRAR.replace("__CODIGO__", html.escape(c, quote=True)),
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
@@ -347,11 +390,7 @@ def entrar_confirmar(c: str = Form(default="")):
         logger.info("Painel: clique em link inválido, vencido ou já usado.")
         return HTMLResponse(_PAGINA_EXPIRADA, status_code=410, headers={"Cache-Control": "no-store"})
     logger.info("Painel: sessão aberta.")
-    resp = RedirectResponse("/painel", status_code=303)
-    resp.set_cookie(COOKIE, criar_cookie_sessao(telefone), max_age=validade_cookie(), httponly=True, samesite="lax",
-                    secure=base_url().startswith("https://"), path="/")
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
+    return _abrir_sessao(telefone)
 
 
 @router.get("/painel", response_class=HTMLResponse)
