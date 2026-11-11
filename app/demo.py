@@ -97,6 +97,9 @@ def comando(texto: str | None) -> str | None:
     t = _normalize(texto or "").strip(" .!")
     if t in ("modo demo", "modo demonstracao", "ativar demo", "ligar demo", "demo"):
         return "ativar"
+    if t in ("modo demo meus gastos", "demo meus gastos", "demo com meus gastos", "demo real", "modo demo real",
+             "modo demo com meus gastos", "demo meus dados"):
+        return "ativar_real"
     if t in ("sair do demo", "sair demo", "sair do modo demo", "desligar demo", "modo real", "sair da demo"):
         return "sair"
     if t in ("limpar demo", "apagar demo", "resetar demo"):
@@ -115,6 +118,13 @@ def executar(real: str, cmd: str) -> str:
                     "não são tocados nem misturados.\n\nExperimente: *saldos*, *resumo*, *fatura*, *faturas futuras*, "
                     "*fluxo*, *previsão do mês*, *parcelamentos*.\n\nPara voltar: *sair do demo*. Para apagar os dados "
                     "fictícios: *limpar demo*." % DURACAO_H)
+        if cmd == "ativar_real":
+            demo = telefone_demo(real)
+            n = gerar(demo, reais=ler_gastos_reais(real))["lancamentos"]
+            ativar(real)
+            return ("🎭 *Modo demonstração ligado* (por %dh) com a *estrutura dos seus gastos* (%d lançamentos dos últimos meses).\n\n"
+                    "As *receitas são fictícias* e ajustadas para ficarem compatíveis com os gastos; nomes de pessoas em Pix "
+                    "são ocultados. Nada do banco real é tocado.\n\nPara voltar: *sair do demo*." % (DURACAO_H, n))
         if cmd == "sair":
             desativar(real)
             limpar(telefone_demo(real))   # não deixa dado fictício parado no banco
@@ -166,8 +176,10 @@ def _fatura_do(cartao: dict, d: date) -> tuple[date, date, date]:
     return base, date(base.year, base.month, cartao["fecha"]), date(base.year, base.month, cartao["vence"])
 
 
-def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
-    """Constrói (sem gravar) lançamentos, contas e faturas fictícios, sempre relativos a `hoje`."""
+def montar_linhas(demo: str, hoje: date, seed: int = 7, reais: list[dict] | None = None) -> dict:
+    """Constrói (sem gravar) lançamentos, contas e faturas fictícios, sempre relativos a `hoje`.
+    `reais`: gastos reais do usuário (ver ler_gastos_reais). Com eles, os gastos são os reais (nomes de pessoas ocultados,
+    contas trocadas pelas fictícias) e SÓ as receitas são sintéticas, dimensionadas para cobrir os gastos com folga."""
     rng = random.Random(seed)
     lin: list[dict] = []
     n = [0]
@@ -197,9 +209,13 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
 
     inicio = _soma_meses(date(hoje.year, hoje.month, 1), -(MESES_HISTORICO - 1))
     c1, c2 = CARTOES
+    salario_real = _salario_para(reais, hoje) if reais is not None else 0.0
     for k in range(MESES_HISTORICO):
         m0 = _soma_meses(inicio, k)
         D = lambda dia: date(m0.year, m0.month, min(dia, monthrange(m0.year, m0.month)[1]))  # noqa: E731
+        if reais is not None:
+            debito("Salario Empresa Demo Ltda", salario_real, "Receitas", "Salário e Pró-labore", D(DIA_SALARIO), tipo="income")
+            continue
         # entradas e contas fixas (conta corrente)
         debito("Salario Empresa Demo Ltda", 11500.00, "Receitas", "Salário e Pró-labore", D(5), tipo="income")
         if k == 2:
@@ -245,11 +261,14 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
             valor = parcela_valor + (primeira_extra if p == 1 else 0.0)
             cartao(c, desc, valor, cat, sub, d, parcela=(p, total_parcelas))
 
-    parcelado(c1, "Magazine Demo Notebook", 12, 350.00, "Trabalho e Negócio", "Ferramentas e Software", 3, 14)
-    parcelado(c1, "Amazon Mktplc Fone Demo", 3, 125.92, "Outros", "Compras Online", 2, 25, primeira_extra=0.01)
-    parcelado(c1, "Loja Viagem Demo", 6, 289.90, "Viagens", "Passagens", 1, 9)
-    parcelado(c2, "Eletro Demo Geladeira", 10, 459.90, "Moradia", "Móveis e Utensílios", 5, 6)
-    parcelado(c2, "Joalheria Demo", 4, 212.50, "Presentes e Doações", "Presentes", 2, 11)
+    if reais is not None:
+        _linhas_reais(reais, base, lin, c1, c2, hoje)
+    else:
+      parcelado(c1, "Magazine Demo Notebook", 12, 350.00, "Trabalho e Negócio", "Ferramentas e Software", 3, 14)
+      parcelado(c1, "Amazon Mktplc Fone Demo", 3, 125.92, "Outros", "Compras Online", 2, 25, primeira_extra=0.01)
+      parcelado(c1, "Loja Viagem Demo", 6, 289.90, "Viagens", "Passagens", 1, 9)
+      parcelado(c2, "Eletro Demo Geladeira", 10, 459.90, "Moradia", "Móveis e Utensílios", 5, 6)
+      parcelado(c2, "Joalheria Demo", 4, 212.50, "Presentes e Doações", "Presentes", 2, 11)
 
     # faturas dos cartões: cada ciclo fechado soma suas linhas; pagamento na conta nos ciclos já vencidos
     faturas, contas = [], []
@@ -290,19 +309,101 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7) -> dict:
                        "sincronizado_em": agora})
     contas.insert(0, {"user_key": chave, "account_id": CONTA["id"], "item_id": ITEM, "tipo": "BANK", "nome": CONTA["nome"],
                       "banco_nome": "Banco Demo",
-                      "saldo": _saldo_conta(hoje, faturas_a_pagar), "credit_limit": None, "available_limit": None,
+                      "saldo": _saldo_conta(hoje, faturas_a_pagar, fixas=reais is None), "credit_limit": None, "available_limit": None,
                       "atualizado_banco": agora, "sincronizado_em": agora})
     return {"lancamentos": lin, "contas": contas, "faturas": faturas}
 
 
-def _saldo_conta(hoje: date, faturas_a_pagar: list[tuple[date, float]]) -> float:
+# ── demo com os gastos reais (receitas fictícias) ──────────────────────────
+MARGEM_RECEITA = 1.15      # receita mensal = gasto médio × 1,15: sobra um pouco, sem expor a situação real
+_PESSOA = re.compile(r"^(pix|transf\w*|ted|doc)\b", re.I)
+
+
+def ler_gastos_reais(real: str, hoje: date | None = None) -> list[dict]:
+    """Gastos reais (não receitas, não transferências) do usuário nos últimos meses. Só leitura."""
+    if hoje is None:
+        from app.dados_banco import hoje_local
+        hoje = hoje_local()
+    desde = _soma_meses(date(hoje.year, hoje.month, 1), -(MESES_HISTORICO - 1)).isoformat()
+    cli, q, out, ini = db.get_db(), db._q(real), [], 0
+    while True:
+        lote = (cli.table("finbot_expenses").select("*").ilike("user_phone", q).gte("billing_date", desde)
+                .range(ini, ini + 999).execute().data) or []
+        out += lote
+        if len(lote) < 1000:
+            break
+        ini += 1000
+    return [r for r in out if r.get("transaction_type") != "income" and r.get("movement") not in ("income", "transfer")]
+
+
+def _mes_de(r: dict) -> str:
+    return str(r.get("billing_date") or r.get("purchase_date") or "")[:7]
+
+
+def _salario_para(reais: list[dict], hoje: date) -> float:
+    """Receita mensal fictícia: gasto médio dos meses completos × MARGEM_RECEITA, arredondada para 100."""
+    atual = hoje.strftime("%Y-%m")
+    por_mes: dict[str, float] = {}
+    for r in reais:
+        m = _mes_de(r)
+        if m and m < atual:
+            por_mes[m] = por_mes.get(m, 0.0) + float(r.get("amount") or 0)
+    base = (sum(por_mes.values()) / len(por_mes)) if por_mes else sum(float(r.get("amount") or 0) for r in reais)
+    return max(3000.0, round(base * MARGEM_RECEITA / 100.0) * 100.0)
+
+
+def _orcamentos_para(reais: list[dict], hoje: date) -> list[tuple[str, float]]:
+    """Orçamento fictício das 5 maiores categorias: média mensal real × 1,10 (arredondada para 50)."""
+    atual = hoje.strftime("%Y-%m")
+    meses, tot = set(), {}
+    for r in reais:
+        m = _mes_de(r)
+        if m and m < atual:
+            meses.add(m)
+            tot[r.get("category") or "Outros"] = tot.get(r.get("category") or "Outros", 0.0) + float(r.get("amount") or 0)
+    n = max(1, len(meses))
+    top = sorted(tot.items(), key=lambda kv: -kv[1])[:5]
+    return [(c, max(100.0, round(v / n * 1.10 / 50.0) * 50.0)) for c, v in top if c != "Receitas"]
+
+
+def _linhas_reais(reais: list[dict], base, lin: list[dict], c1: dict, c2: dict, hoje: date) -> None:
+    """Acrescenta os gastos reais às linhas da demo: contas reais viram as fictícias; nomes de pessoas somem."""
+    cont: dict = {}
+    for r in reais:
+        if r.get("payment_method") == "credito":
+            cont[r.get("account_id")] = cont.get(r.get("account_id"), 0) + 1
+    ordem = sorted(cont, key=lambda k: -cont[k])
+    cartoes = {k: (c1, c2)[i] for i, k in enumerate(ordem[:2])}
+    for r in reais:
+        desc = str(r.get("description") or "Compra")
+        if _PESSOA.match(desc.strip()):
+            desc = "Pix enviado a terceiro"
+        try:
+            dia = date.fromisoformat(str(r.get("purchase_date") or r.get("billing_date"))[:10])
+        except ValueError:
+            continue
+        valor = float(r.get("amount") or 0)
+        if valor <= 0:
+            continue
+        cat, sub = r.get("category") or "Outros", r.get("subcategory")
+        if r.get("payment_method") == "credito":
+            c = cartoes.get(r.get("account_id"), c1)
+            extra = {"billing_date": str(r.get("billing_date") or dia)[:10], "is_forecast": bool(r.get("is_forecast"))}
+            if r.get("installment_of"):
+                extra.update(installment_of=r["installment_of"], installment_total=r.get("installment_total"))
+            lin.append(base(desc, valor, cat, sub, dia, c["id"], "credito", **extra))
+        elif dia <= hoje:
+            lin.append(base(desc, valor, cat, sub, dia, CONTA["id"], r.get("payment_method") or "debito"))
+
+
+def _saldo_conta(hoje: date, faturas_a_pagar: list[tuple[date, float]], fixas: bool = True) -> float:
     """Saldo da conta de demonstração coerente com a data: cobre as saídas conhecidas até o próximo salário
     (faturas e contas fixas) e o gasto diário, com uma margem. Assim o fluxo nunca nasce negativo."""
     sal = date(hoje.year, hoje.month, DIA_SALARIO)
     if sal < hoje:
         sal = _soma_meses(date(hoje.year, hoje.month, 1), 1).replace(day=DIA_SALARIO)
     saidas = sum(t for v, t in faturas_a_pagar if hoje <= v < sal)
-    for d in (hoje, _soma_meses(date(hoje.year, hoje.month, 1), 1)):
+    for d in ((hoje, _soma_meses(date(hoje.year, hoje.month, 1), 1)) if fixas else ()):
         for dia, valor in CONTAS_FIXAS_DIA:
             dt = date(d.year, d.month, dia)
             if hoje <= dt < sal:
@@ -311,7 +412,7 @@ def _saldo_conta(hoje: date, faturas_a_pagar: list[tuple[date, float]]) -> float
     return round((saidas + MARGEM_SALDO) / 10) * 10.0
 
 
-def gerar(demo: str, hoje: date | None = None) -> dict:
+def gerar(demo: str, hoje: date | None = None, reais: list[dict] | None = None) -> dict:
     """Grava os dados fictícios do usuário sintético (apaga os anteriores dele antes: pode rodar de novo)."""
     if not eh_telefone_demo(demo):
         raise ValueError("gerar() só cria dados para usuário de demonstração")
@@ -319,7 +420,7 @@ def gerar(demo: str, hoje: date | None = None) -> dict:
         from app.dados_banco import hoje_local
         hoje = hoje_local()
     limpar(demo)
-    dados = montar_linhas(demo, hoje)
+    dados = montar_linhas(demo, hoje, reais=reais)
     db._get_or_create_user_connection(demo)
     db.save_user_settings(demo, CARTOES[0]["vence"], CARTOES[0]["fecha"])
     cli = db.get_db()
@@ -327,8 +428,10 @@ def gerar(demo: str, hoje: date | None = None) -> dict:
     cli.table("finbot_faturas").upsert(dados["faturas"], on_conflict="user_key,bill_id").execute()
     gravados = db.inserir_gastos_em_lote(dados["lancamentos"])
     mes_ref = hoje.strftime("%Y-%m")
-    for cat, valor in (("Alimentação", 1800.0), ("Transporte", 700.0), ("Lazer e Cultura", 400.0),
-                       ("Saúde", 600.0), ("Vestuário e Beleza", 500.0)):
+    orcamentos = (_orcamentos_para(reais, hoje) if reais is not None else
+                  (("Alimentação", 1800.0), ("Transporte", 700.0), ("Lazer e Cultura", 400.0),
+                   ("Saúde", 600.0), ("Vestuário e Beleza", 500.0)))
+    for cat, valor in orcamentos:
         db.save_budget(demo, cat, valor, mes_ref)
     logger.info(f"Modo demo: {gravados} lançamentos, {len(dados['contas'])} contas, {len(dados['faturas'])} faturas.")
     return {"lancamentos": gravados, "contas": len(dados["contas"]), "faturas": len(dados["faturas"])}
