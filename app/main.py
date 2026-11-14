@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
     logger.info("HTTP Client inicializado no lifespan.")
+    asyncio.create_task(asyncio.to_thread(audio_gasto.aquecer))   # 1ª foto/áudio após o deploy não paga as importações
     yield
     await http_client.aclose()
     logger.info("HTTP Client encerrado.")

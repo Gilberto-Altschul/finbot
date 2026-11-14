@@ -81,6 +81,18 @@ def _cliente():
     return _client
 
 
+def aquecer() -> None:
+    """Chamado na subida do servidor: carrega o SDK do Gemini, o Pillow e o cliente HTTP ANTES da primeira foto/áudio.
+    Sem isso, o primeiro uso depois de cada deploy paga 1-3 s só de importações. Falha aqui é ignorada (só perde o aquecimento)."""
+    try:
+        from google.genai import types  # noqa: F401
+        _cliente()
+        _taxonomia_para_prompt()
+        from PIL import Image  # noqa: F401
+    except Exception as exc:
+        logger.info(f"Aquecimento do Gemini ignorado ({type(exc).__name__}).")
+
+
 def _config(types):
     """Resposta em JSON, sem "pensar" (thinking_budget=0: bem mais rápido). Se a versão do SDK não tiver ThinkingConfig, segue sem."""
     base = dict(response_mime_type="application/json", temperature=0.0, max_output_tokens=600)
