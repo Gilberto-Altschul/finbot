@@ -418,15 +418,19 @@ async def async_process_foto(user_phone: str, media_url: str, content_type: str 
         if len(foto) > audio_gasto.MAX_BYTES_FOTO:
             await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Essa foto ficou pesada demais. Tire outra mais próxima da nota ou digite o gasto.")
             return
+        t0 = time.perf_counter()
         logger.info(f"Foto de {user_phone}: {len(foto)} bytes.")
         dados = await audio_gasto.extrair_nota(foto, content_type or resp.headers.get("Content-Type"))
+        t_leitura = time.perf_counter() - t0
         if not audio_gasto.eh_gasto(dados):
             await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Não consegui ler o total dessa nota. Tente uma foto mais de perto e sem sombra, ou digite o gasto.")
             return
         dados["origem"] = "foto"
         pend = await audio_gasto.preparar(user_phone, dados)
         pend["transcricao"] = dados.get("transcricao")
+        t_categoria = time.perf_counter() - t0 - t_leitura
         await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
+        logger.info(f"Foto: leitura {t_leitura:.1f}s · categoria {t_categoria:.1f}s · total {time.perf_counter() - t0:.1f}s")
     except audio_gasto.AudioIlegivel as exc:
         logger.warning(f"Foto não entendida para {user_phone}: {exc}")
         await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Não consegui ler essa foto. Tente de novo mais de perto ou digite o gasto.")

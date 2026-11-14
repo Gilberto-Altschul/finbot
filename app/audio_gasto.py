@@ -161,11 +161,29 @@ async def extrair(audio: bytes, content_type: str | None, hoje: date | None = No
     return interpretar_resposta_gemini(bruto)
 
 
+def reduzir_foto(imagem: bytes, lado_max: int = 1280) -> tuple[bytes, str | None]:
+    """Reduz a foto (lado maior 1280 px, JPEG) antes de mandar ao Gemini: envio e leitura ficam bem mais rápidos e o texto
+    da nota continua legível. Sem Pillow ou se algo falhar, devolve a foto original (mime None = manter o original)."""
+    try:
+        import io
+        from PIL import Image, ImageOps
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(imagem)))   # foto de celular vem "deitada" por EXIF
+        img.thumbnail((lado_max, lado_max))
+        saida = io.BytesIO()
+        img.convert("RGB").save(saida, "JPEG", quality=85)
+        menor = saida.getvalue()
+        return (menor, "image/jpeg") if len(menor) < len(imagem) else (imagem, None)
+    except Exception as exc:
+        logger.info(f"Foto: não reduzi a imagem ({type(exc).__name__}); segue a original.")
+        return imagem, None
+
+
 async def extrair_nota(imagem: bytes, content_type: str | None, hoje: date | None = None, gerar=None) -> dict:
     """Foto de nota fiscal -> mesmas chaves de extrair(). Uma data no futuro é descartada (leitura errada)."""
     hoje = hoje or date.today()
     gerar = gerar or _gerar_gemini
-    bruto = await gerar(imagem, _tipo_mime_foto(content_type), _PROMPT_NOTA.format(hoje=hoje.isoformat()))
+    imagem, mime_novo = reduzir_foto(imagem)
+    bruto = await gerar(imagem, mime_novo or _tipo_mime_foto(content_type), _PROMPT_NOTA.format(hoje=hoje.isoformat()))
     dados = interpretar_resposta_gemini(bruto)
     if dados.get("data") and dados["data"] > hoje.isoformat():
         dados["data"] = None
@@ -188,7 +206,9 @@ async def preparar(user_phone: str, dados: dict, categorizar=None) -> dict:
         from app.categorizer import categorizar_gasto_hibrido
 
         async def categorizar(u, d):
-            return await categorizar_gasto_hibrido(u, d, permitir_melhor_esforco=True)
+            # Foto: a nota já traz o nome da loja e o usuário espera a resposta; a busca na web (lenta) fica de fora.
+            return await categorizar_gasto_hibrido(u, d, permitir_melhor_esforco=True,
+                                                   pesquisar_web=dados.get("origem") != "foto")
     descricao = dados.get("descricao") or ("Gasto por foto" if dados.get("origem") == "foto" else "Gasto por áudio")
     try:
         cat, sub = await categorizar(user_phone, descricao)

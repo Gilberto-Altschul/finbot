@@ -196,6 +196,7 @@ def so_intermediario(desc_norm: str) -> bool:
 async def categorizar_gasto_hibrido(
     user_phone: str, descricao: str, fallback: tuple[str, str] | None = None,
     permitir_melhor_esforco: bool = False,
+    pesquisar_web: bool = True,
 ) -> tuple[str, str]:
     """
     Fluxo de camadas para categorização.
@@ -331,7 +332,7 @@ async def categorizar_gasto_hibrido(
     try:
         mensagem = f"Classifique a descrição: '{descricao}'"
         dica = None
-        if not categoria_conhecida:
+        if not categoria_conhecida and pesquisar_web:
             # Lugar inédito: o que a web diz sobre ele ajuda a IA a acertar (ex.: "ZEREZES SHOPPING ELDOR" = ótica).
             try:
                 from app import pesquisa_web
