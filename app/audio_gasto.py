@@ -63,6 +63,9 @@ Leia a imagem e devolva APENAS um JSON com estas chaves:
   null se a nota não diz.
 - "parcelas": número inteiro se a nota mostra parcelamento ("3x"); senão null.
 - "data": AAAA-MM-DD da compra, como impressa na nota; null se não estiver legível.
+- "categoria" e "subcategoria": escolha EXATAMENTE uma subcategoria da lista abaixo para o tipo de compra (use a loja e os itens da nota).
+  Se tiver dúvida, null nas duas. Lista (Categoria: subcategorias):
+{taxonomia}
 
 Não invente nada que não está na imagem. Responda APENAS com o JSON."""
 
@@ -85,25 +88,45 @@ def _config(types):
         return types.GenerateContentConfig(**base)
 
 
+HEDGE_SEGUNDOS = 4.0     # se o 1º modelo não respondeu em 4 s, o 2º entra EM PARALELO e vale quem responder primeiro
+
+
 async def _gerar_gemini(audio: bytes, mime: str, prompt: str) -> str:
     from google.genai import types
     contents = [types.Content(role="user", parts=[types.Part.from_bytes(data=audio, mime_type=mime),
                                                   types.Part.from_text(text=prompt)])]
-    ultimo = None
-    for modelo in MODELOS:
+
+    async def tentar(modelo: str) -> str:
+        ultimo = None
         for tentativa in range(2):
             try:
                 r = await _cliente().aio.models.generate_content(model=modelo, contents=contents, config=_config(types))
                 if r.text and r.text.strip():
                     return r.text.strip()
+                ultimo = RuntimeError("resposta vazia")
+                break
             except Exception as exc:
                 ultimo = exc
                 if tentativa == 0 and any(c in str(exc) for c in ("429", "503", "exhausted")):
                     await asyncio.sleep(2)      # o usuário está esperando: espera curta
                     continue
-                logger.warning(f"Áudio: modelo {modelo} falhou ({type(exc).__name__}).")
                 break
-    raise AudioIlegivel(f"sem resposta do Gemini: {type(ultimo).__name__ if ultimo else 'vazia'}")
+        logger.warning(f"Gemini: modelo {modelo} falhou ({type(ultimo).__name__}).")
+        raise AudioIlegivel(f"{modelo}: {type(ultimo).__name__}")
+
+    tarefas = [asyncio.create_task(tentar(MODELOS[0]))]
+    feitas, _ = await asyncio.wait(tarefas, timeout=HEDGE_SEGUNDOS)
+    if not feitas or tarefas[0].exception() is not None:
+        tarefas.append(asyncio.create_task(tentar(MODELOS[1])))       # lento ou falhou: chama o 2º agora
+    pendentes = set(tarefas)
+    while pendentes:
+        feitas, pendentes = await asyncio.wait(pendentes, return_when=asyncio.FIRST_COMPLETED)
+        for t in feitas:
+            if t.exception() is None:
+                for outra in pendentes:
+                    outra.cancel()
+                return t.result()
+    raise AudioIlegivel("sem resposta do Gemini")
 
 
 def _tipo_mime(content_type: str | None) -> str:
@@ -157,6 +180,8 @@ def interpretar_resposta_gemini(texto: str) -> dict:
         "forma_pagamento": forma if forma in ("credito", "debito", "dinheiro") else None,
         "parcelas": parcelas,
         "data": data,
+        "categoria_sugerida": str(d.get("categoria") or "").strip() or None,
+        "subcategoria_sugerida": str(d.get("subcategoria") or "").strip() or None,
     }
 
 
@@ -184,12 +209,17 @@ def reduzir_foto(imagem: bytes, lado_max: int = 1024) -> tuple[bytes, str | None
         return imagem, None
 
 
+def _taxonomia_para_prompt() -> str:
+    from app.taxonomia import CATEGORIAS_DESPESA, SUBCATEGORIAS
+    return "\n".join(f"{c}: {', '.join(SUBCATEGORIAS.get(c, []))}" for c in CATEGORIAS_DESPESA if c != "Outros")
+
+
 async def extrair_nota(imagem: bytes, content_type: str | None, hoje: date | None = None, gerar=None) -> dict:
     """Foto de nota fiscal -> mesmas chaves de extrair(). Uma data no futuro é descartada (leitura errada)."""
     hoje = hoje or date.today()
     gerar = gerar or _gerar_gemini
-    imagem, mime_novo = reduzir_foto(imagem)
-    bruto = await gerar(imagem, mime_novo or _tipo_mime_foto(content_type), _PROMPT_NOTA.format(hoje=hoje.isoformat()))
+    imagem, mime_novo = await asyncio.to_thread(reduzir_foto, imagem)   # CPU: fora do laço de eventos
+    bruto = await gerar(imagem, mime_novo or _tipo_mime_foto(content_type), _PROMPT_NOTA.format(hoje=hoje.isoformat(), taxonomia=_taxonomia_para_prompt()))
     dados = interpretar_resposta_gemini(bruto)
     if dados.get("data") and dados["data"] > hoje.isoformat():
         dados["data"] = None
@@ -212,9 +242,12 @@ async def preparar(user_phone: str, dados: dict, categorizar=None) -> dict:
         from app.categorizer import categorizar_gasto_hibrido
 
         async def categorizar(u, d):
+            sug = (dados.get("categoria_sugerida"), dados.get("subcategoria_sugerida"))
             # Foto: a nota já traz o nome da loja e o usuário espera a resposta; a busca na web (lenta) fica de fora.
-            return await categorizar_gasto_hibrido(u, d, permitir_melhor_esforco=True,
-                                                   pesquisar_web=dados.get("origem") != "foto")
+            # A sugestão da própria leitura da nota entra como Camada 2.5 (validada na taxonomia): só vale se regras e
+            # aprendizado não resolveram, e poupa a chamada de IA da Camada 3.
+            return await categorizar_gasto_hibrido(u, d, fallback=sug if all(sug) and dados.get("origem") == "foto" else None,
+                                                   permitir_melhor_esforco=True, pesquisar_web=dados.get("origem") != "foto")
     descricao = dados.get("descricao") or ("Gasto por foto" if dados.get("origem") == "foto" else "Gasto por áudio")
     try:
         cat, sub = await categorizar(user_phone, descricao)
