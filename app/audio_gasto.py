@@ -76,6 +76,15 @@ def _cliente():
     return _client
 
 
+def _config(types):
+    """Resposta em JSON, sem "pensar" (thinking_budget=0: bem mais rápido). Se a versão do SDK não tiver ThinkingConfig, segue sem."""
+    base = dict(response_mime_type="application/json", temperature=0.0, max_output_tokens=600)
+    try:
+        return types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0), **base)
+    except Exception:
+        return types.GenerateContentConfig(**base)
+
+
 async def _gerar_gemini(audio: bytes, mime: str, prompt: str) -> str:
     from google.genai import types
     contents = [types.Content(role="user", parts=[types.Part.from_bytes(data=audio, mime_type=mime),
@@ -84,10 +93,7 @@ async def _gerar_gemini(audio: bytes, mime: str, prompt: str) -> str:
     for modelo in MODELOS:
         for tentativa in range(2):
             try:
-                r = await _cliente().aio.models.generate_content(
-                    model=modelo, contents=contents,
-                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0,
-                                                       max_output_tokens=1024))
+                r = await _cliente().aio.models.generate_content(model=modelo, contents=contents, config=_config(types))
                 if r.text and r.text.strip():
                     return r.text.strip()
             except Exception as exc:
@@ -161,8 +167,8 @@ async def extrair(audio: bytes, content_type: str | None, hoje: date | None = No
     return interpretar_resposta_gemini(bruto)
 
 
-def reduzir_foto(imagem: bytes, lado_max: int = 1280) -> tuple[bytes, str | None]:
-    """Reduz a foto (lado maior 1280 px, JPEG) antes de mandar ao Gemini: envio e leitura ficam bem mais rápidos e o texto
+def reduzir_foto(imagem: bytes, lado_max: int = 1024) -> tuple[bytes, str | None]:
+    """Reduz a foto (lado maior 1024 px, JPEG) antes de mandar ao Gemini: envio e leitura ficam bem mais rápidos e o texto
     da nota continua legível. Sem Pillow ou se algo falhar, devolve a foto original (mime None = manter o original)."""
     try:
         import io
@@ -170,7 +176,7 @@ def reduzir_foto(imagem: bytes, lado_max: int = 1280) -> tuple[bytes, str | None
         img = ImageOps.exif_transpose(Image.open(io.BytesIO(imagem)))   # foto de celular vem "deitada" por EXIF
         img.thumbnail((lado_max, lado_max))
         saida = io.BytesIO()
-        img.convert("RGB").save(saida, "JPEG", quality=85)
+        img.convert("RGB").save(saida, "JPEG", quality=80)
         menor = saida.getvalue()
         return (menor, "image/jpeg") if len(menor) < len(imagem) else (imagem, None)
     except Exception as exc:
