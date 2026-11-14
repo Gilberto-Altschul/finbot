@@ -478,10 +478,17 @@ def __creditos_da_fatura_bd(user_phone: str, due: date) -> list[dict]:
                .select("description, amount, purchase_date, account_id")
                .ilike("user_phone", db._q(user_phone)).eq("payment_method", "credito").eq("transaction_type", "income")
                .gte("billing_date", ini).lte("billing_date", fim).execute())
-        return res.data or []
+        # "PAGAMENTO COM SALDO" / "PAGAMENTO EFETUADO"... é a QUITAÇÃO da fatura anterior, não estorno: não abate a fatura aberta.
+        # (Linhas antigas, gravadas antes da Pluggy passar a ignorar esse crédito, ainda estão no banco.)
+        return [c for c in (res.data or []) if not _e_quitacao_de_fatura(c.get("description"))]
     except Exception as e:
         logger.warning(f"Créditos da fatura indisponíveis: {e}")
         return []
+
+
+def _e_quitacao_de_fatura(descricao: str | None) -> bool:
+    d = (descricao or "").strip().lower()
+    return d.startswith(("pagamento", "pagto", "pgto")) and "estorno" not in d
 
 
 def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float | None,

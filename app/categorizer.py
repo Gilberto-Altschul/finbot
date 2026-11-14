@@ -265,6 +265,9 @@ async def categorizar_gasto_hibrido(
         return "Impostos", "IPTU"
     if re.search(r"\b(enel|sabesp|comgas|naturgy|cpfl|elektro|energisa|cemig|copel|equatorial)\b", desc_norm):
         return "Moradia", "Energia, Água e Gás"
+    # "MERCADOCAR" é centro automotivo: a keyword "mercado" (Alimentação) casava por substring dentro do nome.
+    if re.search(r"mercado\s*car\b", desc_norm):
+        return "Transporte", "Manutenção do Veículo"
 
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
     # Se além da categoria já existe uma subcategoria-dica de uma resolução
