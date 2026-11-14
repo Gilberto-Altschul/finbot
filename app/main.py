@@ -365,7 +365,7 @@ def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
     """Uma mensagem só: texto + botões. Se os botões falharem, a mesma pergunta sai em texto ('sim'/'não')."""
     linha, botoes = audio_gasto.texto_confirmacao(pend)
     if canal.ativo():
-        canal.emitir(f"🎙️ {linha}", botoes, tipo="gasto", dados=_cartao_gasto(to, pend, "pendente"))
+        canal.emitir(f"{'🧾' if pend.get('origem') == 'foto' else '🎙️'} {linha}", botoes, tipo="gasto", dados=_cartao_gasto(to, pend, "pendente"))
         return
     if USAR_BOTOES:
         try:
@@ -400,6 +400,39 @@ async def _processar_audio_bytes(user_phone: str, audio: bytes, content_type: st
     # Não é um gasto (pergunta, comando...): segue como se tivesse sido digitado, mostrando o que foi ouvido.
     reply = await agent.run(user_phone, dados["transcricao"])
     await asyncio.to_thread(_send_whatsapp, user_phone, f"🎙️ _{dados['transcricao']}_\n\n{reply}")
+
+
+async def async_process_foto(user_phone: str, media_url: str, content_type: str | None) -> None:
+    """Foto de nota fiscal: baixa, o Gemini lê o total e o estabelecimento e o app pede confirmação (nunca grava sozinho:
+    leitura de imagem erra mais que áudio). Se a foto não for uma nota, avisa. Nada da imagem é guardado."""
+    try:
+        if not seguranca.midia_twilio_ok(media_url):
+            logger.error("Foto ignorada: o endereço da mídia não é da Twilio.")
+            await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Não consegui abrir essa foto. Mande de novo ou digite o gasto.")
+            return
+        auth_string = f"{settings.twilio_account_sid}:{settings.twilio_auth_token}"
+        headers = {"Authorization": f"Basic {base64.b64encode(auth_string.encode()).decode()}"}
+        resp = await http_client.get(media_url, headers=headers)
+        resp.raise_for_status()
+        foto = resp.content
+        if len(foto) > audio_gasto.MAX_BYTES_FOTO:
+            await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Essa foto ficou pesada demais. Tire outra mais próxima da nota ou digite o gasto.")
+            return
+        logger.info(f"Foto de {user_phone}: {len(foto)} bytes.")
+        dados = await audio_gasto.extrair_nota(foto, content_type or resp.headers.get("Content-Type"))
+        if not audio_gasto.eh_gasto(dados):
+            await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Não consegui ler o total dessa nota. Tente uma foto mais de perto e sem sombra, ou digite o gasto.")
+            return
+        dados["origem"] = "foto"
+        pend = await audio_gasto.preparar(user_phone, dados)
+        pend["transcricao"] = dados.get("transcricao")
+        await asyncio.to_thread(_enviar_confirmacao_audio, user_phone, pend)
+    except audio_gasto.AudioIlegivel as exc:
+        logger.warning(f"Foto não entendida para {user_phone}: {exc}")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🧾 Não consegui ler essa foto. Tente de novo mais de perto ou digite o gasto.")
+    except Exception as exc:
+        logger.error(f"Erro ao processar foto de {user_phone}: {exc}", exc_info=True)
+        await asyncio.to_thread(_send_whatsapp, user_phone, "⚠️ Tive um problema com essa foto. Pode digitar o gasto?")
 
 
 async def async_process_audio(user_phone: str, media_url: str, content_type: str | None) -> None:
@@ -628,6 +661,13 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
         agenda.add_task(async_process_audio, user_phone, MediaUrl0, MediaContentType0)
         return
 
+    # ── CASO 0.96: FOTO DE NOTA FISCAL — o Gemini lê total e estabelecimento; pede confirmação ──
+    # Com legenda ("gastei 20 na feira"), a legenda manda: segue como texto normal, como antes.
+    if NumMedia > 0 and MediaUrl0 and not user_message and str(MediaContentType0).lower().startswith("image/"):
+        logger.info(f"Foto recebida de {user_phone}.")
+        agenda.add_task(async_process_foto, user_phone, MediaUrl0, MediaContentType0)
+        return
+
     # ── CASO 1: PDF ENVIADO ───────────────────────────────────────────────────
     if NumMedia > 0 and MediaUrl0 and "pdf" in str(MediaContentType0).lower():
         logger.info(f"PDF recebido de {user_phone}.")
@@ -639,7 +679,7 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
 
     # ── CASO 1.5: OUTRA MÍDIA SEM TEXTO (imagem, figurinha, vídeo) — avisa em vez de ficar mudo ──
     if NumMedia > 0 and MediaUrl0 and not user_message:
-        await asyncio.to_thread(_send_whatsapp, user_phone, "Por enquanto eu entendo *texto*, *áudio* e *PDF* do extrato. 🙂 Conte o gasto por áudio ou digite.")
+        await asyncio.to_thread(_send_whatsapp, user_phone, "Por enquanto eu entendo *texto*, *áudio*, *foto de nota fiscal* e *PDF* do extrato. 🙂 Conte o gasto por áudio ou digite.")
         return
 
     # ── CASO 2: SENHA DE PDF PENDENTE (prioridade alta) ─────────────────────
