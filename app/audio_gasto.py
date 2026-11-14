@@ -59,8 +59,10 @@ Leia a imagem e devolva APENAS um JSON com estas chaves:
 - "valor": o TOTAL PAGO em reais (ex.: 87.9). Use o total final, depois de descontos e acréscimos; nunca um subtotal nem um item.
   Se o total não está legível ou há dúvida, null.
 - "descricao": nome do estabelecimento, curto (nome fantasia, ex.: "Pão de Açúcar", "Droga Raia"). Null se não der para ler.
-- "forma_pagamento": "credito" se a nota diz cartão de crédito; "debito" se diz débito, pix ou boleto; "dinheiro" se diz dinheiro;
-  null se a nota não diz.
+- "forma_pagamento": procure no RODAPÉ da nota, perto do total ("Forma de pagamento", "Cartão", "TEF", "Valor pago").
+  "credito" se diz crédito (inclusive "crédito à vista" e "crédito parcelado"); "debito" se diz débito, "débito à vista", Maestro,
+  Visa Electron, Elo débito, pix ou boleto; "dinheiro" se diz dinheiro ou espécie; null só se a nota realmente não diz.
+  "à vista" sozinho não é forma de pagamento: vale a palavra ao lado (débito, crédito ou dinheiro).
 - "parcelas": número inteiro se a nota mostra parcelamento ("3x"); senão null.
 - "data": AAAA-MM-DD da compra, como impressa na nota; null se não estiver legível.
 - "categoria" e "subcategoria": escolha EXATAMENTE uma subcategoria da lista abaixo para o tipo de compra (use a loja e os itens da nota).
@@ -160,6 +162,9 @@ def interpretar_resposta_gemini(texto: str) -> dict:
     if not transcricao:
         raise AudioIlegivel("sem transcrição")
     forma = _sem_acento(str(d.get("forma_pagamento") or ""))   # "Crédito"/"crédito" -> "credito"
+    if forma not in ("credito", "debito", "dinheiro"):          # "débito à vista", "cartão de crédito", "pix"...
+        forma = ("credito" if "credito" in forma else "debito" if ("debito" in forma or "pix" in forma or "boleto" in forma)
+                 else "dinheiro" if ("dinheiro" in forma or "especie" in forma) else "")
     data = None
     if d.get("data"):
         try:
@@ -192,16 +197,16 @@ async def extrair(audio: bytes, content_type: str | None, hoje: date | None = No
     return interpretar_resposta_gemini(bruto)
 
 
-def reduzir_foto(imagem: bytes, lado_max: int = 1024) -> tuple[bytes, str | None]:
-    """Reduz a foto (lado maior 1024 px, JPEG) antes de mandar ao Gemini: envio e leitura ficam bem mais rápidos e o texto
-    da nota continua legível. Sem Pillow ou se algo falhar, devolve a foto original (mime None = manter o original)."""
+def reduzir_foto(imagem: bytes, lado_max: int = 1800) -> tuple[bytes, str | None]:
+    """Reduz a foto (lado maior 1800 px, JPEG) antes de mandar ao Gemini: envio e leitura ficam bem mais rápidos e o texto
+    da nota continua legível (cupom é comprido e estreito: abaixo de ~1800 px o rodapé, com a forma de pagamento, fica ilegível). Sem Pillow ou se algo falhar, devolve a foto original (mime None = manter o original)."""
     try:
         import io
         from PIL import Image, ImageOps
         img = ImageOps.exif_transpose(Image.open(io.BytesIO(imagem)))   # foto de celular vem "deitada" por EXIF
         img.thumbnail((lado_max, lado_max))
         saida = io.BytesIO()
-        img.convert("RGB").save(saida, "JPEG", quality=80)
+        img.convert("RGB").save(saida, "JPEG", quality=85)
         menor = saida.getvalue()
         return (menor, "image/jpeg") if len(menor) < len(imagem) else (imagem, None)
     except Exception as exc:
