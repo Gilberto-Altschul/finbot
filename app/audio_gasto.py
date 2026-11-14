@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 TTL_SEGUNDOS = 15 * 60
 MAX_BYTES = 3 * 1024 * 1024          # ~ 1-2 min de áudio do WhatsApp; acima disso pede para digitar
+MAX_BYTES_FOTO = 6 * 1024 * 1024     # foto de nota fiscal (o WhatsApp já comprime para ~1 MB)
 MODELOS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
 VALOR_MAXIMO = 1_000_000.0
 
@@ -47,6 +48,23 @@ Transcreva fielmente o que a pessoa disse e devolva APENAS um JSON com estas cha
 - "data": AAAA-MM-DD se disse quando foi (ontem, anteontem, dia 5); null se não disse (vale hoje).
 
 Não invente nada que não foi dito. Responda APENAS com o JSON."""
+
+
+_PROMPT_NOTA = """Você recebe a FOTO de uma nota fiscal, cupom fiscal ou comprovante de compra no Brasil, enviada por WhatsApp
+para um app de finanças pessoais. Hoje é {hoje}.
+
+Leia a imagem e devolva APENAS um JSON com estas chaves:
+- "transcricao": resumo curto do que a nota mostra (estabelecimento, total, forma de pagamento). Não copie CPF, CNPJ, endereço nem número do cartão.
+- "tipo": "gasto" somente se a imagem é uma nota/cupom/comprovante de uma compra com valor total legível. Qualquer outra imagem é "outro".
+- "valor": o TOTAL PAGO em reais (ex.: 87.9). Use o total final, depois de descontos e acréscimos; nunca um subtotal nem um item.
+  Se o total não está legível ou há dúvida, null.
+- "descricao": nome do estabelecimento, curto (nome fantasia, ex.: "Pão de Açúcar", "Droga Raia"). Null se não der para ler.
+- "forma_pagamento": "credito" se a nota diz cartão de crédito; "debito" se diz débito, pix ou boleto; "dinheiro" se diz dinheiro;
+  null se a nota não diz.
+- "parcelas": número inteiro se a nota mostra parcelamento ("3x"); senão null.
+- "data": AAAA-MM-DD da compra, como impressa na nota; null se não estiver legível.
+
+Não invente nada que não está na imagem. Responda APENAS com o JSON."""
 
 
 def _cliente():
@@ -85,6 +103,11 @@ async def _gerar_gemini(audio: bytes, mime: str, prompt: str) -> str:
 def _tipo_mime(content_type: str | None) -> str:
     mime = (content_type or "audio/ogg").split(";")[0].strip().lower()
     return mime if mime.startswith("audio/") else "audio/ogg"
+
+
+def _tipo_mime_foto(content_type: str | None) -> str:
+    mime = (content_type or "image/jpeg").split(";")[0].strip().lower()
+    return mime if mime in ("image/jpeg", "image/png", "image/webp") else "image/jpeg"
 
 
 def _numero(v) -> float | None:
@@ -138,6 +161,17 @@ async def extrair(audio: bytes, content_type: str | None, hoje: date | None = No
     return interpretar_resposta_gemini(bruto)
 
 
+async def extrair_nota(imagem: bytes, content_type: str | None, hoje: date | None = None, gerar=None) -> dict:
+    """Foto de nota fiscal -> mesmas chaves de extrair(). Uma data no futuro é descartada (leitura errada)."""
+    hoje = hoje or date.today()
+    gerar = gerar or _gerar_gemini
+    bruto = await gerar(imagem, _tipo_mime_foto(content_type), _PROMPT_NOTA.format(hoje=hoje.isoformat()))
+    dados = interpretar_resposta_gemini(bruto)
+    if dados.get("data") and dados["data"] > hoje.isoformat():
+        dados["data"] = None
+    return dados
+
+
 def eh_gasto(dados: dict) -> bool:
     return dados.get("tipo") == "gasto" and bool(dados.get("valor"))
 
@@ -155,7 +189,7 @@ async def preparar(user_phone: str, dados: dict, categorizar=None) -> dict:
 
         async def categorizar(u, d):
             return await categorizar_gasto_hibrido(u, d, permitir_melhor_esforco=True)
-    descricao = dados.get("descricao") or "Gasto por áudio"
+    descricao = dados.get("descricao") or ("Gasto por foto" if dados.get("origem") == "foto" else "Gasto por áudio")
     try:
         cat, sub = await categorizar(user_phone, descricao)
     except Exception as exc:
@@ -167,7 +201,7 @@ async def preparar(user_phone: str, dados: dict, categorizar=None) -> dict:
         args["data"] = dados["data"]
     if dados.get("parcelas") and args["payment_method"] == "credito":
         args["parcelas"] = dados["parcelas"]
-    pend = {"args": args, "forma_definida": bool(dados.get("forma_pagamento")), "ts": time.time()}
+    pend = {"args": args, "forma_definida": bool(dados.get("forma_pagamento")), "ts": time.time(), "origem": dados.get("origem", "audio")}
     _PENDENTES[user_phone] = pend
     return pend
 
@@ -205,9 +239,10 @@ def texto_confirmacao(pend: dict) -> tuple[str, list[tuple[str, str]]]:
 
 def texto_confirmacao_sem_botoes(pend: dict) -> str:
     linha, _ = texto_confirmacao(pend)
+    ico = "🧾" if pend.get("origem") == "foto" else "🎙️"
     if pend["forma_definida"]:
-        return f"🎙️ {linha}\n\nResponda *sim* para registrar ou *não* para cancelar."
-    return f"🎙️ {linha}\n\nResponda *débito*, *crédito* ou *não* para cancelar."
+        return f"{ico} {linha}\n\nResponda *sim* para registrar ou *não* para cancelar."
+    return f"{ico} {linha}\n\nResponda *débito*, *crédito* ou *não* para cancelar."
 
 
 def _sem_acento(t: str) -> str:
@@ -301,7 +336,7 @@ async def confirmar_detalhado(user_phone: str, acao: str, executar=None, cartoes
     """Como confirmar, mas devolve também (resultado de registrar_gasto, args) quando o gasto foi gravado."""
     pend = obter(user_phone)
     if not pend:
-        return "Essa confirmação expirou 😉 Mande o áudio de novo (ou digite o gasto).", None, None
+        return "Essa confirmação expirou 😉 Mande de novo (áudio ou foto) ou digite o gasto.", None, None
     if acao == "no":
         limpar(user_phone)
         return "Cancelado. Nada foi registrado.", None, None
