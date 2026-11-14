@@ -269,6 +269,10 @@ async def categorizar_gasto_hibrido(
     if re.search(r"mercado\s*car\b", desc_norm):
         return "Transporte", "Manutenção do Veículo"
 
+    # "sem juros" NEGA "juros": "Compra a Vista sem Juros MasterCard" é compra comum, não tarifa. Sem isso, a keyword "juros"
+    # (Tarifas e Juros) casava por substring e ainda ensinava o merchant errado. Só a Camada 2 usa o texto limpo.
+    desc_kw = re.sub(r"\b(sem|s/)\s*juros\b", " ", desc_norm)
+
     # Camada 1: Tem CATEGORIA já aprendida para esse Merchant?
     # Se além da categoria já existe uma subcategoria-dica de uma resolução
     # anterior EXATA desse mesmo merchant, usa ela direto — evita chamar
@@ -303,7 +307,7 @@ async def categorizar_gasto_hibrido(
 
         for sub in sorted_subs:
             keywords = sub.get("keywords", [])
-            if any(_keyword_casa(_normalize(kw), desc_norm) for kw in keywords) or _keyword_casa(_normalize(sub["name"]), desc_norm):
+            if any(_keyword_casa(_normalize(kw), desc_kw) for kw in keywords) or _keyword_casa(_normalize(sub["name"]), desc_kw):
                 logger.info(f"Camada 2 (Subcategory Keyword) resolvida: {desc_norm} -> {sub['category_name']}/{sub['name']}")
                 if not eh_marketplace:
                     db.save_user_merchant_mapping(user_phone, desc_norm, sub["category_name"], sub["name"])
