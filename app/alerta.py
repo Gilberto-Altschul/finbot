@@ -133,3 +133,83 @@ def testar(telefone: str | None = None, enviar: bool = False) -> dict:
             item["enviado"] = enviar_alerta(texto, demo.telefone_real(f))
         saida.append(item)
     return {"usuarios": saida}
+
+
+# ───────────────────────── Resumo semanal ─────────────────────────
+def _gastos_por_compra(telefone: str, ini: date, fim: date) -> list[dict]:
+    """Gastos pela DATA DA COMPRA (como a tendência semanal do bot). Parcelas 2/N em diante ficam de fora,
+    para uma compra parcelada pesar uma vez só, na semana em que foi feita."""
+    res = (db.get_db().table("finbot_expenses").select("category, amount, installment_of")
+           .ilike("user_phone", db._q(telefone)).eq("movement", "expense")
+           .gte("purchase_date", ini.isoformat()).lte("purchase_date", fim.isoformat()).limit(5000).execute())
+    return [r for r in (res.data or []) if not r.get("installment_of") or int(r["installment_of"]) <= 1]
+
+
+def resumo_semanal_texto(telefone: str, hoje: date | None = None) -> str | None:
+    """Texto do resumo dos últimos 7 dias (hoje incluído) contra os 7 anteriores. None se não houve gasto."""
+    from datetime import timedelta
+    hoje = hoje or date.today()
+    ini, ini_ant = hoje - timedelta(days=6), hoje - timedelta(days=13)
+    atual = _gastos_por_compra(telefone, ini, hoje)
+    if not atual:
+        return None
+    anterior = _gastos_por_compra(telefone, ini_ant, ini - timedelta(days=1))
+    total = sum(float(r["amount"]) for r in atual)
+    total_ant = sum(float(r["amount"]) for r in anterior)
+    por_cat: dict[str, float] = {}
+    for r in atual:
+        c = (r.get("category") or "Outros").strip() or "Outros"
+        por_cat[c] = por_cat.get(c, 0.0) + float(r["amount"])
+    top = sorted(por_cat.items(), key=lambda x: -x[1])[:3]
+    linhas = [f"📊 *Resumo da semana* ({ini.strftime('%d/%m')} a {hoje.strftime('%d/%m')})", "",
+              f"Gastos: *{_brl(total)}*"]
+    if total_ant > 0:
+        dif = total - total_ant
+        pct = abs(dif) / total_ant * 100
+        linhas.append(f"{'↑' if dif > 0 else '↓'} {pct:.0f}% {'a mais' if dif > 0 else 'a menos'} que a semana anterior ({_brl(total_ant)})")
+    else:
+        linhas.append("Sem gastos na semana anterior para comparar.")
+    linhas += ["", "Onde mais pesou:"] + [f"{i}. {c}: {_brl(v)}" for i, (c, v) in enumerate(top, 1)]
+    try:
+        linhas += ["", f"No mês até agora: {_brl(db.monthly_total(telefone))}"]
+    except Exception:
+        pass
+    return "\n".join(linhas)
+
+
+def enviar_resumo_semanal(telefone: str) -> bool:
+    from app import demo
+    if demo.eh_telefone_demo(telefone):
+        return False
+    texto = resumo_semanal_texto(telefone)
+    if not texto:
+        return False
+    para = demo.telefone_real(telefone)
+    if not para.startswith("whatsapp:"):
+        para = "whatsapp:" + para
+    try:
+        msg = _cliente().messages.create(from_=get_settings().twilio_whatsapp_number, to=para, body=texto)
+        logger.info(f"Resumo semanal enviado | SID: {msg.sid}")
+        return True
+    except Exception as exc:
+        if "63016" in str(exc) or "63015" in str(exc):
+            logger.warning("Resumo semanal não enviado: fora da janela de 24 h.")
+        else:
+            logger.warning(f"Resumo semanal não enviado ({type(exc).__name__}): {exc}")
+        return False
+
+
+def resumos_semanais_todos() -> dict:
+    """Envia o resumo a cada usuário com banco. RESUMO_SEMANAL=0 desliga."""
+    from app.cron_sync import telefones_com_banco, _mascara
+    if os.environ.get("RESUMO_SEMANAL", "1").strip() == "0":
+        return {"desligado": True}
+    r = {"usuarios": 0, "enviados": 0}
+    for f in telefones_com_banco():
+        r["usuarios"] += 1
+        try:
+            if enviar_resumo_semanal(f):
+                r["enviados"] += 1
+        except Exception as exc:
+            logger.warning(f"Resumo semanal {_mascara(f)} falhou ({type(exc).__name__}).")
+    return r

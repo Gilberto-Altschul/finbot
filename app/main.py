@@ -643,6 +643,39 @@ async def teste_alerta_orcamento(fone: str = "", enviar: int = 0, x_cron_secret:
     return await asyncio.to_thread(alerta.testar, f or None, bool(enviar))
 
 
+def _exigir_segredo(x_cron_secret: str | None) -> None:
+    segredo = os.getenv("FINBOT_CRON_SECRET")
+    if not segredo:
+        raise HTTPException(status_code=503, detail="FINBOT_CRON_SECRET não configurado.")
+    if not x_cron_secret or not hmac.compare_digest(x_cron_secret.encode(), segredo.encode()):
+        raise HTTPException(status_code=401, detail="Não autorizado.")
+
+
+@app.get("/alerta/resumo-semanal")
+async def teste_resumo_semanal(fone: str = "", enviar: int = 0, x_cron_secret: str = Header(None)):
+    """Teste: mostra o texto do resumo semanal de `fone` (não envia). Com enviar=1, manda a esse número agora."""
+    _exigir_segredo(x_cron_secret)
+    from app import alerta
+    digitos = "".join(c for c in fone if c.isdigit())
+    if not digitos:
+        raise HTTPException(status_code=400, detail="Informe fone=55DDDNUMERO.")
+    f = "whatsapp:+" + digitos
+    texto = await asyncio.to_thread(alerta.resumo_semanal_texto, f)
+    out = {"texto": texto}
+    if enviar and texto:
+        out["enviado"] = await asyncio.to_thread(alerta.enviar_resumo_semanal, f)
+    return out
+
+
+@app.post("/cron/resumo-semanal", status_code=202)
+async def cron_resumo_semanal(background_tasks: BackgroundTasks, x_cron_secret: str = Header(None)):
+    """Envia o resumo semanal a todos os usuários. Chamada pelo cron do Railway (1x por semana). Exige X-Cron-Secret."""
+    _exigir_segredo(x_cron_secret)
+    from app import alerta
+    background_tasks.add_task(alerta.resumos_semanais_todos)
+    return {"status": "iniciado"}
+
+
 @app.post("/cron/sync", status_code=202)
 async def cron_sync(background_tasks: BackgroundTasks, x_cron_secret: str = Header(None)):
     """Sincronização agendada de todos os usuários (silenciosa). Chamada pelo cron do Railway.
