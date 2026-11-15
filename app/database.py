@@ -272,6 +272,37 @@ def monthly_by_category(user_phone: str, mes_ref: str | None = None, dia_inicio:
         logger.error(f"Erro agrupamento categorias: {exc}")
         return []
 
+def linhas_gastos_periodo(user_phone: str, start: str, end: str) -> list[dict]:
+    """Gastos do período (movement=expense, por billing_date) com o que o painel precisa para filtrar:
+    categoria, valor, forma de pagamento e conta/cartão de origem. Mesma regra de data do monthly_total."""
+    try:
+        res = get_db().table("finbot_expenses") \
+            .select("category, amount, payment_method, account_id, billing_date") \
+            .ilike("user_phone", _q(user_phone)) \
+            .eq("movement", "expense") \
+            .gte("billing_date", start) \
+            .lte("billing_date", end).limit(5000).execute()
+        return res.data or []
+    except Exception as exc:
+        logger.error(f"Erro em linhas_gastos_periodo: {exc}")
+        return []
+
+
+def linhas_creditos_cartao_periodo(user_phone: str, start: str, end: str) -> list[dict]:
+    """Estornos/créditos lançados NO CARTÃO no período (abatem os gastos, como no monthly_total)."""
+    try:
+        res = get_db().table("finbot_expenses") \
+            .select("amount, payment_method, account_id, billing_date") \
+            .ilike("user_phone", _q(user_phone)) \
+            .eq("movement", "income") \
+            .gte("billing_date", start) \
+            .lte("billing_date", end).limit(5000).execute()
+        return [i for i in (res.data or []) if _eh_credito_cartao(i)]
+    except Exception as exc:
+        logger.error(f"Erro em linhas_creditos_cartao_periodo: {exc}")
+        return []
+
+
 def expenses_of_category_month(user_phone: str, category: str, mes_ref: str | None = None) -> list[dict]:
     """Gastos do mês de UMA categoria (mesma regra do monthly_by_category: movement=expense, por billing_date,
     categoria comparada já normalizada para juntar variações de acento/caixa). Usado no detalhe do painel."""
@@ -280,7 +311,7 @@ def expenses_of_category_month(user_phone: str, category: str, mes_ref: str | No
         start = ref.replace(day=1).isoformat()
         end = ref.replace(day=monthrange(ref.year, ref.month)[1]).isoformat()
         res = get_db().table("finbot_expenses") \
-            .select("id, category, subcategory, description, amount, purchase_date, billing_date, payment_method, installment_of, installment_total, review_status") \
+            .select("id, category, subcategory, description, amount, purchase_date, billing_date, payment_method, installment_of, installment_total, review_status, account_id") \
             .ilike("user_phone", _q(user_phone)) \
             .eq("movement", "expense") \
             .gte("billing_date", start) \

@@ -79,6 +79,7 @@ def _ler_contas_bd(user_phone: str) -> list[dict]:
     res = db.get_db().table(T_CONTAS).select("*").eq("user_key", get_lookup_prefix(user_phone)).execute()
     return ordenar([{"id": r["account_id"], "item_id": r.get("item_id"), "tipo": r["tipo"],
                      "nome": r.get("apelido") or r.get("nome"), "nome_auto": r.get("nome"), "apelido": r.get("apelido"),
+                     "banco": r.get("banco_nome"),
                      "saldo": None if r.get("saldo") is None else float(r["saldo"]),
                      "atualizado_iso": r.get("atualizado_banco"), "sincronizado_em": r.get("sincronizado_em")}
                     for r in (res.data or [])])

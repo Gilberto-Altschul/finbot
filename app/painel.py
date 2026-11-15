@@ -18,6 +18,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 import secrets
 import time
+from calendar import monthrange
 from datetime import date
 
 from fastapi import APIRouter, Cookie, File, Form, HTTPException, Request, UploadFile
@@ -246,10 +247,111 @@ def mensagem_link(telefone: str) -> str:
 
 
 # ── dados ────────────────────────────────────────────────────────────────────
-def dados_resumo(user_phone: str, hoje: date | None = None) -> dict:
-    """Mesmos números do `resumo` do WhatsApp, como dados: receitas, gastos, saldo e categorias com orçamento."""
+GRUPO_MANUAL = "Manual (WhatsApp)"      # lançamentos sem conta de origem (digitados, áudio, foto, PDF)
+GRUPO_OUTRAS = "Outras contas"          # conta que deixou de existir
+_MES_OK = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_MESES_ATRAS = 24
+_MESES_NO_SELETOR = 6
+_MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+             "novembro", "dezembro"]
+
+
+def _idx_mes(mes: str) -> int:
+    return int(mes[:4]) * 12 + int(mes[5:]) - 1
+
+
+def _mes_somado(mes: str, delta: int) -> str:
+    i = _idx_mes(mes) + delta
+    return f"{i // 12:04d}-{i % 12 + 1:02d}"
+
+
+def _mes_valido(mes: str | None, hoje: date) -> str:
+    """'AAAA-MM' do pedido, ou o mês atual se vier vazio, malformado, futuro ou muito antigo."""
+    atual = hoje.strftime("%Y-%m")
+    if not mes or not _MES_OK.match(mes):
+        return atual
+    if mes > atual or _idx_mes(atual) - _idx_mes(mes) > _MESES_ATRAS:
+        return atual
+    return mes
+
+
+def _limites_mes(mes: str) -> tuple[date, date]:
+    ano, m = int(mes[:4]), int(mes[5:])
+    return date(ano, m, 1), date(ano, m, monthrange(ano, m)[1])
+
+
+def _mapa_contas(user_phone: str) -> dict[str, str]:
+    """{account_id: nome do banco} (ou o nome da conta, se o banco não vier). É o que o filtro por banco usa."""
+    try:
+        from app import dados_banco as dbk
+        return {c["id"]: (c.get("banco") or c.get("nome") or GRUPO_OUTRAS) for c in dbk.ler_contas(user_phone)}
+    except Exception:
+        return {}
+
+
+def _grupo(r: dict, mapa: dict[str, str]) -> str:
+    aid = r.get("account_id")
+    if not aid:
+        return GRUPO_MANUAL
+    return mapa.get(aid, GRUPO_OUTRAS)
+
+
+def _passa(r: dict, banco: str | None, tipo: str | None, mapa: dict[str, str]) -> bool:
+    """Filtro do painel: banco (nome do grupo) e tipo ('credito' ou 'debito' = tudo que não é cartão: débito, Pix, boleto)."""
+    if banco and _grupo(r, mapa) != banco:
+        return False
+    if tipo:
+        credito = (r.get("payment_method") or "").lower() == "credito"
+        if (tipo == "credito") != credito:
+            return False
+    return True
+
+
+def _soma(desp: list[dict], cred: list[dict], banco, tipo, mapa, ate: str | None = None) -> float:
+    """Gastos LÍQUIDOS dos estornos do cartão (mesma conta do monthly_total), com filtro e corte de data opcionais."""
+    def ok(r):
+        return _passa(r, banco, tipo, mapa) and (ate is None or str(r.get("billing_date") or "")[:10] <= ate)
+    bruto = sum(float(r["amount"]) for r in desp if ok(r))
+    creditos = sum(abs(float(r["amount"])) for r in cred if ok(r))
+    return round(bruto - creditos, 2)
+
+
+def _barras(desp, cred, chave, banco, tipo, mapa) -> list[dict]:
+    tot: dict[str, float] = {}
+    for r in desp:
+        if _passa(r, banco, tipo, mapa):
+            tot[chave(r)] = tot.get(chave(r), 0.0) + float(r["amount"])
+    for r in cred:
+        if _passa(r, banco, tipo, mapa):
+            tot[chave(r)] = tot.get(chave(r), 0.0) - abs(float(r["amount"]))
+    return sorted(({"id": k, "gasto": round(v, 2)} for k, v in tot.items()), key=lambda x: -x["gasto"])
+
+
+def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = None,
+                 banco: str | None = None, tipo: str | None = None) -> dict:
+    """Mesmos números do `resumo` do WhatsApp, como dados: receitas, gastos, saldo e categorias com orçamento.
+
+    Com `mes` ('AAAA-MM'), mostra um mês anterior. Com `banco` e/ou `tipo` ('credito'|'debito'), mostra só aquele recorte:
+    gastos, categorias e as barras por banco/tipo respeitam o filtro. Saldo e orçamentos só fazem sentido sem filtro.
+    `comparacao` põe o gasto até hoje lado a lado com o MESMO trecho do mês anterior (no mês fechado, mês cheio contra mês cheio).
+    """
     hoje = hoje or date.today()
-    mes = hoje.strftime("%Y-%m")
+    mes = _mes_valido(mes, hoje)
+    e_atual = mes == hoje.strftime("%Y-%m")
+    tipo = tipo if tipo in ("credito", "debito") else None
+    mapa = _mapa_contas(user_phone)
+    banco = banco if banco and banco in (set(mapa.values()) | {GRUPO_MANUAL, GRUPO_OUTRAS}) else None
+    filtrado = bool(banco or tipo)
+
+    ini, fim = _limites_mes(mes)
+    mes_ant = _mes_somado(mes, -1)
+    ini_a, fim_a = _limites_mes(mes_ant)
+    ate = hoje.isoformat() if e_atual else fim.isoformat()
+    ate_a = date(fim_a.year, fim_a.month, min(hoje.day, fim_a.day)).isoformat() if e_atual else fim_a.isoformat()
+    # Parcelas previstas (o banco ainda não postou) só existem para o mês em andamento e não têm conta/tipo por trás
+    # no cálculo: entram só sem filtro de banco e fora do recorte "débito".
+    usa_previstas = e_atual and not banco and tipo != "debito"
+
     def _previstas():
         try:
             from app import dados_banco as dbk
@@ -257,48 +359,95 @@ def dados_resumo(user_phone: str, hoje: date | None = None) -> dict:
         except Exception:
             return 0.0, 0, {}       # Previstas (parcelas que o banco ainda não postou) contam como lançadas, como no WhatsApp
 
-    # As cinco consultas são independentes: rodam juntas (o tempo vira o da mais lenta, não a soma).
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        f_gastos = ex.submit(db.monthly_total, user_phone, mes)
+    # As consultas são independentes: rodam juntas (o tempo vira o da mais lenta, não a soma).
+    with ThreadPoolExecutor(max_workers=7) as ex:
+        f_desp = ex.submit(db.linhas_gastos_periodo, user_phone, ini.isoformat(), fim.isoformat())
+        f_cred = ex.submit(db.linhas_creditos_cartao_periodo, user_phone, ini.isoformat(), fim.isoformat())
+        f_desp_a = ex.submit(db.linhas_gastos_periodo, user_phone, ini_a.isoformat(), fim_a.isoformat())
+        f_cred_a = ex.submit(db.linhas_creditos_cartao_periodo, user_phone, ini_a.isoformat(), fim_a.isoformat())
         f_receitas = ex.submit(db.monthly_income_total, user_phone, mes)
         f_orc = ex.submit(db.get_all_budgets, user_phone, mes)
-        f_prev = ex.submit(_previstas)
-        f_cats = ex.submit(db.monthly_by_category, user_phone, mes)
-        gastos, receitas = f_gastos.result(), f_receitas.result()
-        orc = {_normalize(b["category"]): float(b["amount"]) for b in f_orc.result()}
-        prev_total, _n, prev_cat = f_prev.result()
-        linhas_cat = f_cats.result()
-    por_cat = {}
-    for r in linhas_cat:
-        por_cat[r["category"]] = float(r["total"])
+        f_prev = ex.submit(_previstas) if usa_previstas else None
+        desp, cred, desp_a, cred_a = f_desp.result(), f_cred.result(), f_desp_a.result(), f_cred_a.result()
+        receitas = f_receitas.result()
+        orc = {} if filtrado else {_normalize(b["category"]): float(b["amount"]) for b in f_orc.result()}
+        prev_total, _n, prev_cat = f_prev.result() if f_prev else (0.0, 0, {})
+
+    por_cat: dict[str, float] = {}
+    for r in desp:
+        if not _passa(r, banco, tipo, mapa):
+            continue
+        bruta = (r.get("category") or "").strip() or "Outros"
+        chave = next((k for k in por_cat if _normalize(k) == _normalize(bruta)), bruta)
+        por_cat[chave] = por_cat.get(chave, 0.0) + float(r["amount"])
+    por_cat = {k: round(v, 2) for k, v in por_cat.items()}
     for c, v in prev_cat.items():
         por_cat[c] = round(por_cat.get(c, 0.0) + v, 2)
-    gastos_realizados, gastos = gastos, round(gastos + prev_total, 2)
+
+    gastos_realizados = _soma(desp, cred, banco, tipo, mapa)
+    gastos = round(gastos_realizados + prev_total, 2)
     cats = []
     for r in sorted(({"category": c, "total": v} for c, v in por_cat.items()), key=lambda x: -x["total"]):
         limite = orc.get(_normalize(r["category"]))
         pct = round(r["total"] / limite * 100) if limite else None
         status = None if pct is None else ("estourado" if pct > 100 else ("atencao" if pct >= 80 else "saudavel"))
         cats.append({"nome": r["category"], "gasto": r["total"], "orcamento": limite, "pct": pct, "status": status})
-    return {"mes": mes, "receitas": receitas, "gastos": gastos, "saldo": round(receitas - gastos, 2),
+
+    atual_ate = _soma(desp, cred, banco, tipo, mapa, ate)
+    ant_ate = _soma(desp_a, cred_a, banco, tipo, mapa, ate_a)
+    dif = round(atual_ate - ant_ate, 2)
+    nome_ant = _MESES_PT[int(mes_ant[5:]) - 1]
+    comparacao = {"mes_anterior": mes_ant, "atual": atual_ate, "anterior": ant_ate, "dif": dif,
+                  "pct": round(dif / ant_ate * 100, 1) if ant_ate > 0 else None,
+                  "referencia": (f"1 a {min(hoje.day, fim_a.day)} de {nome_ant}" if e_atual else nome_ant)}
+
+    por_banco = [{"id": x["id"], "nome": x["id"], "gasto": x["gasto"]}
+                 for x in _barras(desp, cred, lambda r: _grupo(r, mapa), None, tipo, mapa)]
+    rot_tipo = {"credito": "Crédito", "debito": "Débito e Pix"}
+    por_tipo = [{"id": x["id"], "nome": rot_tipo[x["id"]], "gasto": x["gasto"]}
+                for x in _barras(desp, cred, lambda r: "credito" if (r.get("payment_method") or "").lower() == "credito"
+                                 else "debito", banco, None, mapa)]
+    opcoes = set(mapa.values())
+    if any(not r.get("account_id") for r in desp):
+        opcoes.add(GRUPO_MANUAL)
+    if banco:
+        opcoes.add(banco)
+    atual_mes = hoje.strftime("%Y-%m")
+    meses = [_mes_somado(atual_mes, -i) for i in range(_MESES_NO_SELETOR - 1, -1, -1)]
+    if mes not in meses:
+        meses.insert(0, mes)
+
+    return {"mes": mes, "receitas": receitas, "gastos": gastos,
+            "saldo": None if filtrado else round(receitas - gastos, 2),
             "previstas": prev_total, "gastos_realizados": gastos_realizados,
-            "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats}
+            "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats,
+            "filtros": {"mes": mes, "banco": banco or "", "tipo": tipo or ""},
+            "meses": meses, "bancos": sorted(opcoes), "comparacao": comparacao,
+            "por_banco": por_banco, "por_tipo": por_tipo}
 
 
-def dados_categoria(user_phone: str, categoria: str, hoje: date | None = None) -> dict:
+def dados_categoria(user_phone: str, categoria: str, hoje: date | None = None, mes: str | None = None,
+                    banco: str | None = None, tipo: str | None = None) -> dict:
     """Detalhe de UMA categoria no mês: subcategorias (do maior para o menor) e os lançamentos de cada uma.
-    Os totais batem com o Resumo: lançamentos do mês + parcelas previstas que o banco ainda não postou."""
+    Os totais batem com o Resumo: lançamentos do mês + parcelas previstas que o banco ainda não postou.
+    Com os mesmos filtros do Resumo (`mes`, `banco`, `tipo`), mostra só aquele recorte."""
     hoje = hoje or date.today()
-    mes = hoje.strftime("%Y-%m")
+    mes = _mes_valido(mes, hoje)
+    e_atual = mes == hoje.strftime("%Y-%m")
+    tipo = tipo if tipo in ("credito", "debito") else None
+    mapa = _mapa_contas(user_phone)
+    banco = banco if banco and banco in (set(mapa.values()) | {GRUPO_MANUAL, GRUPO_OUTRAS}) else None
+    filtrado = bool(banco or tipo)
     alvo = _normalize(categoria)
-    linhas = db.expenses_of_category_month(user_phone, categoria, mes)
+    linhas = [r for r in db.expenses_of_category_month(user_phone, categoria, mes) if _passa(r, banco, tipo, mapa)]
     previstas = 0.0
-    try:
-        from app import dados_banco as dbk
-        _t, _n, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
-        previstas = round(sum(v for c, v in prev_cat.items() if _normalize(c) == alvo), 2)
-    except Exception:
-        pass
+    if e_atual and not banco and tipo != "debito":
+        try:
+            from app import dados_banco as dbk
+            _t, _n, prev_cat = dbk.parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1))
+            previstas = round(sum(v for c, v in prev_cat.items() if _normalize(c) == alvo), 2)
+        except Exception:
+            pass
     grupos: dict[str, dict] = {}
     for r in linhas:
         sub = (r.get("subcategory") or "").strip() or "Sem subcategoria"
@@ -317,19 +466,20 @@ def dados_categoria(user_phone: str, categoria: str, hoje: date | None = None) -
         g["n"] = len(g["itens"])
         g["itens"].sort(key=lambda i: (i["data"], i["valor"]), reverse=True)
     total = round(sum(g["total"] for g in subs) + previstas, 2)
-    orc = next((float(b["amount"]) for b in db.get_all_budgets(user_phone, mes) if _normalize(b["category"]) == alvo), None)
+    orc = None if filtrado else next((float(b["amount"]) for b in db.get_all_budgets(user_phone, mes) if _normalize(b["category"]) == alvo), None)
     pct = round(total / orc * 100) if orc else None
     status = None if pct is None else ("estourado" if pct > 100 else ("atencao" if pct >= 80 else "saudavel"))
     nome = next((r["category"].strip() for r in linhas if r.get("category")), categoria)
-    # Mês anterior (só o que foi lançado; parcelas previstas não existem mais para um mês fechado)
-    ini_ant = date(hoje.year - (hoje.month == 1), 12 if hoje.month == 1 else hoje.month - 1, 1)
+    # Mês anterior (só o que foi lançado; parcelas previstas não existem mais para um mês fechado), com o mesmo filtro
+    mes_ant = _mes_somado(mes, -1)
     anterior = round(sum(float(r.get("amount") or 0) for r in
-                         db.expenses_of_category_month(user_phone, categoria, ini_ant.strftime("%Y-%m"))), 2)
+                         db.expenses_of_category_month(user_phone, categoria, mes_ant) if _passa(r, banco, tipo, mapa)), 2)
     return {"mes": mes, "categoria": nome, "total": total, "orcamento": orc, "pct": pct, "status": status,
             "previstas": previstas, "lancamentos": len(linhas), "subcategorias": subs,
             "a_revisar": sum(1 for r in linhas if r.get("review_status") == "revisar"),
-            "mes_anterior": ini_ant.strftime("%Y-%m"), "anterior": anterior,
-            "dif": round(total - anterior, 2) if anterior else None}
+            "mes_anterior": mes_ant, "anterior": anterior,
+            "dif": round(total - anterior, 2) if anterior else None,
+            "filtros": {"mes": mes, "banco": banco or "", "tipo": tipo or ""}}
 
 
 def _usuario(sessao: str | None) -> tuple[str, str]:
@@ -416,18 +566,20 @@ def pagina(finflow_sessao: str | None = Cookie(default=None)):
 
 
 @router.get("/painel/api/resumo")
-def api_resumo(finflow_sessao: str | None = Cookie(default=None)):
+def api_resumo(mes: str = "", banco: str = "", tipo: str = "", finflow_sessao: str | None = Cookie(default=None)):
     _real, usuario = _usuario(finflow_sessao)
-    return _json(dados_resumo(usuario))
+    return _json(dados_resumo(usuario, mes=(mes or "")[:7], banco=(banco or "").strip()[:60] or None,
+                              tipo=(tipo or "").strip()[:10] or None))
 
 
 @router.get("/painel/api/categoria")
-def api_categoria(nome: str = "", finflow_sessao: str | None = Cookie(default=None)):
+def api_categoria(nome: str = "", mes: str = "", banco: str = "", tipo: str = "", finflow_sessao: str | None = Cookie(default=None)):
     _real, usuario = _usuario(finflow_sessao)
     nome = (nome or "").strip()[:80]
     if not nome:
         raise HTTPException(status_code=400, detail="categoria não informada")
-    return _json(dados_categoria(usuario, nome))
+    return _json(dados_categoria(usuario, nome, mes=(mes or "")[:7], banco=(banco or "").strip()[:60] or None,
+                                 tipo=(tipo or "").strip()[:10] or None))
 
 
 @router.get("/painel/api/fluxo")
@@ -752,6 +904,14 @@ details.gr[open]>summary .q:after{transform:rotate(-135deg);margin-top:4px}detai
 .avisorev{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#3A2A12;border:1px solid #5A4220;color:#FFE1BD;border-radius:18px;padding:12px 14px;font-size:14px}
 .avisorev button{min-height:44px;padding:0 14px;border-radius:12px;border:0;background:var(--farol);color:#2A1A05;font:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
 .compara{font-size:13px;font-weight:600}
+.filtros{display:flex;flex-direction:column;gap:8px;margin:0 0 12px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.chip{flex:0 0 auto;min-height:40px;padding:0 14px;border-radius:20px;border:1px solid var(--lin);background:var(--card);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+.chip[aria-pressed=true]{background:#2A62F5;border-color:#2A62F5;color:#fff}
+.mom{display:inline-block;font-size:13px;font-weight:700;margin-top:2px}
+.vb{width:100%;text-align:left;border:0;background:none;font:inherit;color:inherit;padding:8px 0;cursor:pointer;min-height:44px}
+.vb[aria-pressed=true] .barra i{background:#2A62F5}
+.vb[aria-pressed=false].dim{opacity:.55}
 nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--lin);display:flex;gap:4px;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;border-radius:16px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
 nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
@@ -764,15 +924,31 @@ const brl=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,max
 const el=document.getElementById('conteudo'),ti=document.getElementById('titulo'),sub=document.getElementById('sub');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(p){const r=await fetch('/painel/api/'+p,{credentials:'same-origin'});if(r.status===401){location.href='/painel';throw 0}return r.json()}
-let atual=null;const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
+let atual=null;const F={mes:'',banco:'',tipo:''};const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
 const vistas={
- async resumo(){const d=await api('resumo');ti.textContent='Resumo '+d.mes.slice(5)+'/'+d.mes.slice(0,4);
+ async resumo(){const q=new URLSearchParams();if(F.mes)q.set('mes',F.mes);if(F.banco)q.set('banco',F.banco);if(F.tipo)q.set('tipo',F.tipo);
+  const d=await api('resumo'+(q.toString()?'?'+q:''));F.mes=d.filtros.mes;F.banco=d.filtros.banco;F.tipo=d.filtros.tipo;
+  ti.textContent='Resumo '+d.mes.slice(5)+'/'+d.mes.slice(0,4);
   sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
-  el.className='';el.innerHTML='<div class="hero"><div class="lin"><span class="r">Receitas</span><b class="pos">'+brl(d.receitas)+'</b></div>'+
-  '<div class="lin"><span class="r">Gastos</span><b class="neg">'+brl(d.gastos)+'</b></div><div class="lin"><span class="r">Saldo do mês</span><span class="saldo '+(d.saldo<0?'neg':'pos')+'">'+brl(d.saldo)+'</span></div></div>'+
-  '<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
+  const filtrado=!!(F.banco||F.tipo),c=d.comparacao;
+  const nm=m=>MESES[Number(m.slice(5))-1].slice(0,3);
+  const chipsMes=d.meses.map(m=>'<button type="button" class="chip" data-f="mes" data-v="'+m+'" aria-pressed="'+(m===d.mes)+'">'+nm(m)+(m.slice(0,4)!==d.mes.slice(0,4)?'/'+m.slice(2,4):'')+'</button>').join('');
+  const chipsTipo=[['','Todos'],['credito','Crédito'],['debito','Débito e Pix']].map(x=>'<button type="button" class="chip" data-f="tipo" data-v="'+x[0]+'" aria-pressed="'+(F.tipo===x[0])+'">'+x[1]+'</button>').join('');
+  const chipsBanco=[''].concat(d.bancos).map(x=>'<button type="button" class="chip" data-f="banco" data-v="'+esc(x)+'" aria-pressed="'+(F.banco===x)+'">'+(x||'Todos os bancos')+'</button>').join('');
+  const filtros='<div class="filtros"><div class="chips" role="group" aria-label="Mês">'+chipsMes+'</div><div class="chips" role="group" aria-label="Tipo de pagamento">'+chipsTipo+'</div><div class="chips" role="group" aria-label="Banco">'+chipsBanco+'</div></div>';
+  let mom='';if(c.anterior>0||c.atual>0){if(c.pct===null){mom='<span class="mom r">Sem gastos em '+MESES[Number(c.mes_anterior.slice(5))-1]+' para comparar</span>'}
+   else{const up=c.dif>0;mom='<span class="mom '+(c.dif===0?'r':up?'neg':'pos')+'">'+(c.dif===0?'= igual a ':(up?'↑ ':'↓ ')+Math.abs(c.pct).toString().replace('.',',')+'% ('+brl(Math.abs(c.dif))+') '+(up?'a mais':'a menos')+' que ')+'<span style="font-weight:500">'+esc(c.referencia)+'</span></span>'}}
+  const tit=filtrado?[F.banco,F.tipo==='credito'?'Crédito':F.tipo==='debito'?'Débito e Pix':''].filter(Boolean).join(' · '):'';
+  const hero='<div class="hero">'+(filtrado?'<div class="lin"><span class="r">Recorte</span><b>'+esc(tit)+'</b></div>':'<div class="lin"><span class="r">Receitas</span><b class="pos">'+brl(d.receitas)+'</b></div>')+
+   '<div class="lin"><span class="r">Gastos</span><b class="neg">'+brl(d.gastos)+'</b></div>'+(filtrado?'':'<div class="lin"><span class="r">Saldo do mês</span><span class="saldo '+(d.saldo<0?'neg':'pos')+'">'+brl(d.saldo)+'</span></div>')+mom+'</div>';
+  const maxB=l=>Math.max(...l.map(x=>x.gasto),1);
+  const barras=(tit2,lista,chave,sel)=>lista.length<2&&!sel?'':'<div class="card"><b>'+tit2+'</b>'+lista.map(x=>'<button type="button" class="vb'+(sel&&sel!==x.id?' dim':'')+'" data-f="'+chave+'" data-v="'+esc(x.id)+'" aria-pressed="'+(sel===x.id)+'"><div class="lin"><b>'+esc(x.nome)+'</b><span>'+brl(x.gasto)+'</span></div><div class="barra"><i style="width:'+Math.max(2,Math.max(x.gasto,0)/maxB(lista)*100).toFixed(1)+'%"></i></div></button>').join('')+'</div>';
+  const vazio=!d.por_banco.length&&!d.por_tipo.length;
+  const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
-  (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste mês.</p>')+'</div>';
+  (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
+  el.className='';el.innerHTML=filtros+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco)+barras('Crédito x débito',d.por_tipo,'tipo',F.tipo))+cats;
+  el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{const k=b.dataset.f,v=b.dataset.v;F[k]=(b.classList.contains('vb')&&F[k]===v)?'':v;vistas.resumo()});
   el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
   if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
@@ -862,7 +1038,7 @@ async function abrirCategoria(nome,semHistorico){atual=null;
  window.scrollTo(0,0);ti.textContent=nome;sub.innerHTML='<button type="button" class="voltar" id="voltar">← Resumo</button>';
  document.getElementById('voltar').onclick=()=>history.back();
  el.className='mut';el.textContent='Carregando…';
- try{const d=await api('categoria?nome='+encodeURIComponent(nome));el.className='';ti.textContent=d.categoria;
+ try{const d=await api('categoria?nome='+encodeURIComponent(nome)+'&mes='+encodeURIComponent(F.mes)+'&banco='+encodeURIComponent(F.banco)+'&tipo='+encodeURIComponent(F.tipo));el.className='';ti.textContent=d.categoria;
   const forma={credito:'Crédito',debito:'Débito',pix:'Pix',boleto:'Boleto'};
   const dm=i=>i?i.slice(8,10)+'/'+i.slice(5,7):'';
   const topo='<div class="hero"><div class="lin"><span class="r">Gasto no mês</span><span class="saldo">'+brl(d.total)+'</span></div>'+
