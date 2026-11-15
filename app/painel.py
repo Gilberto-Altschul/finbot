@@ -403,7 +403,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
 
     por_banco = [{"id": x["id"], "nome": x["id"], "gasto": x["gasto"]}
                  for x in _barras(desp, cred, lambda r: _grupo(r, mapa), None, tipo, mapa)]
-    rot_tipo = {"credito": "Crédito", "debito": "Débito e Pix"}
+    rot_tipo = {"credito": "Crédito", "debito": "Débito"}
     por_tipo = [{"id": x["id"], "nome": rot_tipo[x["id"]], "gasto": x["gasto"]}
                 for x in _barras(desp, cred, lambda r: "credito" if (r.get("payment_method") or "").lower() == "credito"
                                  else "debito", banco, None, mapa)]
@@ -933,12 +933,12 @@ const vistas={
   const filtrado=!!(F.banco||F.tipo),c=d.comparacao;
   const nm=m=>MESES[Number(m.slice(5))-1].slice(0,3);
   const chipsMes=d.meses.map(m=>'<button type="button" class="chip" data-f="mes" data-v="'+m+'" aria-pressed="'+(m===d.mes)+'">'+nm(m)+(m.slice(0,4)!==d.mes.slice(0,4)?'/'+m.slice(2,4):'')+'</button>').join('');
-  const chipsTipo=[['','Todos'],['credito','Crédito'],['debito','Débito e Pix']].map(x=>'<button type="button" class="chip" data-f="tipo" data-v="'+x[0]+'" aria-pressed="'+(F.tipo===x[0])+'">'+x[1]+'</button>').join('');
+  const chipsTipo=[['','Todos'],['credito','Crédito'],['debito','Débito']].map(x=>'<button type="button" class="chip" data-f="tipo" data-v="'+x[0]+'" aria-pressed="'+(F.tipo===x[0])+'">'+x[1]+'</button>').join('');
   const chipsBanco=[''].concat(d.bancos).map(x=>'<button type="button" class="chip" data-f="banco" data-v="'+esc(x)+'" aria-pressed="'+(F.banco===x)+'">'+(x||'Todos os bancos')+'</button>').join('');
   const filtros='<div class="filtros"><div class="chips" role="group" aria-label="Mês">'+chipsMes+'</div><div class="chips" role="group" aria-label="Tipo de pagamento">'+chipsTipo+'</div><div class="chips" role="group" aria-label="Banco">'+chipsBanco+'</div></div>';
   let mom='';if(c.anterior>0||c.atual>0){if(c.pct===null){mom='<span class="mom r">Sem gastos em '+MESES[Number(c.mes_anterior.slice(5))-1]+' para comparar</span>'}
    else{const up=c.dif>0;mom='<span class="mom '+(c.dif===0?'r':up?'neg':'pos')+'">'+(c.dif===0?'= igual a ':(up?'↑ ':'↓ ')+Math.abs(c.pct).toString().replace('.',',')+'% ('+brl(Math.abs(c.dif))+') '+(up?'a mais':'a menos')+' que ')+'<span style="font-weight:500">'+esc(c.referencia)+'</span></span>'}}
-  const tit=filtrado?[F.banco,F.tipo==='credito'?'Crédito':F.tipo==='debito'?'Débito e Pix':''].filter(Boolean).join(' · '):'';
+  const tit=filtrado?[F.banco,F.tipo==='credito'?'Crédito':F.tipo==='debito'?'Débito':''].filter(Boolean).join(' · '):'';
   const hero='<div class="hero">'+(filtrado?'<div class="lin"><span class="r">Recorte</span><b>'+esc(tit)+'</b></div>':'<div class="lin"><span class="r">Receitas</span><b class="pos">'+brl(d.receitas)+'</b></div>')+
    '<div class="lin"><span class="r">Gastos</span><b class="neg">'+brl(d.gastos)+'</b></div>'+(filtrado?'':'<div class="lin"><span class="r">Saldo do mês</span><span class="saldo '+(d.saldo<0?'neg':'pos')+'">'+brl(d.saldo)+'</span></div>')+mom+'</div>';
   const maxB=l=>Math.max(...l.map(x=>x.gasto),1);
