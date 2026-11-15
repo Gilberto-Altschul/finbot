@@ -947,7 +947,7 @@ const vistas={
   const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
   (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
-  el.className='';el.innerHTML=filtros+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco)+barras('Crédito x débito',d.por_tipo,'tipo',F.tipo))+cats;
+  el.className='';el.innerHTML=filtros+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+cats;
   el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{const k=b.dataset.f,v=b.dataset.v;F[k]=(b.classList.contains('vb')&&F[k]===v)?'':v;vistas.resumo()});
   el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
