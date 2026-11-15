@@ -117,6 +117,11 @@ async def _rodar() -> dict:
             continue
         resumo["novos"] += n
         resumo["revisar"] += r
+        try:
+            from app import alerta
+            resumo["alertas"] = resumo.get("alertas", 0) + await asyncio.to_thread(alerta.alertar_orcamentos, fone)
+        except Exception as e:
+            logger.warning(f"Cron {_mascara(fone)}: alerta de orçamento falhou ({e}).")
         logger.info(f"Cron {_mascara(fone)}: {n} novos, {r} para revisar.")
     return resumo
 

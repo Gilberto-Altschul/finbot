@@ -238,6 +238,12 @@ def _send_whatsapp_texto(to: str, body: str) -> None:
             time.sleep(0.4)
 
 
+def enviar_alerta(texto: str) -> bool:
+    """Alerta de resposta rápida ao dono (ver app/alerta.py)."""
+    from app import alerta
+    return alerta.enviar_alerta(texto)
+
+
 # Botão "Acesso" (modelo Twilio "call to action": corpo curto + botão URL .../painel/entrar?c={{1}}).
 # FINFLOW_ACESSO_SID troca o modelo; "0" desliga o botão (volta ao link em texto).
 ACESSO_SID_PADRAO = "HX63942d935d54f021631033d309e1c008"
@@ -605,6 +611,36 @@ async def async_process_retomar_revisao(user_phone: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/alerta")
+async def rota_alerta(request: Request, x_cron_secret: str = Header(None)):
+    """Dispara um alerta para o dono. Corpo JSON: {"texto": "..."}. Mesmo segredo do /cron/sync (X-Cron-Secret)."""
+    segredo = os.getenv("FINBOT_CRON_SECRET")
+    if not segredo:
+        raise HTTPException(status_code=503, detail="FINBOT_CRON_SECRET não configurado.")
+    if not x_cron_secret or not hmac.compare_digest(x_cron_secret.encode(), segredo.encode()):
+        raise HTTPException(status_code=401, detail="Não autorizado.")
+    try:
+        texto = str((await request.json()).get("texto", ""))
+    except Exception:
+        texto = ""
+    return {"enviado": await asyncio.to_thread(enviar_alerta, texto)}
+
+
+@app.get("/alerta/teste-orcamento")
+async def teste_alerta_orcamento(fone: str = "", enviar: int = 0, x_cron_secret: str = Header(None)):
+    """Teste do alerta de orçamento sem esperar o cron. Sem `fone`: só lista quem estourou (não envia nada).
+    Com `fone` (ex.: whatsapp:+5511999999999) e enviar=1: manda o aviso a esse número agora. Exige X-Cron-Secret."""
+    segredo = os.getenv("FINBOT_CRON_SECRET")
+    if not segredo:
+        raise HTTPException(status_code=503, detail="FINBOT_CRON_SECRET não configurado.")
+    if not x_cron_secret or not hmac.compare_digest(x_cron_secret.encode(), segredo.encode()):
+        raise HTTPException(status_code=401, detail="Não autorizado.")
+    from app import alerta
+    digitos = "".join(c for c in fone if c.isdigit())   # o "+" some na URL; só os dígitos importam
+    f = "whatsapp:+" + digitos if digitos else ""
+    return await asyncio.to_thread(alerta.testar, f or None, bool(enviar))
 
 
 @app.post("/cron/sync", status_code=202)
