@@ -700,6 +700,9 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
     # Modo demonstração: "modo demo" / "sair do demo" / "limpar demo" valem sempre, ligado ou não.
     cmd_demo = demo_mod.comando(user_message)
     if cmd_demo:
+        # Gerar os dados fictícios leva alguns segundos: avisa antes (uma mensagem curta, dentro da janela de 24 h).
+        if cmd_demo == "ativar_real" or (cmd_demo == "ativar" and not await asyncio.to_thread(demo_mod._tem_dados, demo_mod.telefone_demo(real_phone))):
+            await asyncio.to_thread(_send_whatsapp, real_phone, "🎭 Preparando a demonstração com dados fictícios… leva alguns segundos.")
         resposta = await asyncio.to_thread(demo_mod.executar, real_phone, cmd_demo)
         await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
         return
