@@ -272,6 +272,28 @@ def monthly_by_category(user_phone: str, mes_ref: str | None = None, dia_inicio:
         logger.error(f"Erro agrupamento categorias: {exc}")
         return []
 
+def linhas_movimentos_periodo(user_phone: str, start: str, end: str) -> list[dict]:
+    """Gastos E receitas do período numa leitura só (para o gráfico mensal do painel). Pagina de 1000 em 1000:
+    sem isso, 12 meses de um usuário movimentado estourariam o limite de linhas por consulta."""
+    saida: list[dict] = []
+    try:
+        for pagina in range(30):
+            de = pagina * 1000
+            res = get_db().table("finbot_expenses") \
+                .select("movement, amount, payment_method, account_id, billing_date") \
+                .ilike("user_phone", _q(user_phone)) \
+                .in_("movement", ["expense", "income"]) \
+                .gte("billing_date", start).lte("billing_date", end) \
+                .order("billing_date").order("id").range(de, de + 999).execute()
+            lote = res.data or []
+            saida.extend(lote)
+            if len(lote) < 1000:
+                break
+    except Exception as exc:
+        logger.error(f"Erro em linhas_movimentos_periodo: {exc}")
+    return saida
+
+
 def linhas_gastos_periodo(user_phone: str, start: str, end: str) -> list[dict]:
     """Gastos do período (movement=expense, por billing_date) com o que o painel precisa para filtrar:
     categoria, valor, forma de pagamento e conta/cartão de origem. Mesma regra de data do monthly_total."""

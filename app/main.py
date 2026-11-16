@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     logger.info("HTTP Client encerrado.")
 
 
-app = FastAPI(title="FinBot", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="FinFlow", version="1.0.0", lifespan=lifespan)
 
 http_client: httpx.AsyncClient = None
 app.include_router(painel.router)   # painel web do FinFlow (/painel/...)

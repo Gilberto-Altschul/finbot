@@ -28,7 +28,7 @@ from app.utils import get_lookup_prefix, _normalize
 logger = logging.getLogger(__name__)
 
 # Muda a cada pacote entregue; o comando 'versao' mostra isto para conferir a publicação.
-VERSAO = "2026-11-11h · fluxo e previsão mais rápidos"
+VERSAO = "2026-11-16 · resumo com filtros, demo, alertas e resumo semanal"
 
 _MESES_COMPLETOS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                     "setembro", "outubro", "novembro", "dezembro"]
@@ -500,7 +500,7 @@ def _bloco_cartao(nome: str, due: date, gastos: list[dict], total_banco: float |
     bruto = round(sum(float(g["amount"]) for g in gastos), 2)
     abatido = round(sum(abs(float(c["amount"])) for c in (creditos or [])), 2)
     total = round(bruto - abatido, 2)
-    rotulo = "Compras até agora" if fecha_em else "Total no FinBot"
+    rotulo = "Compras até agora" if fecha_em else "Total no FinFlow"
     msg = f"💳 *{nome}* · vence {due.strftime('%d/%m/%Y')}\n💰 {rotulo}: *R$ {fat.fmt_moeda(total)}*\n"
     if abatido:
         msg += f"↩️ Já abatidos créditos/estornos: R$ {fat.fmt_moeda(abatido)}\n"
@@ -633,7 +633,7 @@ async def adicionar_banco(pluggy_factory, user_phone: str, item_id: str) -> str:
         if status in (401, 403) or (status and status >= 500):
             return "⚠️ A Pluggy não respondeu direito agora. Tente de novo em alguns minutos."
         return ("⚠️ Não encontrei esse item na Pluggy. Confira o código e tente de novo.\n"
-                "_Dica: o item precisa ter sido conectado pela aplicação do FinBot; itens criados em outra conta da Pluggy (ex.: o MeuPluggy de outra pessoa) não aparecem aqui._")
+                "_Dica: o item precisa ter sido conectado pela aplicação do FinFlow; itens criados em outra conta da Pluggy (ex.: o MeuPluggy de outra pessoa) não aparecem aqui._")
     itens_mod.registrar(user_phone, item_id)
     contas, _ = await garantir(lambda: pluggy, user_phone, forcar=True)
     novas = [c for c in contas if c.get("item_id") == item_id]

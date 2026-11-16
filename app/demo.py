@@ -1,5 +1,5 @@
 """
-Modo demonstração: dados FICTÍCIOS para mostrar o FinBot sem tocar nos dados reais.
+Modo demonstração: dados FICTÍCIOS para mostrar o FinFlow sem tocar nos dados reais.
 
 Como funciona
 - "modo demo" liga: o bot passa a usar um usuário sintético ligado ao mesmo WhatsApp (telefone "whatsapp:+0<número>";
@@ -118,7 +118,7 @@ def executar(real: str, cmd: str) -> str:
             if not _tem_dados(demo):
                 gerar(demo)
             ativar(real)
-            return ("🎭 *Modo demonstração ligado* (por %dh).\n\nAgora o FinBot mostra dados *fictícios* — seus dados reais "
+            return ("🎭 *Modo demonstração ligado* (por %dh).\n\nAgora o FinFlow mostra dados *fictícios* — seus dados reais "
                     "não são tocados nem misturados.\n\nExperimente: *saldos*, *resumo*, *fatura*, *faturas futuras*, "
                     "*fluxo*, *previsão do mês*, *parcelamentos*.\n\nPara voltar: *sair do demo*. Para apagar os dados "
                     "fictícios: *limpar demo*." % DURACAO_H)

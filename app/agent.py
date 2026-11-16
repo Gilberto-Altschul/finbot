@@ -57,7 +57,7 @@ def _build_system() -> str:
         # Parte estática (taxonomia, regras) — montada uma única vez e cacheada,
         # pois não muda entre chamadas e recalcular a taxonomia toda hora seria caro.
         _system_cache = f"""
-Você é o FinBot, um assistente financeiro pessoal via WhatsApp.
+Você é o FinFlow, um assistente financeiro pessoal via WhatsApp.
 Seu objetivo: ajudar o usuário a registrar gastos, receitas (incomes) e entender sua vida financeira.
 
 PERSONALIDADE:
@@ -107,7 +107,7 @@ def _invalidar_cache_system() -> None:
     _system_cache = None
 
 ONBOARDING_MSG = (
-    "👋 Olá! Sou o *FinBot*, seu assistente de controle financeiro.\n\n"
+    "👋 Olá! Sou o *FinFlow*, seu assistente de controle financeiro.\n\n"
     "Para começar, me diz: *qual o dia de vencimento da sua fatura do cartão de crédito?*\n\n"
     "_(Se não usar cartão, pode digitar qualquer dia — ex: 1)_"
 )
@@ -270,7 +270,7 @@ def _format_output(result: Any, tool_name: str, user_phone: str) -> str:
 
 async def _fast_path(tool_name: str, args: dict, user_phone: str) -> str:
     if tool_name == "ajuda":
-        return "💡 *FinBot — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'faturas futuras'_\n• _'fluxo'_ (saldo projetado)\n• _'previsão do mês'_\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
+        return "💡 *FinFlow — O que você pode perguntar:*\n\n*📊 VER GASTOS*\n• _'resumo'_\n• _'gastos alimentação'_\n• _'maiores gastos'_\n• _'essa semana'_\n• _'mês passado'_\n\n*💳 CARTÃO E CONTA*\n• _'fatura'_\n• _'parcelamentos'_\n• _'faturas futuras'_\n• _'fluxo'_ (saldo projetado)\n• _'previsão do mês'_\n• _'saldo'_\n\n*📁 CONFIGURAÇÃO*\n• _'categorias'_"
     
     if tool_name == "listar_menu_categorias":
         return (
@@ -370,7 +370,7 @@ async def _classify(message: str, user_phone: str) -> dict | None:
     # Qual versão do código está rodando (para conferir se a publicação valeu).
     if re.fullmatch(r"(versao|versão|build)", msg.strip(), flags=re.IGNORECASE):
         from app.dados_banco import VERSAO
-        return {"tool": "direct_reply", "args": {"mensagem": f"🔧 Versão do FinBot: {VERSAO}"}}
+        return {"tool": "direct_reply", "args": {"mensagem": f"🔧 Versão do FinFlow: {VERSAO}"}}
     # Sem código, a IA inventava um "link do Pluggy" que não existe: resposta fixa e verdadeira.
     if re.fullmatch(r"(conectar|adicionar|incluir|novo) (banco|conta|contas|bancos)", msg_norm):
         from app.dados_banco import MSG_CONECTAR_BANCO
@@ -727,7 +727,7 @@ async def run(user_phone: str, user_message: str) -> str:
         elif "resumo" in msg_norm:
             reply = await _fast_path("resumo_mensal", {}, user_phone)
         else:
-            reply = "⚠️ *Aviso do FinBot:* Minha cota diária de inteligência artificial gratuita foi atingida para hoje.\n\nMas você ainda pode registrar gastos digitando no padrão natural! Ex: `Padaria 15,90`"
+            reply = "⚠️ *Aviso do FinFlow:* Minha cota diária de inteligência artificial gratuita foi atingida para hoje.\n\nMas você ainda pode registrar gastos digitando no padrão natural! Ex: `Padaria 15,90`"
 
     db.save_message(user_phone, "assistant", reply)
     return reply

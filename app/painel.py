@@ -327,6 +327,46 @@ def _barras(desp, cred, chave, banco, tipo, mapa) -> list[dict]:
     return sorted(({"id": k, "gasto": round(v, 2)} for k, v in tot.items()), key=lambda x: -x["gasto"])
 
 
+_MESES_SERIE = 12
+
+
+def _serie_mensal(linhas: list[dict], hoje: date, banco, tipo, mapa, previstas_atual: float) -> list[dict]:
+    """Últimos 12 meses (o atual por último): receitas, gastos líquidos de estornos do cartão e saldo do mês (receitas − gastos).
+    Com filtro de banco/tipo só os gastos fazem sentido (receita não tem banco nem tipo): receitas e saldo vêm None.
+    O mês em andamento vem marcado `parcial` e já inclui as parcelas previstas, como o total do Resumo."""
+    atual = hoje.strftime("%Y-%m")
+    filtrado = bool(banco or tipo)
+    meses = [_mes_somado(atual, -i) for i in range(_MESES_SERIE - 1, -1, -1)]
+    acc = {m: {"bruto": 0.0, "cred": 0.0, "rec": 0.0, "n": 0} for m in meses}
+    for r in linhas:
+        m = str(r.get("billing_date") or "")[:7]
+        a = acc.get(m)
+        if a is None:
+            continue
+        valor = float(r.get("amount") or 0)
+        credito = (r.get("payment_method") or "").lower() == "credito"
+        if r.get("movement") == "expense":
+            a["n"] += 1
+            if _passa(r, banco, tipo, mapa):
+                a["bruto"] += valor
+        elif r.get("movement") == "income":
+            a["n"] += 1
+            if credito:
+                if _passa(r, banco, tipo, mapa):
+                    a["cred"] += abs(valor)
+            else:
+                a["rec"] += valor
+    saida = []
+    for m in meses:
+        a = acc[m]
+        gastos = round(a["bruto"] - a["cred"] + (previstas_atual if m == atual else 0.0), 2)
+        rec = None if filtrado else round(a["rec"], 2)
+        saida.append({"mes": m, "gastos": gastos, "receitas": rec,
+                      "saldo": None if filtrado else round(a["rec"] - gastos, 2),
+                      "parcial": m == atual, "vazio": a["n"] == 0 and not (m == atual and previstas_atual)})
+    return saida
+
+
 def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = None,
                  banco: str | None = None, tipo: str | None = None) -> dict:
     """Mesmos números do `resumo` do WhatsApp, como dados: receitas, gastos, saldo e categorias com orçamento.
@@ -350,7 +390,8 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
     ate_a = date(fim_a.year, fim_a.month, min(hoje.day, fim_a.day)).isoformat() if e_atual else fim_a.isoformat()
     # Parcelas previstas (o banco ainda não postou) só existem para o mês em andamento e não têm conta/tipo por trás
     # no cálculo: entram só sem filtro de banco e fora do recorte "débito".
-    usa_previstas = e_atual and not banco and tipo != "debito"
+    usa_previstas_atual = not banco and tipo != "debito"      # parcelas previstas: só do mês atual, sem filtro de banco / fora do débito
+    usa_previstas = e_atual and usa_previstas_atual
 
     def _previstas():
         try:
@@ -360,18 +401,23 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
             return 0.0, 0, {}       # Previstas (parcelas que o banco ainda não postou) contam como lançadas, como no WhatsApp
 
     # As consultas são independentes: rodam juntas (o tempo vira o da mais lenta, não a soma).
-    with ThreadPoolExecutor(max_workers=7) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         f_desp = ex.submit(db.linhas_gastos_periodo, user_phone, ini.isoformat(), fim.isoformat())
         f_cred = ex.submit(db.linhas_creditos_cartao_periodo, user_phone, ini.isoformat(), fim.isoformat())
         f_desp_a = ex.submit(db.linhas_gastos_periodo, user_phone, ini_a.isoformat(), fim_a.isoformat())
         f_cred_a = ex.submit(db.linhas_creditos_cartao_periodo, user_phone, ini_a.isoformat(), fim_a.isoformat())
         f_receitas = ex.submit(db.monthly_income_total, user_phone, mes)
         f_orc = ex.submit(db.get_all_budgets, user_phone, mes)
-        f_prev = ex.submit(_previstas) if usa_previstas else None
+        f_prev = ex.submit(_previstas) if usa_previstas_atual else None
+        f_serie = ex.submit(db.linhas_movimentos_periodo, user_phone,
+                            _limites_mes(_mes_somado(hoje.strftime("%Y-%m"), -(_MESES_SERIE - 1)))[0].isoformat(),
+                            _limites_mes(hoje.strftime("%Y-%m"))[1].isoformat())
         desp, cred, desp_a, cred_a = f_desp.result(), f_cred.result(), f_desp_a.result(), f_cred_a.result()
         receitas = f_receitas.result()
         orc = {} if filtrado else {_normalize(b["category"]): float(b["amount"]) for b in f_orc.result()}
-        prev_total, _n, prev_cat = f_prev.result() if f_prev else (0.0, 0, {})
+        prev_atual, _n, prev_cat_atual = f_prev.result() if f_prev else (0.0, 0, {})
+        prev_total, prev_cat = (prev_atual, prev_cat_atual) if e_atual else (0.0, {})
+        linhas_serie = f_serie.result()
 
     por_cat: dict[str, float] = {}
     for r in desp:
@@ -423,7 +469,8 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
             "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats,
             "filtros": {"mes": mes, "banco": banco or "", "tipo": tipo or ""},
             "meses": meses, "bancos": sorted(opcoes), "comparacao": comparacao,
-            "por_banco": por_banco, "por_tipo": por_tipo}
+            "por_banco": por_banco, "por_tipo": por_tipo,
+            "serie": _serie_mensal(linhas_serie, hoje, banco, tipo, mapa, prev_atual)}
 
 
 def dados_categoria(user_phone: str, categoria: str, hoje: date | None = None, mes: str | None = None,
@@ -918,6 +965,10 @@ details.gr[open]>summary .q:after{transform:rotate(-135deg);margin-top:4px}detai
 .vb{width:100%;text-align:left;border:0;background:none;font:inherit;color:inherit;padding:8px 0;cursor:pointer;min-height:44px}
 .vb[aria-pressed=true] .barra i{background:#2A62F5}
 .vb[aria-pressed=false].dim{opacity:.55}
+.grf{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px -4px 0;padding-bottom:4px}.grf svg{display:block}
+.gm{cursor:pointer;fill:transparent;outline:none}.gm:focus-visible{stroke:var(--vt);stroke-width:2}
+.leg{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:13px;color:var(--mut)}.leg span{display:inline-flex;align-items:center;gap:6px}.leg i{width:12px;height:12px;border-radius:3px;display:inline-block}.leg i.ln{height:3px;border-radius:2px;background:var(--vt)}
+.gnota{margin:6px 0 0;font-size:12px;color:var(--mut)}
 nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--lin);display:flex;gap:4px;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;border-radius:16px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
 nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
@@ -930,6 +981,29 @@ const brl=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,max
 const el=document.getElementById('conteudo'),ti=document.getElementById('titulo'),sub=document.getElementById('sub');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(p){const r=await fetch('/painel/api/'+p,{credentials:'same-origin'});if(r.status===401){location.href='/painel';throw 0}return r.json()}
+let CS=null;
+function grafico(s,sel,filtrado){
+ const n=s.length,larg=Math.max(280,el.clientWidth-36),cw=Math.max(58,Math.floor(larg/n)),W=cw*n,H=230,top=18,bot=30,ph=H-top-bot;
+ const gas=s.map(x=>x.gasto===undefined?x.gastos:x.gasto),rec=s.map(x=>x.receitas),sal=s.map(x=>x.saldo);
+ const mx=Math.max(1,...gas,...rec.filter(v=>v!==null)),mn=Math.min(0,...sal.filter(v=>v!==null),...gas),rg=(mx-mn)||1;
+ const y=v=>top+(mx-v)/rg*ph,y0=y(0),bw=Math.min(22,Math.floor((cw-14)/2));
+ const nm2=m=>MESES[Number(m.slice(5))-1].slice(0,3)+((m.slice(5)==='01'||m===s[0].mes)?'/'+m.slice(2,4):'');
+ let g='<rect x="0" y="'+y0.toFixed(1)+'" width="'+W+'" height="1" fill="var(--lin)"/>',pts=[],hits='';
+ s.forEach((x,i)=>{const cx=i*cw+cw/2,on=x.mes===sel,op=x.parcial?' fill-opacity=".6"':'',dash=x.parcial?' stroke-dasharray="3 2"':'';
+  if(on)g+='<rect x="'+(i*cw+3)+'" y="2" width="'+(cw-6)+'" height="'+(H-4)+'" rx="10" fill="rgba(42,98,245,.18)" stroke="var(--borda)"/>';
+  if(!x.vazio){
+   const bar=(v,xx,w,cor)=>{const yy=Math.min(y(v),y0),hh=Math.max(1,Math.abs(y(v)-y0));return '<rect x="'+xx.toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+w+'" height="'+hh.toFixed(1)+'" rx="3" fill="'+cor+'"'+op+(x.parcial?dash+' stroke="'+cor+'"':'')+'/>'};
+   if(filtrado)g+=bar(x.gastos,cx-bw*0.8,bw*1.6,'var(--coral)');
+   else{g+=bar(x.receitas,cx-bw-1,bw,'var(--agua)')+bar(x.gastos,cx+1,bw,'var(--coral)');pts.push([cx,y(x.saldo),on])}
+  }
+  g+='<text x="'+cx+'" y="'+(H-10)+'" text-anchor="middle" font-size="12" fill="'+(on?'var(--ink)':'var(--mut)')+'" font-weight="'+(on?700:500)+'">'+nm2(x.mes)+(x.parcial?'*':'')+'</text>';
+  const rot=MESES[Number(x.mes.slice(5))-1]+' de '+x.mes.slice(0,4)+': '+(x.vazio?'sem lançamentos':(filtrado?'gastos '+brl(x.gastos):'receitas '+brl(x.receitas)+', gastos '+brl(x.gastos)+', saldo '+brl(x.saldo)))+(x.parcial?', mês em andamento':'');
+  hits+='<rect class="gm" data-gm="'+x.mes+'" x="'+i*cw+'" y="0" width="'+cw+'" height="'+H+'" tabindex="0" role="button" aria-pressed="'+on+'" aria-label="'+esc(rot)+'"/>'});
+ if(pts.length>1)g+='<polyline fill="none" stroke="var(--vt)" stroke-width="2.5" stroke-linejoin="round" points="'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ')+'"/>';
+ pts.forEach(p=>{g+='<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="'+(p[2]?5.5:3.5)+'" fill="var(--bg)" stroke="var(--vt)" stroke-width="2.5"/>'});
+ const leg=filtrado?'<span><i style="background:var(--coral)"></i>Gastos do recorte</span>':'<span><i style="background:var(--agua)"></i>Receitas</span><span><i style="background:var(--coral)"></i>Gastos</span><span><i class="ln"></i>Saldo do mês</span>';
+ const atual=s.some(x=>x.parcial);
+ return '<div class="card"><b>Receitas e gastos por mês</b><div class="mut">Toque em um mês para ver o resumo dele.</div><div class="grf" id="grf"><svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="group" aria-label="Receitas, gastos e saldo dos últimos '+n+' meses">'+g+hits+'</svg></div><div class="leg">'+leg+'</div>'+(atual?'<p class="gnota">* Mês em andamento: valores até hoje, com as parcelas previstas nos gastos.</p>':'')+'</div>'};
 let atual=null;let DEMO=false;const F={mes:'',banco:'',tipo:''};const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
 const vistas={
  async resumo(){const q=new URLSearchParams();if(F.mes)q.set('mes',F.mes);if(F.banco)q.set('banco',F.banco);if(F.tipo)q.set('tipo',F.tipo);
@@ -938,10 +1012,9 @@ const vistas={
   DEMO=!!d.demonstracao;sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
   const filtrado=!!(F.banco||F.tipo),c=d.comparacao;
   const nm=m=>MESES[Number(m.slice(5))-1].slice(0,3);
-  const chipsMes=d.meses.map(m=>'<button type="button" class="chip" data-f="mes" data-v="'+m+'" aria-pressed="'+(m===d.mes)+'">'+nm(m)+(m.slice(0,4)!==d.mes.slice(0,4)?'/'+m.slice(2,4):'')+'</button>').join('');
   const chipsTipo=[['','Todos'],['credito','Crédito'],['debito','Débito']].map(x=>'<button type="button" class="chip" data-f="tipo" data-v="'+x[0]+'" aria-pressed="'+(F.tipo===x[0])+'">'+x[1]+'</button>').join('');
   const chipsBanco=[''].concat(d.bancos).map(x=>'<button type="button" class="chip" data-f="banco" data-v="'+esc(x)+'" aria-pressed="'+(F.banco===x)+'">'+(x||'Todos os bancos')+'</button>').join('');
-  const filtros='<div class="filtros"><div class="chips" role="group" aria-label="Mês">'+chipsMes+'</div><div class="chips" role="group" aria-label="Tipo de pagamento">'+chipsTipo+'</div><div class="chips" role="group" aria-label="Banco">'+chipsBanco+'</div></div>';
+  const filtros='<div class="filtros"><div class="chips" role="group" aria-label="Tipo de pagamento">'+chipsTipo+'</div><div class="chips" role="group" aria-label="Banco">'+chipsBanco+'</div></div>';
   let mom='';if(c.anterior>0||c.atual>0){if(c.pct===null){mom='<span class="mom r">Sem gastos em '+MESES[Number(c.mes_anterior.slice(5))-1]+' para comparar</span>'}
    else{const up=c.dif>0;mom='<span class="mom '+(c.dif===0?'r':up?'neg':'pos')+'">'+(c.dif===0?'= igual a ':(up?'↑ ':'↓ ')+Math.abs(c.pct).toString().replace('.',',')+'% ('+brl(Math.abs(c.dif))+') '+(up?'a mais':'a menos')+' que ')+'<span style="font-weight:500">'+esc(c.referencia)+'</span></span>'}}
   const tit=filtrado?[F.banco,F.tipo==='credito'?'Crédito':F.tipo==='debito'?'Débito':''].filter(Boolean).join(' · '):'';
@@ -953,7 +1026,9 @@ const vistas={
   const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
   (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
-  el.className='';el.innerHTML=filtros+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+cats;
+  el.className='';el.innerHTML=filtros+grafico(d.serie,d.mes,filtrado)+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+cats;
+  {const g=document.getElementById('grf');if(g)g.scrollLeft=CS===null?g.scrollWidth:CS;
+   el.querySelectorAll('[data-gm]').forEach(b=>{const ir=()=>{CS=g?g.scrollLeft:null;F.mes=b.dataset.gm;vistas.resumo()};b.onclick=ir;b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();ir()}}})}
   el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{const k=b.dataset.f,v=b.dataset.v;F[k]=(b.classList.contains('vb')&&F[k]===v)?'':v;vistas.resumo()});
   el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
