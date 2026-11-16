@@ -232,6 +232,7 @@ def _parse_method(raw: str | None) -> str:
 def _format_output(result: Any, tool_name: str, user_phone: str) -> str:
     if not isinstance(result, dict): return str(result)
     if result.get("erro"): return f"⚠️ {result['erro']}"
+    if result.get("bloqueado_demo"): return result["mensagem"]
 
     if tool_name == "listar_categoria":
         return result.get("mensagem", "Não encontrei gastos para essa categoria.")

@@ -279,6 +279,8 @@ LLM_SCHEMAS: list[dict] = [s for s in SCHEMAS if s["name"] not in SOMENTE_DETERM
 async def execute(name: str, args: dict, user_phone: str) -> dict[str, Any]:
     logger.info(f"Executando handler nativo: {name} com args {args}")
     from app import demo as _demo
+    if _demo.eh_telefone_demo(user_phone) and name in ("registrar_gasto", "registrar_receita"):
+        return {"bloqueado_demo": True, "mensagem": "🎭 No modo demonstração não dá para registrar gastos ou receitas: os dados são fictícios. Para usar de verdade, digite *sair do demo*."}
     if _demo.eh_telefone_demo(user_phone) and name in ("sincronizar_banco", "adicionar_banco", "remover_banco"):
         return {"mensagem": "🎭 No modo demonstração não há banco conectado: os dados já são fictícios. "
                             "Digite *sair do demo* para voltar aos dados reais."}

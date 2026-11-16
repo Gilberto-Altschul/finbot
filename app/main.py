@@ -744,6 +744,11 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
             await asyncio.to_thread(_send_whatsapp, user_phone, resposta)
             return
 
+    # Modo demonstração: áudio, foto e PDF servem para REGISTRAR gastos, o que não existe no demo.
+    if NumMedia > 0 and MediaUrl0 and not user_message and demo_mod.eh_telefone_demo(user_phone):
+        await asyncio.to_thread(_send_whatsapp, user_phone, "🎭 No modo demonstração não dá para registrar gastos por áudio, foto ou PDF: os dados são fictícios. Digite *sair do demo* para usar de verdade, ou experimente *resumo*, *saldos* e *fluxo*.")
+        return
+
     # ── CASO 0.95: ÁUDIO — transcreve e pede confirmação (ou segue como pergunta) ──
     if NumMedia > 0 and MediaUrl0 and str(MediaContentType0).lower().startswith("audio/"):
         logger.info(f"Áudio recebido de {user_phone}.")
