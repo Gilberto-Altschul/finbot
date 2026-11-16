@@ -746,6 +746,9 @@ async def api_chat_desfazer(request: Request, finflow_sessao: str | None = Cooki
 @router.post("/painel/api/chat/audio")
 async def api_chat_audio(request: Request, audio: UploadFile = File(...), finflow_sessao: str | None = Cookie(default=None)):
     real, c = _checar_chat(request, finflow_sessao)
+    if demo.eh_telefone_demo(demo.efetivo(real)):
+        c.add("bot", "🎭 No modo demonstração não dá para registrar gastos por áudio ou PDF: os dados são fictícios.")
+        return _json({"status": "demo", "ultimo": c.seq})
     tipo = (audio.content_type or "").lower()
     if not tipo.startswith("audio/"):
         raise HTTPException(status_code=415, detail="envie um áudio")
@@ -763,6 +766,9 @@ async def api_chat_audio(request: Request, audio: UploadFile = File(...), finflo
 async def api_chat_pdf(request: Request, arquivo: UploadFile = File(...), senha: str = Form(default=""),
                        finflow_sessao: str | None = Cookie(default=None)):
     real, c = _checar_chat(request, finflow_sessao)
+    if demo.eh_telefone_demo(demo.efetivo(real)):
+        c.add("bot", "🎭 No modo demonstração não dá para registrar gastos por áudio ou PDF: os dados são fictícios.")
+        return _json({"status": "demo", "ultimo": c.seq})
     dados = await arquivo.read(MAX_PDF + 1)
     if len(dados) > MAX_PDF:
         raise HTTPException(status_code=413, detail="PDF grande demais (máximo 10 MB)")
@@ -924,12 +930,12 @@ const brl=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,max
 const el=document.getElementById('conteudo'),ti=document.getElementById('titulo'),sub=document.getElementById('sub');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(p){const r=await fetch('/painel/api/'+p,{credentials:'same-origin'});if(r.status===401){location.href='/painel';throw 0}return r.json()}
-let atual=null;const F={mes:'',banco:'',tipo:''};const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
+let atual=null;let DEMO=false;const F={mes:'',banco:'',tipo:''};const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
 const vistas={
  async resumo(){const q=new URLSearchParams();if(F.mes)q.set('mes',F.mes);if(F.banco)q.set('banco',F.banco);if(F.tipo)q.set('tipo',F.tipo);
   const d=await api('resumo'+(q.toString()?'?'+q:''));F.mes=d.filtros.mes;F.banco=d.filtros.banco;F.tipo=d.filtros.tipo;
   ti.textContent='Resumo '+d.mes.slice(5)+'/'+d.mes.slice(0,4);
-  sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
+  DEMO=!!d.demonstracao;sub.innerHTML=d.demonstracao?'<span class="tag">Dados de demonstração</span>':'';
   const filtrado=!!(F.banco||F.tipo),c=d.comparacao;
   const nm=m=>MESES[Number(m.slice(5))-1].slice(0,3);
   const chipsMes=d.meses.map(m=>'<button type="button" class="chip" data-f="mes" data-v="'+m+'" aria-pressed="'+(m===d.mes)+'">'+nm(m)+(m.slice(0,4)!==d.mes.slice(0,4)?'/'+m.slice(2,4):'')+'</button>').join('');
@@ -1143,7 +1149,7 @@ function cRender(ms){const box=document.getElementById('msgs');if(!box)return;
    f.onsubmit=async e=>{e.preventDefault();const s=f.querySelector('input').value;if(!cPdf){cAviso('Anexe o PDF de novo (📎).');return}f.remove();const fd=new FormData();fd.append('arquivo',cPdf);fd.append('senha',s);await cPost('/painel/api/chat/pdf',{body:fd})};d.appendChild(f)}
   box.appendChild(d)});
  const todas=[...box.querySelectorAll('.msg,.gst')];todas.forEach((d,i)=>d.querySelectorAll('button[data-bid]').forEach(b=>b.disabled=i!==todas.length-1));
- if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt('Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio. Aqui é o Flow, o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
+ if(!box.children.length){const d=document.createElement('div');d.className='msg bot';d.innerHTML='<div>'+cFmt(DEMO?'Oi! Aqui é o Flow. Na demonstração, pergunte sobre os dados fictícios (ex.: *quanto gastei com mercado?*, *resumo*, *fluxo*, *faturas futuras*). O registro de gastos fica desligado.':'Oi! Escreva um gasto (ex.: *gastei 45 no mercado*), faça uma pergunta ou mande um áudio. Aqui é o Flow, o mesmo assistente do WhatsApp, sem custo de mensagem.')+'</div>';box.appendChild(d)}
  if(cOcupado){const d=document.createElement('div');d.className='dig';d.textContent='digitando…';box.appendChild(d)}
  if(perto||ms.length)window.scrollTo(0,document.body.scrollHeight)}
 async function cPoll(rapido){if(!cAtivo)return;clearTimeout(cTimer);
@@ -1184,6 +1190,7 @@ function cMontar(){if(document.getElementById('comp'))return;const c=document.cr
  document.body.appendChild(c);const t=document.getElementById('txt');
  const enviar=()=>{const v=t.value;t.value='';t.style.height='auto';cEnviar(v)};
  document.getElementById('env').onclick=enviar;t.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();enviar()}};t.oninput=()=>{t.style.height='auto';t.style.height=Math.min(120,t.scrollHeight)+'px'};
+ if(DEMO){document.getElementById('anexo').style.display='none';document.getElementById('mic').style.display='none'}
  document.getElementById('mic').onclick=cGravar;document.getElementById('gcan').onclick=()=>cParar(false);document.getElementById('anexo').onclick=()=>document.getElementById('arq').click();
  document.getElementById('arq').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;if(f.size>10*1024*1024){cAviso('PDF grande demais (máximo 10 MB).');return}cPdf=f;const fd=new FormData();fd.append('arquivo',f);fd.append('senha','');await cPost('/painel/api/chat/pdf',{body:fd})}}
 function cSair(){cAtivo=false;clearTimeout(cTimer);cParar(false);document.body.classList.remove('chat-on');const c=document.getElementById('comp');if(c)c.remove()}
