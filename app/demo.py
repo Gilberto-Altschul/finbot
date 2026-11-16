@@ -16,6 +16,7 @@ import random
 import re
 import time
 from calendar import monthrange
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 import app.database as db
@@ -142,8 +143,12 @@ def executar(real: str, cmd: str) -> str:
 # ── dados fictícios ───────────────────────────────────────────────────────────
 def _tem_dados(demo: str) -> bool:
     try:
-        return bool(db.get_db().table("finbot_contas").select("account_id")
-                    .eq("user_key", get_lookup_prefix(demo)).limit(1).execute().data)
+        cli = db.get_db()
+        tem_conta = bool(cli.table("finbot_contas").select("account_id")
+                         .eq("user_key", get_lookup_prefix(demo)).limit(1).execute().data)
+        # Só conta como "pronto" se também há lançamentos: geração interrompida deixa contas sem gastos (resumo zerado).
+        return tem_conta and bool(cli.table("finbot_expenses").select("id")
+                                  .ilike("user_phone", db._q(demo)).limit(1).execute().data)
     except Exception:
         return False
 
@@ -183,11 +188,12 @@ def montar_linhas(demo: str, hoje: date, seed: int = 7, reais: list[dict] | None
     rng = random.Random(seed)
     lin: list[dict] = []
     n = [0]
+    sufixo = re.sub(r"\W", "", get_lookup_prefix(demo))[:10]   # id da transação único POR usuário demo (dois demos não colidem)
 
     def base(desc, valor, cat, sub, dia, conta, metodo, tipo="expense", mov=None, **extra):
         n[0] += 1
         r = {"user_phone": demo, "amount": round(valor, 2), "category": cat, "subcategory": sub, "description": desc,
-             "pluggy_transaction_id": f"demo-{n[0]:05d}", "transaction_type": tipo, "payment_method": metodo,
+             "pluggy_transaction_id": f"demo-{sufixo}-{n[0]:05d}", "transaction_type": tipo, "payment_method": metodo,
              "purchase_date": dia.isoformat(), "billing_date": dia.isoformat(), "is_forecast": False,
              "account_id": conta, "merchant_key": _normalize(desc)[:30], "review_status": "confirmado",
              "confidence": 1.0, "movement": mov or ("income" if tipo == "income" else "expense")}
@@ -412,26 +418,61 @@ def _saldo_conta(hoje: date, faturas_a_pagar: list[tuple[date, float]], fixas: b
     return round((saidas + MARGEM_SALDO) / 10) * 10.0
 
 
+def _tem_rastro(demo: str) -> bool:
+    """Há QUALQUER coisa do usuário sintético no banco (contas, lançamentos ou orçamentos)? Só então vale apagar antes de gerar."""
+    cli, chave, q = db.get_db(), get_lookup_prefix(demo), db._q(demo)
+    consultas = (lambda: cli.table("finbot_contas").select("account_id").eq("user_key", chave).limit(1).execute().data,
+                 lambda: cli.table("finbot_expenses").select("id").ilike("user_phone", q).limit(1).execute().data,
+                 lambda: cli.table("finbot_budgets").select("id").ilike("user_phone", q).limit(1).execute().data)
+    try:
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            return any(bool(f.result()) for f in [ex.submit(c) for c in consultas])
+    except Exception:
+        return True   # na dúvida, limpa (é o comportamento antigo)
+
+
 def gerar(demo: str, hoje: date | None = None, reais: list[dict] | None = None) -> dict:
-    """Grava os dados fictícios do usuário sintético (apaga os anteriores dele antes: pode rodar de novo)."""
+    """Grava os dados fictícios do usuário sintético (apaga os anteriores dele antes: pode rodar de novo).
+    As gravações independentes rodam em paralelo; a limpeza só acontece se já houver algo para apagar."""
     if not eh_telefone_demo(demo):
         raise ValueError("gerar() só cria dados para usuário de demonstração")
     if hoje is None:
         from app.dados_banco import hoje_local
         hoje = hoje_local()
-    limpar(demo)
+    inicio = time.monotonic()
+    if _tem_rastro(demo):
+        limpar(demo)
     dados = montar_linhas(demo, hoje, reais=reais)
-    db._get_or_create_user_connection(demo)
-    db.save_user_settings(demo, CARTOES[0]["vence"], CARTOES[0]["fecha"])
+    db._get_or_create_user_connection(demo)      # antes de tudo: as demais gravações dependem da linha do usuário
     cli = db.get_db()
-    cli.table("finbot_contas").upsert(dados["contas"], on_conflict="user_key,account_id").execute()
-    cli.table("finbot_faturas").upsert(dados["faturas"], on_conflict="user_key,bill_id").execute()
-    gravados = db.inserir_gastos_em_lote(dados["lancamentos"])
     mes_ref = hoje.strftime("%Y-%m")
     orcamentos = (_orcamentos_para(reais, hoje) if reais is not None else
                   (("Alimentação", 1800.0), ("Transporte", 700.0), ("Lazer e Cultura", 400.0),
                    ("Saúde", 600.0), ("Vestuário e Beleza", 500.0)))
-    for cat, valor in orcamentos:
-        db.save_budget(demo, cat, valor, mes_ref)
-    logger.info(f"Modo demo: {gravados} lançamentos, {len(dados['contas'])} contas, {len(dados['faturas'])} faturas.")
+    linhas_orc = [{"user_phone": db._s(demo), "category": c, "amount": v, "mes_referencia": mes_ref} for c, v in orcamentos]
+    lanc = dados["lancamentos"]
+    lotes = [lanc[i:i + 100] for i in range(0, len(lanc), 100)]
+    tarefas = [lambda: db.save_user_settings(demo, CARTOES[0]["vence"], CARTOES[0]["fecha"]),
+               lambda: cli.table("finbot_contas").upsert(dados["contas"], on_conflict="user_key,account_id").execute(),
+               lambda: cli.table("finbot_faturas").upsert(dados["faturas"], on_conflict="user_key,bill_id").execute()]
+    if linhas_orc:
+        tarefas.append(lambda: cli.table("finbot_budgets").insert(linhas_orc).execute())
+    try:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            fut_lotes = [ex.submit(db.inserir_gastos_em_lote, lote) for lote in lotes]
+            fut_outros = [ex.submit(t) for t in tarefas]
+            for f in fut_outros:
+                f.result()
+            retornos = [f.result() for f in fut_lotes]
+        if not retornos or any(r < 0 for r in retornos) or sum(retornos) <= 0:   # erro ou tudo "duplicado": não liga um demo vazio ou pela metade
+            raise RuntimeError(f"gravação dos lançamentos fictícios falhou (retornos {retornos})")
+    except Exception:
+        try:
+            limpar(demo)    # não deixa um demo pela metade para trás
+        except Exception as e:
+            logger.error(f"Modo demo: falha ao limpar demo incompleto: {e}")
+        raise
+    gravados = sum(retornos)
+    logger.info(f"Modo demo: {gravados} lançamentos, {len(dados['contas'])} contas, {len(dados['faturas'])} faturas "
+                f"em {time.monotonic() - inicio:.1f}s.")
     return {"lancamentos": gravados, "contas": len(dados["contas"]), "faturas": len(dados["faturas"])}
