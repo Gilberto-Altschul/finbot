@@ -98,6 +98,9 @@ def comando(texto: str | None) -> str | None:
     t = _normalize(texto or "").strip(" .!")
     if t in ("modo demo", "modo demonstracao", "ativar demo", "ligar demo", "demo"):
         return "ativar"
+    # Frase do link de convite (wa.me): "Oi, quero conhecer o FinFlow" liga a demonstração.
+    if "conhecer o finflow" in t and len(t) <= 60:
+        return "ativar"
     if t in ("modo demo meus gastos", "demo meus gastos", "demo com meus gastos", "demo real", "modo demo real",
              "modo demo com meus gastos", "demo meus dados"):
         return "ativar_real"
