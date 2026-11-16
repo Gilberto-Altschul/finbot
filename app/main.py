@@ -704,6 +704,18 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
         if cmd_demo == "ativar_real" or (cmd_demo == "ativar" and not await asyncio.to_thread(demo_mod._tem_dados, demo_mod.telefone_demo(real_phone))):
             await asyncio.to_thread(_send_whatsapp, real_phone, "🎭 Preparando a demonstração com dados fictícios… leva alguns segundos.")
         resposta = await asyncio.to_thread(demo_mod.executar, real_phone, cmd_demo)
+        # Demo ligado: já entrega o link do painel NA MESMA mensagem (sem custo de mensagem extra). O link abre o painel com os dados fictícios.
+        if cmd_demo in ("ativar", "ativar_real") and "ligado" in resposta and not canal.ativo():
+            try:
+                if painel.ligado():
+                    link = f"{painel.base_url()}/painel/entrar?c={painel.criar_codigo(real_phone)}"
+                    bloco = ("\n\n🖥️ *Quer ver no painel web?*\n" + link +
+                             "\n_O link vale 10 minutos e abre uma única vez. Para outro, mande *painel*._")
+                    # ordem: demo ligado → comandos → link do painel → como sair
+                    resposta = (resposta.replace("\n\nPara voltar:", bloco + "\n\nPara voltar:", 1)
+                                if "\n\nPara voltar:" in resposta else resposta + bloco)
+            except Exception as exc:
+                logger.warning(f"Demo: não consegui gerar o link do painel ({type(exc).__name__}).")
         await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
         return
     await asyncio.to_thread(demo_mod.limpar_se_expirou, real_phone)   # demo vencido: desliga e apaga os dados fictícios
