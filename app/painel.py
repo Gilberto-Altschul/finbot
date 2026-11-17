@@ -653,7 +653,12 @@ def pagina(finflow_sessao: str | None = Cookie(default=None)):
     if not telefone_da_sessao(finflow_sessao):
         logger.info("Painel: acesso sem sessão (cookie ausente, bloqueado ou sessão vencida).")
         return HTMLResponse(_com_whatsapp(_PAGINA_SEM_SESSAO), status_code=401, headers={"Cache-Control": "no-store"})
-    return HTMLResponse(_com_whatsapp(_PAGINA), headers={"Cache-Control": "no-store"})
+    try:
+        _real, _usuario_efetivo = _usuario(finflow_sessao)
+        em_demo = demo.eh_telefone_demo(_usuario_efetivo)
+    except Exception:
+        em_demo = False
+    return HTMLResponse(_com_whatsapp(_PAGINA_DEMO if em_demo else _PAGINA), headers={"Cache-Control": "no-store"})
 
 
 @router.get("/painel/api/resumo")
@@ -1545,3 +1550,7 @@ const irOriginal=ir;ir=async function(a){if(a!=='chat')cSair();return irOriginal
 _PAGINA = _PAGINA.replace("</style></head><body><main>", _CHAT_CSS + "</style></head><body><main>", 1)
 _PAGINA = _PAGINA.replace('<button data-a="resumo" aria-current="page">Resumo</button>', '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="chat">Chat</button>', 1)
 _PAGINA = _PAGINA.replace("\nir('resumo');", "\n" + _CHAT_JS + "ir('resumo');", 1)
+# Na demonstração o painel mostra só Fluxo e Revisar (e abre no Fluxo).
+_PAGINA_DEMO = _PAGINA.replace(
+    '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="chat">Chat</button><button data-a="fluxo">Fluxo</button><button data-a="previsao">Previsão</button>',
+    '<button data-a="fluxo" aria-current="page">Fluxo</button>', 1).replace("ir('resumo')", "ir('fluxo')")
