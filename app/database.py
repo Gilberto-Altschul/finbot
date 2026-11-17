@@ -972,3 +972,32 @@ def limpar_transacoes_pendentes(user_phone: str) -> None:
         _atualizar_conexao(user_phone, {"pending_transactions": None, "status": "ativo"})
     except Exception as e:
         logger.error(f"Erro em limpar_transacoes_pendentes: {e}")
+
+
+# ── Fluxo de caixa: itens que o usuário marcou como "não vai se repetir" ─────────────────────────────────────────
+# Tabela finbot_fluxo_ignorados (user_phone, chave, nome, criado_em). Sem a tabela, o fluxo funciona como antes.
+
+def fluxo_ignorados(user_phone: str) -> list[dict]:
+    try:
+        res = get_db().table("finbot_fluxo_ignorados").select("chave, nome, criado_em") \
+            .ilike("user_phone", _q(user_phone)).order("criado_em").execute()
+        return [{"chave": r["chave"], "nome": r.get("nome") or r["chave"], "desde": str(r.get("criado_em") or "")[:10]}
+                for r in (res.data or [])]
+    except Exception as exc:
+        logger.warning(f"Fluxo: itens ignorados indisponíveis ({type(exc).__name__}).")
+        return []
+
+
+def fluxo_ignorar(user_phone: str, chave: str, nome: str = "") -> None:
+    _get_or_create_user_connection(user_phone)
+    ja = get_db().table("finbot_fluxo_ignorados").select("id") \
+        .ilike("user_phone", _q(user_phone)).eq("chave", chave).execute()
+    agora = datetime.utcnow().isoformat()
+    if ja.data:
+        get_db().table("finbot_fluxo_ignorados").update({"nome": nome, "criado_em": agora}).eq("id", ja.data[0]["id"]).execute()
+    else:
+        get_db().table("finbot_fluxo_ignorados").insert({"user_phone": _s(user_phone), "chave": chave, "nome": nome}).execute()
+
+
+def fluxo_reativar(user_phone: str, chave: str) -> None:
+    get_db().table("finbot_fluxo_ignorados").delete().ilike("user_phone", _q(user_phone)).eq("chave", chave).execute()

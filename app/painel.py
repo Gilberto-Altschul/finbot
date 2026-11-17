@@ -700,7 +700,32 @@ def api_fluxo(dias: int = 30, finflow_sessao: str | None = Cookie(default=None))
     _real, usuario = _usuario(finflow_sessao)
     import app.dados_banco as dados_banco       # import tardio: puxa o módulo de contas/faturas só quando usa
     import app.fluxo as fluxo
-    return _json(fluxo.para_painel(dados_banco.fluxo_projecao(usuario, max(7, min(dias, 90))), dados_banco.hoje_local()))
+    dados = fluxo.para_painel(dados_banco.fluxo_projecao(usuario, max(7, min(dias, 90))), dados_banco.hoje_local())
+    dados["ignorados"] = [{"chave": x["chave"], "nome": x["nome"]} for x in db.fluxo_ignorados(usuario)]
+    return _json(dados)
+
+
+class _FluxoIgnorar(BaseModel):
+    chave: str
+    nome: str = ""
+    ignorar: bool = True
+
+
+@router.post("/painel/api/fluxo/ignorar")
+def api_fluxo_ignorar(corpo: _FluxoIgnorar, finflow_sessao: str | None = Cookie(default=None)):
+    """Marca uma entrada ou conta fixa prevista como "não vai se repetir" (ou volta a prevê-la). Só afeta a projeção."""
+    _real, usuario = _usuario(finflow_sessao)
+    chave = (corpo.chave or "").strip()[:60]
+    if not chave:
+        raise HTTPException(status_code=400, detail="item não informado")
+    try:
+        if corpo.ignorar:
+            db.fluxo_ignorar(usuario, chave, (corpo.nome or "").strip()[:80])
+        else:
+            db.fluxo_reativar(usuario, chave)
+    except Exception:
+        raise HTTPException(status_code=500, detail="não consegui salvar")
+    return _json({"ok": True})
 
 
 @router.get("/painel/api/previsao")
@@ -1051,6 +1076,8 @@ nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{bord
 .fcampo input{flex:1;min-width:0;background:transparent;border:0;color:var(--ink);font:inherit;font-size:28px;font-weight:700;padding:10px 0;outline:0}.fcampo:focus-within{border-color:var(--vt)}
 #fundo .chp{min-height:44px;padding:0 14px;border-radius:22px;border:1px solid var(--borda);background:var(--bg);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}#fundo .chp[aria-pressed=true]{background:#2A62F5;border-color:#2A62F5;color:#fff}
 #toast{position:fixed;left:16px;right:16px;bottom:84px;z-index:70;max-width:608px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--ink);color:#081226;border-radius:14px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+.nr{display:block;margin-top:-6px;min-height:44px;padding:0;border:0;background:none;color:var(--vt);font:inherit;font-size:13px;font-weight:600;text-align:left;cursor:pointer}
+.ign{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--lin)}.ign:last-child{border:0}
 #toast button{min-height:44px;padding:0 16px;border-radius:10px;border:0;background:#2A62F5;color:#fff;font:inherit;font-size:14px;font-weight:700;cursor:pointer}
 </style></head><body><main>
 <div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
@@ -1089,10 +1116,17 @@ async function carregaSug(){if(SUG)return SUG;try{SUG=(await api('limite/sugesto
 const arred=v=>Math.max(10,Math.round(v/10)*10);
 async function salvaLimites(lista){const r=await fetch('/painel/api/limite',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({limites:lista})});
  if(r.status===401){location.href='/painel';throw 0}if(!r.ok)throw new Error('limite');return r.json()}
+async function postFluxo(chave,nome,ignorar){const r=await fetch('/painel/api/fluxo/ignorar',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave:chave,nome:nome,ignorar:ignorar})});
+ if(r.status===401){location.href='/painel';throw 0}if(!r.ok)throw new Error('fluxo');return r.json()}
+async function recarregaFluxo(){if(atual!=='fluxo')return;const y=window.scrollY;await vistas.fluxo();window.scrollTo(0,y)}
+async function mudaFluxo(chave,nome,ignorar){
+ try{await postFluxo(chave,nome,ignorar);aviso(ignorar?nome+' não será mais previsto':nome+' voltou à previsão',()=>mudaFluxoSemAviso(chave,nome,!ignorar));await recarregaFluxo()}
+ catch(e){if(e!==0)aviso('Não consegui salvar agora.')}}
+async function mudaFluxoSemAviso(chave,nome,ignorar){await postFluxo(chave,nome,ignorar);await recarregaFluxo()}
 async function recarrega(){if(atual!=='resumo')return;const y=window.scrollY;await vistas.resumo();window.scrollTo(0,y)}
 function aviso(txt,desfaz){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.setAttribute('role','status');document.body.appendChild(t)}
  t.innerHTML='<span></span>'+(desfaz?'<button type="button">Desfazer</button>':'');t.firstChild.textContent=txt;
- if(desfaz)t.querySelector('button').onclick=async()=>{clearTimeout(TT);t.remove();try{await salvaLimites(desfaz);await recarrega()}catch(e){if(e!==0)aviso('Não consegui desfazer.')}};
+ if(desfaz)t.querySelector('button').onclick=async()=>{clearTimeout(TT);t.remove();try{if(typeof desfaz==='function')await desfaz();else{await salvaLimites(desfaz);await recarrega()}}catch(e){if(e!==0)aviso('Não consegui desfazer.')}};
  clearTimeout(TT);TT=setTimeout(()=>t.remove(),7000)}
 async function abreFolha(c,gatilho){
  const sug=(await carregaSug())[c.chave]||{},ant=c.orcamento||0;let val=ant||sug.media||0;
@@ -1196,10 +1230,11 @@ const vistas={
    '<div class="lin"><span>Saldo em '+dm(d.fim)+'</span><span class="'+cl(d.saldo_final)+'">'+m(d.saldo_final)+'</span></div></div>';
   const rot={conta:'Conta fixa',fatura:'Fatura do cartão',entrada:'Entrada prevista'};
   const linhas=d.dias.length?d.dias.map(x=>'<div class="dia"><div class="d">'+dm(x.data)+'<small>'+sem(x.data)+'</small></div><div>'+
-   x.eventos.map(e=>'<div class="ev"><div class="n"><span>'+esc(e.nome)+'</span><span class="tipo">'+(rot[e.tipo]||'')+'</span></div><b class="'+(e.valor>0?'pos':'')+'">'+(e.valor>0?'+':'-')+brl(Math.abs(e.valor))+'</b></div>').join('')+
+   x.eventos.map((e,j)=>'<div class="ev"><div class="n"><span>'+esc(e.nome)+'</span><span class="tipo">'+(rot[e.tipo]||'')+'</span>'+(e.chave?'<button type="button" class="nr" data-ch="'+esc(e.chave)+'" data-nm="'+esc(e.nome)+'" aria-label="Não vai se repetir: '+esc(e.nome)+'">Não vai se repetir</button>':'')+'</div><b class="'+(e.valor>0?'pos':'')+'">'+(e.valor>0?'+':'-')+brl(Math.abs(e.valor))+'</b></div>').join('')+
    '<div class="sd">Saldo depois: <b class="'+cl(x.saldo)+'">'+m(x.saldo)+'</b></div></div></div>').join(''):'<p class="mut">Nenhuma entrada ou vencimento conhecido nesse período.</p>';
-  el.innerHTML=alerta+'<div class="card"><h2>Saldo projetado</h2>'+graf+(fat.size?'<div class="mut" style="font-size:12px;margin-top:4px"><span style="color:#FFB45C">●</span> vencimento de fatura</div>':'')+'</div>'+soma+'<div class="card"><h2>Próximos movimentos</h2>'+linhas+'</div>'+
-   '<details class="card"><summary>Como calculamos</summary><p>Parte do saldo atual das contas correntes. Soma as entradas recorrentes detectadas no histórico, desconta as faturas dos cartões e as contas fixas, e aplica a média de gastos do dia a dia'+(d.ritmo_texto?' ('+esc(d.ritmo_texto)+')':' dos últimos 60 dias')+'. Compras futuras no cartão e gastos fora do padrão não entram.</p></details>'},
+  el.innerHTML=alerta+'<div class="card"><h2>Saldo projetado</h2>'+graf+(fat.size?'<div class="mut" style="font-size:12px;margin-top:4px"><span style="color:#FFB45C">●</span> vencimento de fatura</div>':'')+'</div>'+soma+'<div class="card"><h2>Próximos movimentos</h2>'+linhas+'</div>'+((d.ignorados||[]).length?'<div class="card"><h2>Itens que parei de prever</h2>'+d.ignorados.map(x=>'<div class="ign"><span>'+esc(x.nome)+'</span><button type="button" class="nr" style="margin:0" data-vol="'+esc(x.chave)+'" data-nm="'+esc(x.nome)+'">Voltar a prever</button></div>').join('')+'</div>':'')+
+   '<details class="card"><summary>Como calculamos</summary><p>Parte do saldo atual das contas correntes. Soma as entradas recorrentes detectadas no histórico, desconta as faturas dos cartões e as contas fixas, e aplica a média de gastos do dia a dia'+(d.ritmo_texto?' ('+esc(d.ritmo_texto)+')':' dos últimos 60 dias')+'. Compras futuras no cartão e gastos fora do padrão não entram. Uma entrada ou conta que não vai mais acontecer pode ser retirada com “Não vai se repetir”.</p></details>';
+  el.querySelectorAll('button.nr').forEach(b=>b.onclick=()=>b.dataset.vol?mudaFluxo(b.dataset.vol,b.dataset.nm,false):mudaFluxo(b.dataset.ch,b.dataset.nm,true))},
  async previsao(){const d=await api('previsao');ti.textContent='Previsão de '+(d.vazio?'':d.mes);sub.innerHTML='';el.className='';
   if(d.vazio){ti.textContent='Previsão do mês';el.className='card';el.innerHTML='<p class="mut">Ainda não tenho gastos suficientes neste mês para prever o fechamento.</p>';return}
   const m=v=>'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});

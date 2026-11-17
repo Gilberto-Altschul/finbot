@@ -813,14 +813,27 @@ def _despesas_conta_recentes(user_phone: str, hoje: date, dias: int = 190) -> li
         return []
 
 
+def _mapa_ignorados(lista: list[dict]) -> dict[str, date]:
+    """chave -> data da marcação "não vai se repetir" (data inválida: vale para sempre)."""
+    mapa: dict[str, date] = {}
+    for x in lista or []:
+        try:
+            mapa[x["chave"]] = date.fromisoformat(x.get("desde") or "")
+        except (TypeError, ValueError):
+            mapa[x["chave"]] = date.max
+    return mapa
+
+
 def fluxo_projecao(user_phone: str, dias: int = 30) -> dict | None:
     """Projeção do saldo das contas correntes dia a dia (None se não há conta corrente com saldo): faturas a vencer,
     contas fixas, entradas recorrentes e o ritmo dos gastos do dia a dia."""
     hoje = hoje_local()
     with consulta_unica():
-        todas, faturas_proj, receitas, despesas = _paralelo(      # independentes: rodam juntas
+        todas, faturas_proj, receitas, despesas, ign_lista = _paralelo(      # independentes: rodam juntas
             lambda: ler_contas(user_phone), lambda: _faturas_projetadas(user_phone, 3 + dias // 30),
-            lambda: _receitas_recentes(user_phone, hoje), lambda: _despesas_conta_recentes(user_phone, hoje))
+            lambda: _receitas_recentes(user_phone, hoje), lambda: _despesas_conta_recentes(user_phone, hoje),
+            lambda: db.fluxo_ignorados(user_phone))
+    ign = _mapa_ignorados(ign_lista)
     contas = [c for c in todas if c["tipo"] == "BANK" and c.get("saldo") is not None]
     if not contas:
         return None
@@ -830,8 +843,8 @@ def fluxo_projecao(user_phone: str, dias: int = 30) -> dict | None:
             total = c["banco"] if c.get("banco") is not None else round(c["lancado"] + c["previsto"], 2)
             if total > 0:
                 eventos.append(fluxo_mod.Evento(c["vence"], f"{c['nome']} (fatura)", -total))
-    eventos += fluxo_mod.entradas_recorrentes(receitas, hoje, dias)
-    fixas, chaves_fixas = fluxo_mod.saidas_recorrentes(despesas, hoje, dias)
+    eventos += fluxo_mod.entradas_recorrentes(receitas, hoje, dias, ign)
+    fixas, chaves_fixas = fluxo_mod.saidas_recorrentes(despesas, hoje, dias, ignorar=ign)
     eventos += fixas
     ritmo = fluxo_mod.ritmo_projecao(despesas, chaves_fixas, hoje)   # média, ou ajustada por dia da semana/parte do mês
     saldo = round(sum(c["saldo"] for c in contas), 2)
@@ -852,18 +865,19 @@ def previsao_dados(user_phone: str):
     fim_mes = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
     restam = (fim_mes - hoje).days
     with consulta_unica():
-        linhas_mes, previstas, despesas, orcs, resumo_ant = _paralelo(     # independentes: rodam juntas
+        linhas_mes, previstas, despesas, orcs, resumo_ant, ign_lista = _paralelo(     # independentes: rodam juntas
             lambda: db.monthly_by_category(user_phone, mes_ref),
             lambda: parcelas_previstas_do_mes(user_phone, date(hoje.year, hoje.month, 1)),
             lambda: _despesas_conta_recentes(user_phone, hoje),
             lambda: db.get_all_budgets(user_phone, mes_ref),
-            lambda: db.get_resumo_mes_anterior(user_phone))
+            lambda: db.get_resumo_mes_anterior(user_phone),
+            lambda: db.fluxo_ignorados(user_phone))
     realizado = {r["category"]: r["total"] for r in linhas_mes}
     # Parcelas que o banco ainda não postou contam como já lançadas (inclusive de cartão com vencimento já passado).
     _tot_prev, _n_prev, prev_cat = previstas
     for cat, v in prev_cat.items():
         realizado[cat] = round(realizado.get(cat, 0.0) + v, 2)
-    fixas, chaves = fluxo_mod.saidas_recorrentes(despesas, hoje, restam)
+    fixas, chaves = fluxo_mod.saidas_recorrentes(despesas, hoje, restam, ignorar=_mapa_ignorados(ign_lista))
     restante = {c: v * restam for c, v in previsao_mod.ritmo_por_categoria(despesas, chaves, hoje).items()}
     for e in fixas:
         cat = previsao_mod.categoria_da_conta_fixa(despesas, e.descricao)

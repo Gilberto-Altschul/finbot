@@ -58,10 +58,18 @@ def _chave(desc: str) -> str:
     return utils._normalize(desc)[:24]
 
 
+ATRASO_MAX_ENTRADA = 10   # dias: entrada esperada que não chegou há mais que isso é tratada como encerrada (parou de ocorrer)
+
+
 def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: str, minimo: float = 0.0,
-                 tolerancia: float = _TOLERANCIA) -> tuple[list[Evento], set[str]]:
+                 tolerancia: float = _TOLERANCIA, atraso_max: int | None = None,
+                 ignorar: dict[str, date] | None = None) -> tuple[list[Evento], set[str]]:
     """Mesma descrição em 2+ meses diferentes, valor parecido. Próxima data = última ocorrência + 1 mês
-    (mesmo dia). Retorna (eventos dentro do horizonte, chaves detectadas — mesmo as fora do horizonte)."""
+    (mesmo dia). Retorna (eventos dentro do horizonte, chaves detectadas — mesmo as fora do horizonte).
+    Com `atraso_max` (entradas): se a data esperada já passou há mais que isso e o lançamento não veio, a recorrência
+    parou e nada é projetado; se atrasou menos que isso, a entrada é esperada para hoje.
+    `ignorar` (chave -> data): itens que o usuário marcou como "não vai se repetir" não são projetados, a não ser que
+    tenha aparecido um lançamento novo depois da marcação (a recorrência voltou). A chave segue detectada."""
     fim = hoje + timedelta(days=dias)
     grupos: dict[str, list[tuple[date, float, str]]] = {}
     for r in linhas:
@@ -84,7 +92,13 @@ def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: 
             continue
         chaves.add(chave)
         ultimo_dia, ultimo_valor, nome = parecidos[-1]
+        if ignorar and chave in ignorar and ultimo_dia <= ignorar[chave]:
+            continue
         prox = _soma_mes(ultimo_dia, 1)
+        if atraso_max is not None and prox < hoje:
+            if (hoje - prox).days > atraso_max:
+                continue            # o mês passado não veio: parou de acontecer, não projeta mais
+            prox = hoje             # atrasou pouco: ainda é esperada
         while prox < hoje:  # ficou para trás: anda mês a mês até a próxima data futura
             prox = _soma_mes(prox, 1)
         if hoje <= prox <= fim:
@@ -92,13 +106,13 @@ def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: 
     return sorted(eventos, key=lambda e: e.data), chaves
 
 
-def entradas_recorrentes(receitas: list[dict], hoje: date, dias: int) -> list[Evento]:
+def entradas_recorrentes(receitas: list[dict], hoje: date, dias: int, ignorar: dict[str, date] | None = None) -> list[Evento]:
     """Salário, INSS etc. `receitas`: [{description, amount, category, subcategory, purchase_date|billing_date}]"""
     aceitas = {utils._normalize(x) for x in SUBCATEGORIAS_RECORRENTES}
     boas = [r for r in receitas
             if {utils._normalize(r.get("subcategory") or ""), utils._normalize(r.get("category") or "")} & aceitas]
-    eventos, chaves = _recorrentes(boas, hoje, dias, +1, "previsto")
-    return sorted(eventos + _salario_unico(boas, hoje, dias, chaves), key=lambda e: e.data)
+    eventos, chaves = _recorrentes(boas, hoje, dias, +1, "previsto", atraso_max=ATRASO_MAX_ENTRADA, ignorar=ignorar)
+    return sorted(eventos + _salario_unico(boas, hoje, dias, chaves, ignorar), key=lambda e: e.data)
 
 
 SUBCATEGORIAS_SALARIO = {"salario", "salário", "salario e pro-labore", "salário e pró-labore"}
@@ -106,7 +120,8 @@ MIN_SALARIO_UNICO = 500.0     # abaixo disso não é salário
 JANELA_SALARIO_UNICO = 35     # só o salário recebido há até 35 dias gera o palpite do próximo mês
 
 
-def _salario_unico(receitas: list[dict], hoje: date, dias: int, ja_detectadas: set[str]) -> list[Evento]:
+def _salario_unico(receitas: list[dict], hoje: date, dias: int, ja_detectadas: set[str],
+                   ignorar: dict[str, date] | None = None) -> list[Evento]:
     """Salário sem recorrência provada (cliente novo, ou pago em parcelas de valores diferentes no mês): cada
     recebimento recente gera um palpite no mesmo dia do mês seguinte, marcado como "estimado". Só vale para
     subcategoria Salário, valor mínimo e recebido há até 35 dias. Se o mês seguinte do mesmo pagamento já chegou
@@ -126,6 +141,8 @@ def _salario_unico(receitas: list[dict], hoje: date, dias: int, ja_detectadas: s
             continue
         if not (hoje - timedelta(days=JANELA_SALARIO_UNICO) <= dia <= hoje):
             continue
+        if ignorar and _chave(desc) in ignorar and dia <= ignorar[_chave(desc)]:
+            continue
         achados.setdefault(_chave(desc), []).append((dia, valor, desc))
     eventos = []
     for itens in achados.values():
@@ -139,8 +156,8 @@ def _salario_unico(receitas: list[dict], hoje: date, dias: int, ja_detectadas: s
     return eventos
 
 
-def saidas_recorrentes(despesas: list[dict], hoje: date, dias: int, minimo: float = MIN_SAIDA_FIXA
-                       ) -> tuple[list[Evento], set[str]]:
+def saidas_recorrentes(despesas: list[dict], hoje: date, dias: int, minimo: float = MIN_SAIDA_FIXA,
+                       ignorar: dict[str, date] | None = None) -> tuple[list[Evento], set[str]]:
     """Contas fixas pagas pela conta (aluguel, condomínio, internet...). Retorna (eventos, chaves para
     tirá-las da média diária)."""
     fixas = []
@@ -149,7 +166,19 @@ def saidas_recorrentes(despesas: list[dict], hoje: date, dias: int, minimo: floa
         if d.startswith(_PREFIXOS_NAO_FIXA) or not any(p in d for p in _PALAVRAS_FIXA):
             continue
         fixas.append(r)
-    return _recorrentes(fixas, hoje, dias, -1, "conta fixa", minimo, _TOLERANCIA_FIXA)
+    eventos, chaves = _recorrentes(fixas, hoje, dias, -1, "conta fixa", minimo, _TOLERANCIA_FIXA, ignorar=ignorar)
+    return _sem_duplicadas(eventos), chaves
+
+
+def _sem_duplicadas(eventos: list[Evento], dias_proximos: int = 5) -> list[Evento]:
+    """O mesmo pagamento pode vir com dois nomes (o condomínio e a administradora que cobra o boleto): conta fixa com
+    valor idêntico, centavo a centavo, e datas a até 5 dias uma da outra conta uma vez só (fica a primeira)."""
+    saida: list[Evento] = []
+    for e in sorted(eventos, key=lambda x: x.data):
+        if any(abs(e.valor - x.valor) < 0.005 and abs((e.data - x.data).days) <= dias_proximos for x in saida):
+            continue
+        saida.append(e)
+    return saida
 
 
 def ritmo_diario(despesas: list[dict], excluir: set[str], hoje: date, janela: int = JANELA_RITMO) -> float:
@@ -377,6 +406,11 @@ _PREFIXOS_NOME = ("pagamento de boleto ", "pagamento de ", "entrada ", "pix rece
 _MINUSCULAS = {"de", "da", "do", "das", "dos", "e", "em", "para"}
 
 
+def _chave_evento(descricao: str) -> str:
+    """Chave da recorrência (a mesma de `_chave`) a partir da descrição do evento, sem o marcador final '(conta fixa)'."""
+    return _chave(re.sub(r"\s*\([^)]*\)\s*$", "", (descricao or "").strip()))
+
+
 def _nome_limpo(descricao: str) -> tuple[str, str]:
     """('Cond Residencial Tor Rochelle', 'conta') a partir da descrição em texto do evento. Tipos: entrada | conta | fatura | outro."""
     d = (descricao or "").strip()
@@ -413,7 +447,8 @@ def para_painel(proj: dict | None, hoje: date | None = None) -> dict:
             else:
                 contas += -e.valor
                 tipo = tipo if tipo in ("conta", "fatura") else "conta"
-            itens.append({"nome": nome, "tipo": tipo, "valor": round(e.valor, 2)})
+            itens.append({"nome": nome, "tipo": tipo, "valor": round(e.valor, 2),
+                          "chave": _chave_evento(e.descricao) if tipo in ("entrada", "conta") else ""})
         dias.append({"data": dia.isoformat(), "saldo": saldo, "eventos": itens})
         serie.append({"data": dia.isoformat(), "saldo": saldo})
     serie.append({"data": proj["fim"].isoformat(), "saldo": proj["saldo_final"]})
