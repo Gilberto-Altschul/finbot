@@ -1001,3 +1001,25 @@ def fluxo_ignorar(user_phone: str, chave: str, nome: str = "") -> None:
 
 def fluxo_reativar(user_phone: str, chave: str) -> None:
     get_db().table("finbot_fluxo_ignorados").delete().ilike("user_phone", _q(user_phone)).eq("chave", chave).execute()
+
+
+# ── Regra 50/30/20: em que grupo (necessidade ou desejo) o usuário põe cada categoria ─────────────────────────────
+# Tabela finbot_regra_grupos (user_phone, chave, categoria, grupo, criado_em). Sem ela vale o grupo padrão de cada categoria.
+
+def regra_grupos(user_phone: str) -> dict[str, str]:
+    try:
+        res = get_db().table("finbot_regra_grupos").select("chave, grupo").ilike("user_phone", _q(user_phone)).execute()
+        return {r["chave"]: r["grupo"] for r in (res.data or []) if r.get("grupo") in ("nec", "des")}
+    except Exception as exc:
+        logger.warning(f"Regra 50/30/20: grupos do usuário indisponíveis ({type(exc).__name__}).")
+        return {}
+
+
+def regra_definir(user_phone: str, chave: str, categoria: str, grupo: str) -> None:
+    _get_or_create_user_connection(user_phone)
+    ja = get_db().table("finbot_regra_grupos").select("id").ilike("user_phone", _q(user_phone)).eq("chave", chave).execute()
+    if ja.data:
+        get_db().table("finbot_regra_grupos").update({"grupo": grupo, "categoria": categoria}).eq("id", ja.data[0]["id"]).execute()
+    else:
+        get_db().table("finbot_regra_grupos").insert(
+            {"user_phone": _s(user_phone), "chave": chave, "categoria": categoria, "grupo": grupo}).execute()

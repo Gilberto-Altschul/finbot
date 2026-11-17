@@ -367,6 +367,47 @@ def _serie_mensal(linhas: list[dict], hoje: date, banco, tipo, mapa, previstas_a
     return saida
 
 
+# Regra 50/30/20: grupo padrão de cada categoria do FinFlow (o usuário pode mudar entre necessidades e desejos).
+# Dívidas e Financiamentos fica no grupo de poupança e dívidas. Categoria desconhecida conta como desejo.
+_REGRA_PADRAO = {
+    "moradia": "nec", "alimentacao": "nec", "transporte": "nec", "saude": "nec", "educacao": "nec",
+    "familia e dependentes": "nec", "seguros": "nec", "impostos": "nec", "tarifas e juros": "nec",
+    "viagens": "des", "vestuario e beleza": "des", "lazer e cultura": "des", "presentes e doacoes": "des",
+    "trabalho e negocio": "des", "outros": "des",
+    "dividas e financiamentos": "pou",
+}
+_REGRA_GRUPOS = (("nec", "Necessidades", 50), ("des", "Desejos", 30), ("pou", "Poupança e dívidas", 20))
+
+
+def regra_50_30_20(receitas: float, cats: list[dict], ajustes: dict[str, str], parcial: bool) -> dict | None:
+    """Quanto da renda foi para necessidades, desejos e poupança/dívidas (a poupança é o que sobrou: pode ser negativa)."""
+    if not receitas or receitas <= 0:
+        return None
+    soma = {"nec": 0.0, "des": 0.0, "pou": 0.0}
+    lista: dict[str, list[dict]] = {"nec": [], "des": []}
+    for c in cats:
+        if c["gasto"] <= 0:
+            continue
+        g = ajustes.get(c["chave"]) or _REGRA_PADRAO.get(c["chave"], "des")
+        soma[g] += c["gasto"]
+        if g in lista:
+            lista[g].append({"nome": c["nome"], "chave": c["chave"], "gasto": round(c["gasto"], 2)})
+    nec, des = round(soma["nec"], 2), round(soma["des"], 2)
+    pou = round(receitas - nec - des, 2)
+    valores = {"nec": nec, "des": des, "pou": pou}
+    grupos = []
+    for gid, nome, meta in _REGRA_GRUPOS:
+        pct = round(valores[gid] / receitas * 100)
+        ok = pct >= meta - 2 if gid == "pou" else pct <= meta + 2
+        grupos.append({"id": gid, "nome": nome, "meta": meta, "valor": valores[gid], "pct": pct,
+                       "situacao": "ok" if ok else ("abaixo" if gid == "pou" else "acima"),
+                       "cats": sorted(lista.get(gid, []), key=lambda x: -x["gasto"])})
+    return {"renda": round(receitas, 2), "parcial": parcial, "grupos": grupos,
+            "dividas": round(soma["pou"], 2),
+            "falta": max(0, round(receitas * 0.2 - pou)),
+            "excesso_nec": max(0, round(nec - receitas * 0.5)), "excesso_des": max(0, round(des - receitas * 0.3))}
+
+
 def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = None,
                  banco: str | None = None, tipo: str | None = None) -> dict:
     """Mesmos números do `resumo` do WhatsApp, como dados: receitas, gastos, saldo e categorias com orçamento.
@@ -408,6 +449,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
         f_cred_a = ex.submit(db.linhas_creditos_cartao_periodo, user_phone, ini_a.isoformat(), fim_a.isoformat())
         f_receitas = ex.submit(db.monthly_income_total, user_phone, mes)
         f_orc = ex.submit(db.get_all_budgets, user_phone, mes)
+        f_grupos = ex.submit(db.regra_grupos, user_phone)
         f_prev = ex.submit(_previstas) if usa_previstas_atual else None
         f_serie = ex.submit(db.linhas_movimentos_periodo, user_phone,
                             _limites_mes(_mes_somado(hoje.strftime("%Y-%m"), -(_MESES_SERIE - 1)))[0].isoformat(),
@@ -418,6 +460,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
         prev_atual, _n, prev_cat_atual = f_prev.result() if f_prev else (0.0, 0, {})
         prev_total, prev_cat = (prev_atual, prev_cat_atual) if e_atual else (0.0, {})
         linhas_serie = f_serie.result()
+        ajustes_regra = f_grupos.result()
 
     por_cat: dict[str, float] = {}
     for r in desp:
@@ -467,6 +510,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
             "saldo": None if filtrado else round(receitas - gastos, 2),
             "previstas": prev_total, "gastos_realizados": gastos_realizados,
             "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats, "editavel": bool(e_atual and not filtrado),
+            "regra": None if filtrado else regra_50_30_20(receitas, cats, ajustes_regra, e_atual),
             "filtros": {"mes": mes, "banco": banco or "", "tipo": tipo or ""},
             "meses": meses, "bancos": sorted(opcoes), "comparacao": comparacao,
             "por_banco": por_banco, "por_tipo": por_tipo,
@@ -693,6 +737,26 @@ def api_limite_sugestoes(finflow_sessao: str | None = Cookie(default=None)):
             media = sum(d.get(k, 0.0) for d in por_mes.values()) / len(por_mes)
             saida[k] = {"media": _arred10(media), "passado": _arred10(por_mes.get(m1, {}).get(k, 0.0))}
     return _json({"sugestoes": saida, "meses": len(por_mes)})
+
+
+class _RegraGrupo(BaseModel):
+    categoria: str
+    chave: str
+    grupo: str
+
+
+@router.post("/painel/api/regra/grupo")
+def api_regra_grupo(corpo: _RegraGrupo, finflow_sessao: str | None = Cookie(default=None)):
+    """Muda uma categoria entre necessidades e desejos na regra 50/30/20."""
+    _real, usuario = _usuario(finflow_sessao)
+    chave = (corpo.chave or "").strip()[:60]
+    if not chave or corpo.grupo not in ("nec", "des"):
+        raise HTTPException(status_code=400, detail="grupo inválido")
+    try:
+        db.regra_definir(usuario, chave, (corpo.categoria or "").strip()[:80], corpo.grupo)
+    except Exception:
+        raise HTTPException(status_code=500, detail="não consegui salvar")
+    return _json({"ok": True})
 
 
 @router.get("/painel/api/fluxo")
@@ -1078,6 +1142,17 @@ nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{bord
 #toast{position:fixed;left:16px;right:16px;bottom:84px;z-index:70;max-width:608px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--ink);color:#081226;border-radius:14px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;box-shadow:0 12px 32px rgba(0,0,0,.45)}
 .nr{display:block;margin-top:-6px;min-height:44px;padding:0;border:0;background:none;color:var(--vt);font:inherit;font-size:13px;font-weight:600;text-align:left;cursor:pointer}
 .ign{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--lin)}.ign:last-child{border:0}
+#regra:empty{display:none}.rg{display:flex;flex-direction:column;gap:14px}.rg h2{margin:0}
+.rgbar{display:flex;height:18px;border-radius:9px;overflow:hidden;background:var(--bg);gap:2px}.rgbar i{display:block;height:18px}
+.rgg{border-top:1px solid var(--lin);padding:4px 0 8px}.rgh{all:unset;box-sizing:border-box;width:100%;cursor:pointer;display:flex;flex-direction:column;gap:8px;padding:10px 0 4px;min-height:44px}.rgh[disabled]{cursor:default}
+.rgl{display:flex;justify-content:space-between;align-items:center;gap:8px}.rgn{display:inline-flex;align-items:center;gap:8px;font-weight:700}.rgn i{width:12px;height:12px;border-radius:3px;display:inline-block}
+.rgp{display:inline-flex;padding:4px 10px;border-radius:99px;font-size:12px;font-weight:700}.rgp.ok{background:#0F3A3A;color:var(--agua)}.rgp.acima{background:#3A2A12;color:var(--farol)}.rgp.abaixo{background:#3A1E26;color:var(--coral)}
+.rgt{position:relative;display:block;height:8px;border-radius:99px;background:var(--lin)}.rgt i{display:block;height:8px;border-radius:99px}.rgt b{position:absolute;top:-4px;width:2px;height:16px;background:var(--ink);border-radius:1px}
+.rgv{display:flex;justify-content:space-between;align-items:center;font-size:14px;gap:8px}.rgv em{font-style:normal;color:var(--mut)}
+.rgc{display:flex;flex-direction:column;background:var(--bg);border-radius:14px;padding:4px 12px;margin-top:6px}.rgc>div{border-top:1px solid var(--lin);padding:6px 0}.rgc>div:first-child{border:0}
+.rgc .li{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px}.rgc .tr{min-height:44px;padding:0 10px;border:0;background:none;color:var(--vt);font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.rgc .chp{min-height:44px;padding:0 14px;border-radius:22px;border:1px solid var(--borda);background:var(--bg);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}.rgc .chp[aria-pressed=true]{background:#2A62F5;border-color:#2A62F5;color:#fff}
+.rgc .ps{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0}.rgdica{background:var(--corr);border-radius:14px;padding:12px 14px;font-size:14px;line-height:1.45}
 #toast button{min-height:44px;padding:0 16px;border-radius:10px;border:0;background:#2A62F5;color:#fff;font:inherit;font-size:14px;font-weight:700;cursor:pointer}
 </style></head><body><main>
 <div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
@@ -1123,6 +1198,34 @@ async function mudaFluxo(chave,nome,ignorar){
  try{await postFluxo(chave,nome,ignorar);aviso(ignorar?nome+' não será mais previsto':nome+' voltou à previsão',()=>mudaFluxoSemAviso(chave,nome,!ignorar));await recarregaFluxo()}
  catch(e){if(e!==0)aviso('Não consegui salvar agora.')}}
 async function mudaFluxoSemAviso(chave,nome,ignorar){await postFluxo(chave,nome,ignorar);await recarregaFluxo()}
+let RG_D=null,RG_ABERTO=null,RG_TROCA=null;
+function pintaRegra(d){const alvo=document.getElementById('regra');if(!alvo)return;const r=d?d.regra:null;if(!r){alvo.innerHTML='';return}RG_D=d;
+ const bm=v=>(v<0?'−':'')+brl(Math.abs(v)),COR={nec:'var(--vt)',des:'var(--farol)',pou:'var(--agua)'};
+ const totalGasto=r.grupos[0].valor+r.grupos[1].valor,base=Math.max(r.renda,totalGasto);
+ const pcs=r.grupos.map(g=>g.id==='pou'?Math.max(0,g.valor):g.valor).map(v=>(v/base*100).toFixed(2));
+ const aria='Distribuição da renda: '+r.grupos.map(g=>g.nome+' '+g.pct+'%').join(', ');
+ const rot={ok:'Na meta',acima:'Acima da meta',abaixo:'Abaixo da meta'};
+ const pou=r.grupos[2];let dica;
+ if(pou.valor<0)dica='Os gastos passaram da renda em '+bm(-pou.valor)+' neste mês.';
+ else if(r.falta>0){dica='Para chegar a 20% de poupança, faltam '+bm(r.falta)+' por mês.';const ex=[];if(r.excesso_nec>0)ex.push('Necessidades estão '+bm(r.excesso_nec)+' acima da meta');if(r.excesso_des>0)ex.push('desejos '+bm(r.excesso_des));if(ex.length)dica+=' '+ex.join(' e ')+'.'}
+ else dica='Você guardou '+pou.pct+'% da renda, acima da meta de 20%.';
+ if(r.parcial)dica+=' Mês em andamento: os percentuais ainda vão mudar até o fim do mês.';
+ const grupos=r.grupos.map(g=>{const aberto=RG_ABERTO===g.id,exp=g.id!=='pou'&&g.cats.length>0;
+  const cab='<button type="button" class="rgh" data-g="'+g.id+'"'+(exp?' aria-expanded="'+aberto+'"':' disabled')+'><span class="rgl"><span class="rgn"><i style="background:'+COR[g.id]+'"></i>'+esc(g.nome)+'</span><span class="rgp '+g.situacao+'">'+rot[g.situacao]+'</span></span>'+
+   '<span class="rgt"><i style="width:'+Math.max(0,Math.min(100,g.pct))+'%;background:'+COR[g.id]+'"></i><b style="left:'+g.meta+'%"></b></span>'+
+   '<span class="rgv"><span><b>'+g.pct+'%</b> <em>da renda · meta '+g.meta+'%</em></span><span style="font-weight:600">'+bm(g.valor)+(exp?' <span aria-hidden="true" style="color:var(--vt)">'+(aberto?'▴':'▾')+'</span>':'')+'</span></span></button>';
+  const extra=g.id==='pou'&&r.dividas>0?'<div class="mut" style="font-size:12px">Inclui '+brl(r.dividas)+' de Dívidas e Financiamentos.</div>':'';
+  const lista=aberto&&exp?'<div class="rgc">'+g.cats.map(c=>{const t=RG_TROCA===c.chave;return '<div><div class="li"><span>'+esc(c.nome)+'</span><span style="display:inline-flex;align-items:center;gap:4px"><b style="font-weight:600">'+brl(c.gasto)+'</b><button type="button" class="tr" data-tr="'+esc(c.chave)+'" aria-label="Mudar o grupo de '+esc(c.nome)+'">Mudar grupo</button></span></div>'+
+   (t?'<div class="ps"><button type="button" class="chp" data-mv="nec" data-ch="'+esc(c.chave)+'" data-nm="'+esc(c.nome)+'" aria-pressed="'+(g.id==='nec')+'">Necessidades</button><button type="button" class="chp" data-mv="des" data-ch="'+esc(c.chave)+'" data-nm="'+esc(c.nome)+'" aria-pressed="'+(g.id==='des')+'">Desejos</button></div>':'')+'</div>'}).join('')+'</div>':'';
+  return '<div class="rgg">'+cab+extra+lista+'</div>'}).join('');
+ alvo.innerHTML='<section class="card rg" aria-label="Regra 50/30/20"><div><h2>Regra 50/30/20</h2><div class="mut" style="font-size:14px">Para onde foi cada R$ 100 que entrou.</div></div>'+
+  '<div class="rgbar" role="img" aria-label="'+esc(aria)+'">'+['nec','des','pou'].map((id,i)=>'<i style="width:'+pcs[i]+'%;background:'+COR[id]+'"></i>').join('')+'</div>'+grupos+
+  '<div class="rgdica" role="note">'+esc(dica)+'</div><div class="mut" style="font-size:12px;line-height:1.4">Referência: 50% para necessidades, 30% para desejos e 20% para poupar ou quitar dívidas. A poupança é o que sobrou da renda no mês e pode ficar negativa. Toque num grupo para ver as categorias e mudar de grupo.</div></section>';
+ alvo.querySelectorAll('button.rgh:not([disabled])').forEach(b=>b.onclick=()=>{RG_ABERTO=RG_ABERTO===b.dataset.g?null:b.dataset.g;RG_TROCA=null;pintaRegra(RG_D)});
+ alvo.querySelectorAll('button.tr').forEach(b=>b.onclick=()=>{RG_TROCA=RG_TROCA===b.dataset.tr?null:b.dataset.tr;pintaRegra(RG_D)});
+ alvo.querySelectorAll('button[data-mv]').forEach(b=>b.onclick=async()=>{const novo=b.dataset.mv;RG_TROCA=null;
+  try{const rs=await fetch('/painel/api/regra/grupo',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave:b.dataset.ch,categoria:b.dataset.nm,grupo:novo})});
+   if(rs.status===401){location.href='/painel';return}if(!rs.ok)throw new Error('regra');await recarrega()}catch(e){aviso('Não consegui mudar o grupo agora.')}})}
 async function recarrega(){if(atual!=='resumo')return;const y=window.scrollY;await vistas.resumo();window.scrollTo(0,y)}
 function aviso(txt,desfaz){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.setAttribute('role','status');document.body.appendChild(t)}
  t.innerHTML='<span></span>'+(desfaz?'<button type="button">Desfazer</button>':'');t.firstChild.textContent=txt;
@@ -1191,12 +1294,12 @@ const vistas={
   const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map((c,i)=>'<div class="catw"><button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
   (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>'+(d.editavel?'<button type="button" class="lim'+(c.orcamento?'':' novo')+'" data-lim="'+i+'" aria-label="'+(c.orcamento?'Editar o limite de ':'Definir limite de ')+esc(c.nome)+'">'+(c.orcamento?'Editar limite':'Definir limite')+'</button>':'')+'</div>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
-  el.className='';el.innerHTML=filtros+grafico(d.serie,d.mes,filtrado)+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+'<div id="guia"></div>'+cats;
+  el.className='';el.innerHTML=filtros+grafico(d.serie,d.mes,filtrado)+hero+'<div id="regra"></div>'+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+'<div id="guia"></div>'+cats;
   {const g=document.getElementById('grf');if(g)g.scrollLeft=CS===null?g.scrollWidth:CS;
    el.querySelectorAll('[data-gm]').forEach(b=>{const ir=()=>{CS=g?g.scrollLeft:null;F.mes=b.dataset.gm;vistas.resumo()};b.onclick=ir;b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();ir()}}})}
   el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{const k=b.dataset.f,v=b.dataset.v;F[k]=(b.classList.contains('vb')&&F[k]===v)?'':v;vistas.resumo()});
   el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat));
-  el.querySelectorAll('button.lim').forEach(b=>b.onclick=()=>abreFolha(d.categorias[Number(b.dataset.lim)],b));guiaLimites(d).catch(()=>{})},
+  el.querySelectorAll('button.lim').forEach(b=>b.onclick=()=>abreFolha(d.categorias[Number(b.dataset.lim)],b));pintaRegra(d);guiaLimites(d).catch(()=>{})},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
   if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
   const dm=i=>i.slice(8,10)+'/'+i.slice(5,7);const sem=i=>['dom','seg','ter','qua','qui','sex','sáb'][new Date(i+'T12:00:00').getDay()];
