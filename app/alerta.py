@@ -87,6 +87,14 @@ def orcamentos_estourados(telefone: str) -> list[dict]:
     return saida
 
 
+def liberar_aviso(telefone: str, mes: str, categoria: str) -> None:
+    """Depois que o usuário muda o limite de uma categoria, um novo estouro dela pode avisar de novo."""
+    from app.utils import _normalize
+    alvo = _normalize(categoria)
+    for chave in [k for k in _enviados if k[0] == telefone and k[1] == mes and _normalize(k[2]) == alvo]:
+        _enviados.discard(chave)
+
+
 def alertar_orcamentos(telefone: str) -> int:
     """Avisa o PRÓPRIO usuário, uma vez por categoria e mês, das categorias estouradas (cada um no seu número).
     Devolve quantos avisos novos saíram. ALERTA_ORCAMENTO=0 desliga; usuário de demonstração não recebe."""

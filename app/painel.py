@@ -437,7 +437,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
         limite = orc.get(_normalize(r["category"]))
         pct = round(r["total"] / limite * 100) if limite else None
         status = None if pct is None else ("estourado" if pct > 100 else ("atencao" if pct >= 80 else "saudavel"))
-        cats.append({"nome": r["category"], "gasto": r["total"], "orcamento": limite, "pct": pct, "status": status})
+        cats.append({"nome": r["category"], "chave": _normalize(r["category"]), "gasto": r["total"], "orcamento": limite, "pct": pct, "status": status})
 
     atual_ate = _soma(desp, cred, banco, tipo, mapa, ate)
     ant_ate = _soma(desp_a, cred_a, banco, tipo, mapa, ate_a)
@@ -466,7 +466,7 @@ def dados_resumo(user_phone: str, hoje: date | None = None, mes: str | None = No
     return {"mes": mes, "receitas": receitas, "gastos": gastos,
             "saldo": None if filtrado else round(receitas - gastos, 2),
             "previstas": prev_total, "gastos_realizados": gastos_realizados,
-            "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats,
+            "demonstracao": demo.eh_telefone_demo(user_phone), "categorias": cats, "editavel": bool(e_atual and not filtrado),
             "filtros": {"mes": mes, "banco": banco or "", "tipo": tipo or ""},
             "meses": meses, "bancos": sorted(opcoes), "comparacao": comparacao,
             "por_banco": por_banco, "por_tipo": por_tipo,
@@ -627,6 +627,72 @@ def api_categoria(nome: str = "", mes: str = "", banco: str = "", tipo: str = ""
         raise HTTPException(status_code=400, detail="categoria não informada")
     return _json(dados_categoria(usuario, nome, mes=(mes or "")[:7], banco=(banco or "").strip()[:60] or None,
                                  tipo=(tipo or "").strip()[:10] or None))
+
+
+class _LimiteItem(BaseModel):
+    categoria: str
+    valor: float
+
+
+class _Limites(BaseModel):
+    limites: list[_LimiteItem]
+
+
+def _arred10(v: float) -> int:
+    return max(0, int(round(v / 10.0)) * 10)
+
+
+@router.post("/painel/api/limite")
+def api_limite(corpo: _Limites, finflow_sessao: str | None = Cookie(default=None)):
+    """Define o limite mensal de categorias (valor 0 remove). Vale para o mês atual e os seguintes, até mudar de novo.
+    Só o mês atual é editável: os anteriores guardam o limite que valia na época."""
+    real, usuario = _usuario(finflow_sessao)
+    if not corpo.limites or len(corpo.limites) > 20:
+        raise HTTPException(status_code=400, detail="limites inválidos")
+    mes = date.today().strftime("%Y-%m")
+    itens = []
+    for it in corpo.limites:
+        cat = (it.categoria or "").strip()[:80]
+        valor = it.valor
+        if not cat or valor != valor or valor < 0 or valor > 1_000_000:
+            raise HTTPException(status_code=400, detail="limite inválido")
+        itens.append((cat, round(float(valor), 2)))
+    try:
+        for cat, valor in itens:
+            db.save_budget(usuario, cat, valor, mes)
+    except Exception:
+        raise HTTPException(status_code=500, detail="não consegui salvar o limite")
+    if not demo.eh_telefone_demo(usuario):
+        try:
+            from app import alerta
+            for cat, _v in itens:
+                alerta.liberar_aviso(real, mes, cat)
+        except Exception:
+            pass
+    return _json({"ok": True, "mes": mes})
+
+
+@router.get("/painel/api/limite/sugestoes")
+def api_limite_sugestoes(finflow_sessao: str | None = Cookie(default=None)):
+    """Por categoria: média dos últimos 3 meses (só entre os meses com gasto) e valor do mês passado, para sugerir o limite."""
+    _real, usuario = _usuario(finflow_sessao)
+    atual = date.today().strftime("%Y-%m")
+    m3, m1 = _mes_somado(atual, -3), _mes_somado(atual, -1)
+    linhas = db.linhas_gastos_periodo(usuario, _limites_mes(m3)[0].isoformat(), _limites_mes(m1)[1].isoformat())
+    por_mes: dict[str, dict[str, float]] = {}
+    for r in linhas:
+        m = str(r.get("billing_date") or "")[:7]
+        if not m:
+            continue
+        chave = _normalize((r.get("category") or "").strip() or "Outros")
+        d = por_mes.setdefault(m, {})
+        d[chave] = d.get(chave, 0.0) + float(r["amount"])
+    saida: dict[str, dict] = {}
+    if por_mes:
+        for k in {k for d in por_mes.values() for k in d}:
+            media = sum(d.get(k, 0.0) for d in por_mes.values()) / len(por_mes)
+            saida[k] = {"media": _arred10(media), "passado": _arred10(por_mes.get(m1, {}).get(k, 0.0))}
+    return _json({"sugestoes": saida, "meses": len(por_mes)})
 
 
 @router.get("/painel/api/fluxo")
@@ -972,6 +1038,20 @@ details.gr[open]>summary .q:after{transform:rotate(-135deg);margin-top:4px}detai
 nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--lin);display:flex;gap:4px;padding:6px 8px 10px}
 nav button{flex:1;min-height:56px;border:0;border-radius:16px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--mut);cursor:pointer}
 nav button[aria-current=page]{color:var(--ink);background:var(--corr)}.sair{border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;cursor:pointer}a.sair{background:none}
+.catw{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;border-bottom:1px solid var(--lin)}.catw:last-child{border:0}.catw button.cat{border-bottom:0}
+.lim{min-height:44px;margin:0 0 6px 6px;padding:0 12px;border-radius:12px;border:1px solid var(--borda);background:var(--corr);color:var(--ink);font:inherit;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap}.lim.novo{border-style:dashed;background:transparent;color:var(--vt)}
+#guia:empty{display:none}.guia{background:var(--corr);border:1px solid #2A62F5;border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:12px}.guia h2{margin:0;font-size:20px;letter-spacing:-.02em}
+.guia .gi{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:48px;border:0;border-top:1px solid var(--borda);background:none;color:inherit;font:inherit;font-size:15px;cursor:pointer;text-align:left;width:100%}.guia .gi span:last-child{color:var(--vt);font-weight:700}
+.fprim{min-height:52px;border-radius:14px;border:0;background:#2A62F5;color:#fff;font:inherit;font-size:16px;font-weight:700;cursor:pointer}.fprim:disabled{opacity:.45;cursor:default}
+.fsec{min-height:44px;padding:0 8px;border:0;background:none;color:#C9D6F5;font:inherit;font-size:15px;font-weight:600;cursor:pointer}.fsec.fdel{color:var(--coral);font-weight:700}
+#fundo{position:fixed;inset:0;z-index:60;background:rgba(4,9,20,.72);display:flex;align-items:flex-end;justify-content:center}
+#folha{width:100%;max-width:640px;max-height:92vh;overflow:auto;background:var(--card);border-top:1px solid var(--borda);border-radius:26px 26px 0 0;padding:12px 18px calc(22px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px}
+#folha .alca{align-self:center;width:40px;height:4px;border-radius:2px;background:var(--borda)}.ftit{font-family:"Bricolage Grotesque",Inter,sans-serif;font-size:24px;font-weight:800;letter-spacing:-.02em}
+.fcampo{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--borda);border-radius:14px;padding:0 16px;min-height:58px;margin-top:6px}.fcampo span{font-size:18px;color:var(--mut)}
+.fcampo input{flex:1;min-width:0;background:transparent;border:0;color:var(--ink);font:inherit;font-size:28px;font-weight:700;padding:10px 0;outline:0}.fcampo:focus-within{border-color:var(--vt)}
+#fundo .chp{min-height:44px;padding:0 14px;border-radius:22px;border:1px solid var(--borda);background:var(--bg);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}#fundo .chp[aria-pressed=true]{background:#2A62F5;border-color:#2A62F5;color:#fff}
+#toast{position:fixed;left:16px;right:16px;bottom:84px;z-index:70;max-width:608px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--ink);color:#081226;border-radius:14px;padding:6px 6px 6px 16px;font-size:14px;font-weight:600;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+#toast button{min-height:44px;padding:0 16px;border-radius:10px;border:0;background:#2A62F5;color:#fff;font:inherit;font-size:14px;font-weight:700;cursor:pointer}
 </style></head><body><main>
 <div class="lin"><a href="__WA__" class="sair" style="display:flex;align-items:center;min-height:44px;text-decoration:none">← WhatsApp</a><button class="sair" id="sair" type="button">Sair</button></div><div id="sub"></div>
 <h1 id="titulo">FinFlow</h1><div id="conteudo" class="mut">Carregando…</div></main>
@@ -1004,6 +1084,57 @@ function grafico(s,sel,filtrado){
  const leg=filtrado?'<span><i style="background:var(--coral)"></i>Gastos do recorte</span>':'<span><i style="background:var(--agua)"></i>Receitas</span><span><i style="background:var(--coral)"></i>Gastos</span><span><i class="ln"></i>Saldo do mês</span>';
  const atual=s.some(x=>x.parcial);
  return '<div class="card"><b>Receitas e gastos por mês</b><div class="mut">Toque em um mês para ver o resumo dele.</div><div class="grf" id="grf"><svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="group" aria-label="Receitas, gastos e saldo dos últimos '+n+' meses">'+g+hits+'</svg></div><div class="leg">'+leg+'</div>'+(atual?'<p class="gnota">* Mês em andamento: valores até hoje, com as parcelas previstas nos gastos.</p>':'')+'</div>'};
+let SUG=null,AVISO_OFF=false,TT=0;try{AVISO_OFF=localStorage.getItem('ff_lim_off')==='1'}catch(e){}
+async function carregaSug(){if(SUG)return SUG;try{SUG=(await api('limite/sugestoes')).sugestoes||{}}catch(e){if(e===0)throw e;SUG={}}return SUG}
+const arred=v=>Math.max(10,Math.round(v/10)*10);
+async function salvaLimites(lista){const r=await fetch('/painel/api/limite',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({limites:lista})});
+ if(r.status===401){location.href='/painel';throw 0}if(!r.ok)throw new Error('limite');return r.json()}
+async function recarrega(){if(atual!=='resumo')return;const y=window.scrollY;await vistas.resumo();window.scrollTo(0,y)}
+function aviso(txt,desfaz){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';t.setAttribute('role','status');document.body.appendChild(t)}
+ t.innerHTML='<span></span>'+(desfaz?'<button type="button">Desfazer</button>':'');t.firstChild.textContent=txt;
+ if(desfaz)t.querySelector('button').onclick=async()=>{clearTimeout(TT);t.remove();try{await salvaLimites(desfaz);await recarrega()}catch(e){if(e!==0)aviso('Não consegui desfazer.')}};
+ clearTimeout(TT);TT=setTimeout(()=>t.remove(),7000)}
+async function abreFolha(c,gatilho){
+ const sug=(await carregaSug())[c.chave]||{},ant=c.orcamento||0;let val=ant||sug.media||0;
+ const fundo=document.createElement('div');fundo.id='fundo';
+ fundo.innerHTML='<div id="folha" role="dialog" aria-modal="true" aria-labelledby="ft"><span class="alca"></span><div><div id="ft" class="ftit"></div><div class="mut" id="fsub"></div></div>'
+  +'<div><label for="flim" class="mut">Limite mensal</label><div class="fcampo"><span>R$</span><input id="flim" type="text" inputmode="numeric" autocomplete="off" placeholder="0"></div></div>'
+  +'<div class="ops" id="fchips"></div><div aria-live="polite"><div id="fprev" style="font-size:14px;font-weight:700;margin-bottom:8px"></div><div class="barra"><i id="fbar" style="width:0"></i></div></div>'
+  +'<div class="mut">Vale para este mês e os próximos, até você mudar.</div><button type="button" class="fprim" id="fsalva">Salvar limite</button>'
+  +'<div class="lin"><button type="button" class="fsec" id="fcanc">Cancelar</button><button type="button" class="fsec fdel" id="frem">Remover limite</button></div></div>';
+ document.body.appendChild(fundo);document.body.style.overflow='hidden';
+ const $=i=>fundo.querySelector('#'+i),inp=$('flim');
+ $('ft').textContent='Limite de '+c.nome;$('fsub').textContent='Gasto neste mês: '+brl(c.gasto);if(!ant)$('frem').style.display='none';
+ const chips=[];if(sug.media)chips.push(['Média de 3 meses',sug.media]);if(sug.passado)chips.push(['Mês passado',sug.passado]);
+ function atualiza(){inp.value=val?val.toLocaleString('pt-BR'):'';
+  $('fchips').innerHTML=chips.map((x,i)=>'<button type="button" class="chp" data-i="'+i+'" aria-pressed="'+(val===x[1])+'">'+x[0]+' · R$ '+x[1].toLocaleString('pt-BR')+'</button>').join('');
+  $('fchips').querySelectorAll('button').forEach(b=>b.onclick=()=>{val=chips[Number(b.dataset.i)][1];atualiza()});
+  const pv=$('fprev'),bar=$('fbar');$('fsalva').disabled=!val;
+  if(!val){pv.textContent='Digite um valor para ver quanto já foi usado.';pv.style.color='var(--mut)';bar.style.width='0'}
+  else{const pc=Math.round(c.gasto/val*100),cor=pc>100?'var(--coral)':pc>=80?'var(--farol)':'var(--agua)';pv.textContent='Com esse limite, você já usou '+pc+'%';pv.style.color=cor;bar.style.width=Math.min(pc,100)+'%';bar.style.background=cor}}
+ inp.oninput=()=>{const n=parseInt(inp.value.replace(/[^0-9]/g,'').slice(0,7),10);val=n>0?Math.min(n,1000000):0;atualiza()};
+ function fecha(){document.removeEventListener('keydown',tecla);fundo.remove();document.body.style.overflow='';if(gatilho&&document.contains(gatilho))gatilho.focus()}
+ function tecla(e){if(e.key==='Escape'){fecha();return}if(e.key!=='Tab')return;const f=[...fundo.querySelectorAll('input,button')].filter(x=>x.offsetParent!==null&&!x.disabled);if(!f.length)return;
+  const i=f.indexOf(document.activeElement);if(e.shiftKey&&i<=0){e.preventDefault();f[f.length-1].focus()}else if(!e.shiftKey&&i===f.length-1){e.preventDefault();f[0].focus()}}
+ document.addEventListener('keydown',tecla);fundo.onclick=e=>{if(e.target===fundo)fecha()};$('fcanc').onclick=fecha;
+ async function grava(valor,msg,desfaz){const bs=[$('fsalva'),$('frem')];bs.forEach(b=>b.disabled=true);
+  try{await salvaLimites([{categoria:c.nome,valor}]);fecha();aviso(msg,desfaz);await recarrega()}
+  catch(e){if(e===0)return;bs.forEach(b=>b.disabled=false);$('fsalva').disabled=!val;const pv=$('fprev');pv.textContent='Não consegui salvar agora. Tente de novo.';pv.style.color='var(--coral)'}}
+ $('fsalva').onclick=()=>{if(val)grava(val,'Limite de '+c.nome+' salvo',[{categoria:c.nome,valor:ant}])};
+ $('frem').onclick=()=>grava(0,'Limite de '+c.nome+' removido',[{categoria:c.nome,valor:ant}]);
+ atualiza();inp.focus()}
+async function guiaLimites(d){
+ if(AVISO_OFF||!d.editavel||!d.categorias.length||d.categorias.some(c=>c.orcamento>0))return;
+ const sug=await carregaSug(),alvo=document.getElementById('guia');if(!alvo)return;
+ const top=d.categorias.filter(c=>c.gasto>0).slice(0,5).map(c=>({c,v:(sug[c.chave]&&sug[c.chave].media)||arred(c.gasto)}));if(!top.length)return;
+ alvo.innerHTML='<section class="guia" aria-label="Definir limites"><div><h2>Defina limites nas suas '+(top.length>1?top.length+' maiores categorias':'maior categoria')+'</h2><div class="mut" style="color:#C9D6F5">Já preenchemos com a média dos últimos meses. Ajuste o que quiser.</div></div>'
+  +'<div>'+top.map((x,i)=>'<button type="button" class="gi" data-i="'+i+'" aria-label="Ajustar limite sugerido de '+esc(x.c.nome)+'"><span><b>'+esc(x.c.nome)+'</b></span><span>R$ '+x.v.toLocaleString('pt-BR')+' ›</span></button>').join('')+'</div>'
+  +'<button type="button" class="fprim" id="gaplica">Aplicar '+(top.length>1?'as '+top.length+' sugestões':'a sugestão')+'</button><button type="button" class="fsec" id="gnao">Agora não</button><div class="mut" style="text-align:center;font-size:12px">O FinFlow avisa no WhatsApp quando um limite estourar.</div></section>';
+ alvo.querySelectorAll('.gi').forEach(b=>b.onclick=()=>{const x=top[Number(b.dataset.i)];abreFolha(Object.assign({},x.c,{orcamento:0}),b)});
+ alvo.querySelector('#gnao').onclick=()=>{try{localStorage.setItem('ff_lim_off','1')}catch(e){}AVISO_OFF=true;alvo.innerHTML=''};
+ alvo.querySelector('#gaplica').onclick=async function(){this.disabled=true;
+  try{await salvaLimites(top.map(x=>({categoria:x.c.nome,valor:x.v})));aviso(top.length+(top.length>1?' limites definidos':' limite definido'),top.map(x=>({categoria:x.c.nome,valor:0})));await recarrega()}
+  catch(e){if(e!==0){this.disabled=false;aviso('Não consegui salvar agora.')}}}}
 let atual=null;let DEMO=false;const F={mes:'',banco:'',tipo:''};const memo={};   // última tela de cada aba, só em memória: ao voltar, aparece na hora e atualiza em seguida
 const vistas={
  async resumo(){const q=new URLSearchParams();if(F.mes)q.set('mes',F.mes);if(F.banco)q.set('banco',F.banco);if(F.tipo)q.set('tipo',F.tipo);
@@ -1023,14 +1154,15 @@ const vistas={
   const maxB=l=>Math.max(...l.map(x=>x.gasto),1);
   const barras=(tit2,lista,chave,sel)=>lista.length<2&&!sel?'':'<div class="card"><b>'+tit2+'</b>'+lista.map(x=>'<button type="button" class="vb'+(sel&&sel!==x.id?' dim':'')+'" data-f="'+chave+'" data-v="'+esc(x.id)+'" aria-pressed="'+(sel===x.id)+'"><div class="lin"><b>'+esc(x.nome)+'</b><span>'+brl(x.gasto)+'</span></div><div class="barra"><i style="width:'+Math.max(2,Math.max(x.gasto,0)/maxB(lista)*100).toFixed(1)+'%"></i></div></button>').join('')+'</div>';
   const vazio=!d.por_banco.length&&!d.por_tipo.length;
-  const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map(c=>'<button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
+  const cats='<div class="card"><b>Por categoria</b>'+(d.categorias.length?d.categorias.map((c,i)=>'<div class="catw"><button type="button" class="cat" data-cat="'+esc(c.nome)+'" aria-label="Ver detalhes de '+esc(c.nome)+'"><div class="lin"><b>'+esc(c.nome)+'</b><span>'+
   (c.status?'<span class="pill '+c.status+'">'+({saudavel:'Saudável',atencao:'Atenção',estourado:'Estourado'})[c.status]+' · '+c.pct+'%</span>':'')+'<span class="seta" aria-hidden="true">›</span></span></div>'+
-  (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
-  el.className='';el.innerHTML=filtros+grafico(d.serie,d.mes,filtrado)+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+cats;
+  (c.orcamento?'<div class="barra '+({estourado:'b-est',atencao:'b-aten'})[c.status||'']+'"><i style="width:'+Math.min(c.pct,100)+'%"></i></div>':'')+'<div class="mut">'+brl(c.gasto)+(c.orcamento?' / '+brl(c.orcamento):'')+'</div></button>'+(d.editavel?'<button type="button" class="lim'+(c.orcamento?'':' novo')+'" data-lim="'+i+'" aria-label="'+(c.orcamento?'Editar o limite de ':'Definir limite de ')+esc(c.nome)+'">'+(c.orcamento?'Editar limite':'Definir limite')+'</button>':'')+'</div>').join(''):'<p class="mut">Nenhum gasto neste recorte.</p>')+'</div>';
+  el.className='';el.innerHTML=filtros+grafico(d.serie,d.mes,filtrado)+hero+(vazio?'':barras('Por banco',d.por_banco,'banco',F.banco))+'<div id="guia"></div>'+cats;
   {const g=document.getElementById('grf');if(g)g.scrollLeft=CS===null?g.scrollWidth:CS;
    el.querySelectorAll('[data-gm]').forEach(b=>{const ir=()=>{CS=g?g.scrollLeft:null;F.mes=b.dataset.gm;vistas.resumo()};b.onclick=ir;b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();ir()}}})}
   el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{const k=b.dataset.f,v=b.dataset.v;F[k]=(b.classList.contains('vb')&&F[k]===v)?'':v;vistas.resumo()});
-  el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat))},
+  el.querySelectorAll('button.cat').forEach(b=>b.onclick=()=>abrirCategoria(b.dataset.cat));
+  el.querySelectorAll('button.lim').forEach(b=>b.onclick=()=>abreFolha(d.categorias[Number(b.dataset.lim)],b));guiaLimites(d).catch(()=>{})},
  async fluxo(){const d=await api('fluxo');ti.textContent='Fluxo de caixa';sub.innerHTML='';el.className='';
   if(d.vazio){el.className='card';el.innerHTML='<p class="mut">Não achei contas correntes conectadas para projetar o fluxo.</p>';return}
   const dm=i=>i.slice(8,10)+'/'+i.slice(5,7);const sem=i=>['dom','seg','ter','qua','qui','sex','sáb'][new Date(i+'T12:00:00').getDay()];
