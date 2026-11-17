@@ -1550,7 +1550,7 @@ const irOriginal=ir;ir=async function(a){if(a!=='chat')cSair();return irOriginal
 _PAGINA = _PAGINA.replace("</style></head><body><main>", _CHAT_CSS + "</style></head><body><main>", 1)
 _PAGINA = _PAGINA.replace('<button data-a="resumo" aria-current="page">Resumo</button>', '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="chat">Chat</button>', 1)
 _PAGINA = _PAGINA.replace("\nir('resumo');", "\n" + _CHAT_JS + "ir('resumo');", 1)
-# Na demonstração o painel mostra só o Resumo.
+# Na demonstração o painel mostra só Resumo e Revisar.
 _PAGINA_DEMO = _PAGINA.replace(
     '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="chat">Chat</button><button data-a="fluxo">Fluxo</button><button data-a="previsao">Previsão</button><button data-a="revisar">Revisar</button>',
-    '<button data-a="resumo" aria-current="page">Resumo</button>', 1)
+    '<button data-a="resumo" aria-current="page">Resumo</button><button data-a="revisar">Revisar</button>', 1)
