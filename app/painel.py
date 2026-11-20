@@ -1108,6 +1108,7 @@ button.cat:last-child{border-bottom:0}button.cat:active{background:#132550}butto
 button.cat:focus-visible,.voltar:focus-visible{outline:2px solid var(--vt);outline-offset:2px;border-radius:10px}
 .voltar{align-self:flex-start;border:0;background:none;color:var(--vt);font:inherit;font-weight:700;min-height:44px;padding:0;cursor:pointer}
 .sub{padding:12px 0;border-bottom:1px solid var(--lin);display:flex;flex-direction:column;gap:6px}.sub:last-child{border:0}
+.sub.tap{cursor:pointer;position:relative;padding-right:24px;-webkit-tap-highlight-color:transparent}.sub.tap:after{content:"";position:absolute;right:4px;top:50%;width:8px;height:8px;border-right:2px solid var(--mut);border-top:2px solid var(--mut);transform:translateY(-50%) rotate(45deg)}.sub.tap:active{background:rgba(127,127,127,.08)}
 .it{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 0;border-bottom:1px solid var(--lin)}.it:last-child{border:0}
 .it .n{display:flex;flex-direction:column;gap:2px;min-width:0}.it .n span{font-size:15px;overflow-wrap:anywhere}.it b{white-space:nowrap}
 details.gr{border-bottom:1px solid var(--lin)}details.gr:last-child{border:0}
@@ -1407,14 +1408,30 @@ async function abrirCategoria(nome,semHistorico){atual=null;
    (d.a_revisar?'<div class="avisorev" role="status"><span>'+d.a_revisar+(d.a_revisar===1?' lançamento aguardando':' lançamentos aguardando')+' revisão</span><button type="button" id="irrev">Revisar</button></div>':'');
   if(!d.subcategorias.length&&!d.previstas){el.innerHTML=topo+'<div class="card"><p class="mut">Nenhum gasto nesta categoria neste mês.</p></div>';return}
   const base=d.total||1;
-  const subs='<div class="card"><h2>Por subcategoria</h2>'+d.subcategorias.map(s=>'<div class="sub"><div class="lin"><b>'+esc(s.nome)+'</b><b>'+brl(s.total)+'</b></div>'+
+  const subs='<div class="card"><h2>Por subcategoria</h2>'+d.subcategorias.map(s=>'<div class="sub tap" role="button" tabindex="0" data-sub="'+esc(s.nome)+'"><div class="lin"><b>'+esc(s.nome)+'</b><b>'+brl(s.total)+'</b></div>'+
    '<div class="barra"><i style="width:'+(s.total/base*100).toFixed(1)+'%"></i></div><div class="mut" style="font-size:13px">'+Math.round(s.total/base*100)+'% da categoria · '+s.n+(s.n===1?' lançamento':' lançamentos')+'</div></div>').join('')+
    (d.previstas?'<div class="sub"><div class="lin"><b>Parcelas previstas</b><b>'+brl(d.previstas)+'</b></div><div class="mut" style="font-size:13px">Ainda não lançadas pelo banco</div></div>':'')+'</div>';
   const lista='<div class="card"><h2>Lançamentos</h2>'+d.subcategorias.map((s,k)=>'<details class="gr"'+(k===0?' open':'')+'><summary><span>'+esc(s.nome)+' · '+s.n+'</span><span class="q">'+brl(s.total)+'</span></summary>'+
    s.itens.map(i=>'<div class="it"><div class="n"><span>'+esc(i.descricao)+'</span><span class="tipo">'+[dm(i.data),forma[i.forma]||'',i.parcela?'parcela '+i.parcela:'',i.revisar?'aguardando revisão':''].filter(Boolean).join(' · ')+'</span></div><b>'+brl(i.valor)+'</b></div>').join('')+'</details>').join('')+'</div>';
-  el.innerHTML=topo+subs+lista;const bR=document.getElementById('irrev');if(bR)bR.onclick=()=>ir('revisar')}
+  el.innerHTML=topo+subs+lista;el.querySelectorAll('.sub.tap').forEach(x=>{const ir_=()=>abrirSub(nome,x.dataset.sub);x.onclick=ir_;x.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();ir_()}}});const bR=document.getElementById('irrev');if(bR)bR.onclick=()=>ir('revisar')}
  catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
-window.addEventListener('popstate',e=>{if(e.state&&e.state.cat)abrirCategoria(e.state.cat,true);else ir('resumo')});
+async function abrirSub(cat,nomeSub,semHistorico){atual=null;
+ if(!semHistorico)history.pushState({cat:cat,sub:nomeSub},'','#'+encodeURIComponent(cat)+'/'+encodeURIComponent(nomeSub));
+ window.scrollTo(0,0);ti.textContent=nomeSub;sub.innerHTML='<button type="button" class="voltar" id="voltar">← '+esc(cat)+'</button>';
+ document.getElementById('voltar').onclick=()=>history.back();
+ el.className='mut';el.textContent='Carregando…';
+ try{const d=await api('categoria?nome='+encodeURIComponent(cat)+'&mes='+encodeURIComponent(F.mes)+'&banco='+encodeURIComponent(F.banco)+'&tipo='+encodeURIComponent(F.tipo));el.className='';
+  const s=d.subcategorias.find(x=>x.nome===nomeSub);
+  if(!s){el.innerHTML='<div class="card"><p class="mut">Nenhum lançamento nesta subcategoria neste mês.</p></div>';return}
+  const forma={credito:'Crédito',debito:'Débito',pix:'Pix',boleto:'Boleto'};
+  const dm=i=>i?i.slice(8,10)+'/'+i.slice(5,7):'';
+  const base=d.total||1;
+  const topo='<div class="hero"><div class="lin"><span class="r">Gasto no mês</span><span class="saldo">'+brl(s.total)+'</span></div>'+
+   '<span class="r" style="font-size:13px">'+Math.round(s.total/base*100)+'% de '+esc(d.categoria)+' · '+s.n+(s.n===1?' lançamento':' lançamentos')+'</span></div>';
+  const lista='<div class="card"><h2>Lançamentos</h2>'+s.itens.map(i=>'<div class="it"><div class="n"><span>'+esc(i.descricao)+'</span><span class="tipo">'+[dm(i.data),forma[i.forma]||'',i.parcela?'parcela '+i.parcela:'',i.revisar?'aguardando revisão':''].filter(Boolean).join(' · ')+'</span></div><b>'+brl(i.valor)+'</b></div>').join('')+'</div>';
+  el.innerHTML=topo+lista}
+ catch(e){if(e!==0){el.className='mut';el.textContent='Não consegui carregar agora. Tente de novo em instantes.'}}}
+window.addEventListener('popstate',e=>{if(e.state&&e.state.sub)abrirSub(e.state.cat,e.state.sub,true);else if(e.state&&e.state.cat)abrirCategoria(e.state.cat,true);else ir('resumo')});
 async function ir(a){if(location.hash)history.replaceState(null,'',location.pathname);document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.a===a?'page':'false'));
  if(atual&&atual!=='chat'&&el.className!=='mut'&&el.childNodes.length)memo[atual]={nos:[...el.childNodes],cls:el.className,tit:ti.textContent,sub:sub.innerHTML};
  atual=a;const m=a==='chat'?null:memo[a];
