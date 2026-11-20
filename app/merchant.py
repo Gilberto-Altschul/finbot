@@ -14,6 +14,7 @@ _MES_ANO = re.compile(r"\b(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s*
 _PROCESSADORA = re.compile(r"^(?:mp|pag|pagseguro|ec|iz|sumup|stone|cielo|getnet|rede)\s*\*\s*")
 _PREFIXOS = re.compile(
     r"^(?:compra\s+(?:no\s+)?(?:debito|credito|cartao)|pix\s+(?:enviado|recebido|transf(?:erencia)?)|"
+    r"pag(?:amento)?\s+(?:de\s+)?pix(?:\s+qr\s*code)?|pix\s+qr\s*code|"   # "Pagamento de Pix QR Code <LOJA>": a chave é a LOJA, não o prefixo
     r"transferencia\s+(?:enviada|recebida)|pag(?:amento)?\s+(?:de\s+)?(?:boleto|conta)|"
     r"debito\s+automatico|rscss|compra)\s+"
 )

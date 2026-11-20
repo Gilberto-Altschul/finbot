@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 
 import app.database as db
 import app.demo as demo
+import app.identidade as identidade
 import app.canal as canal
 from app.utils import _normalize
 
@@ -579,7 +580,7 @@ def _usuario(sessao: str | None) -> tuple[str, str]:
     if not real:
         raise HTTPException(status_code=401, detail="sessão expirada")
     registrar_uso(real)
-    return real, demo.efetivo(real)
+    return real, identidade.efetivo(real)
 
 
 def _json(dados: dict) -> JSONResponse:
@@ -936,7 +937,7 @@ async def api_chat_desfazer(request: Request, finflow_sessao: str | None = Cooki
     """Desfaz o ÚLTIMO gasto gravado por áudio deste usuário (os ids ficam no servidor; o navegador não escolhe o que apagar)."""
     real, c = _checar_chat(request, finflow_sessao)
     import app.audio_gasto as audio_gasto
-    usuario = demo.efetivo(real)
+    usuario = identidade.efetivo(real)
     try:
         args = await asyncio.to_thread(audio_gasto.desfazer, usuario)
     except Exception as exc:

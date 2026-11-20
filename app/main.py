@@ -25,6 +25,7 @@ import app.titular as titular
 import app.fechamento_cartao as fechamento_cartao
 import app.seguranca as seguranca
 import app.demo as demo_mod
+import app.identidade as identidade
 import app.painel as painel
 import app.audio_gasto as audio_gasto
 import app.canal as canal
@@ -153,7 +154,7 @@ def _enviar_quick_reply(to: str, cabeca: str, botoes: list[tuple[str, str]]) -> 
     variaveis = {"1": cabeca.replace("\n", " ")}
     for i, (bid, titulo) in enumerate(botoes):
         variaveis[str(2 + 2 * i)], variaveis[str(3 + 2 * i)] = titulo, bid
-    _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(to),
+    _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=identidade.destino(to),
                             content_sid=_content_sid(len(botoes)), content_variables=json.dumps(variaveis))
 
 
@@ -204,7 +205,7 @@ def _send_whatsapp(to: str, body: str) -> None:
 
 
 def _send_whatsapp_texto(to: str, body: str) -> None:
-    to = demo_mod.telefone_real(to)   # o usuário de demonstração é só uma chave: a mensagem vai ao número real
+    to = identidade.destino(to)   # o usuário de demonstração é só uma chave: a mensagem vai ao número real
     if not body or not str(body).strip():
         logger.error(f"Erro: corpo de mensagem vazio para {to}. Abortando envio.")
         return
@@ -261,7 +262,7 @@ def _enviar_acesso_painel(real_phone: str, codigo: str | None = None) -> bool:
         return False
     try:
         codigo = codigo or painel.criar_codigo(real_phone)
-        _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(real_phone),
+        _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=identidade.destino(real_phone),
                                 content_sid=sid, content_variables=json.dumps({"1": codigo}))
         return True
     except Exception as exc:
@@ -379,7 +380,7 @@ def _enviar_confirmacao_audio(to: str, pend: dict) -> None:
             variaveis = {"1": linha.replace("\n", " ")}
             for i, (bid, titulo) in enumerate(botoes):
                 variaveis[str(2 + 2 * i)], variaveis[str(3 + 2 * i)] = titulo, bid
-            _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=demo_mod.telefone_real(to),
+            _twilio.messages.create(from_=settings.twilio_whatsapp_number, to=identidade.destino(to),
                                     content_sid=_content_sid_confirma(len(botoes)), content_variables=json.dumps(variaveis))
             return
         except Exception as exc:
@@ -697,6 +698,7 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
     """Núcleo do chat: decide o que fazer com UMA mensagem (comandos, confirmações, revisão, agente). É chamado pelo webhook do
     WhatsApp (agenda = BackgroundTasks) e pelo chat do painel (agenda = _Agenda, que roda as tarefas na hora). As respostas saem por
     _send_whatsapp, que no painel vão para a tela (app.canal)."""
+    identidade.definir_origem(real_phone)   # quem escreveu: as respostas voltam para este número, mesmo que os dados sejam de outro (apelido)
     # Modo demonstração: "modo demo" / "sair do demo" / "limpar demo" valem sempre, ligado ou não.
     cmd_demo = demo_mod.comando(user_message)
     if cmd_demo:
@@ -719,7 +721,7 @@ async def _tratar_mensagem(real_phone: str, user_message: str, agenda, *, Button
         await asyncio.to_thread(_send_whatsapp, real_phone, resposta)
         return
     await asyncio.to_thread(demo_mod.limpar_se_expirou, real_phone)   # demo vencido: desliga e apaga os dados fictícios
-    user_phone = demo_mod.efetivo(real_phone)   # = real_phone, ou o usuário sintético se o modo demo estiver ligado
+    user_phone = identidade.efetivo(real_phone)   # = real_phone, ou o usuário sintético se o modo demo estiver ligado
 
     # Toque em botão da revisão: o id vem em ButtonPayload ("r:<qid>:<n>"), o Body é só o título.
     if ButtonPayload and ButtonPayload.startswith("r:"):
@@ -884,7 +886,7 @@ async def _painel_audio(real_phone: str, audio: bytes, content_type: str | None)
     c = canal.caixa(real_phone)
     async with c.trava:
         with canal.usando(c):
-            user_phone = demo_mod.efetivo(real_phone)
+            user_phone = identidade.efetivo(real_phone)
             try:
                 db._get_or_create_user_connection(user_phone)
                 await _processar_audio_bytes(user_phone, audio, content_type)
@@ -900,7 +902,7 @@ async def _painel_pdf(real_phone: str, conteudo: bytes, senha: str | None) -> No
     c = canal.caixa(real_phone)
     async with c.trava:
         with canal.usando(c):
-            user_phone = demo_mod.efetivo(real_phone)
+            user_phone = identidade.efetivo(real_phone)
             if not conteudo.startswith(b"%PDF"):
                 canal.emitir("❌ O arquivo enviado não parece ser um PDF válido. Envie o extrato original do banco.")
                 return
