@@ -123,6 +123,10 @@ def save_expense(user_phone: str, valor: float, category: str, description: str,
         _get_or_create_user_connection(user_phone)
         dt = expense_date or date.today()
         category, subcategoria = traduzir(category, subcategoria)   # só grava nome da taxonomia v2
+        billing = dt.isoformat()
+        if transaction_type == "income" and (payment_method or "").lower() != "credito":
+            from app.competencia import billing_receita   # salário de fim de mês pode contar no mês seguinte (FINFLOW_RECEITA_CORTE)
+            billing = billing_receita(user_phone, subcategoria, dt.isoformat(), billing)
         row = {
             "user_phone": _s(user_phone),
             "amount": abs(valor),
@@ -133,7 +137,7 @@ def save_expense(user_phone: str, valor: float, category: str, description: str,
             "transaction_type": transaction_type,
             "payment_method": payment_method,
             "purchase_date": dt.isoformat(),
-            "billing_date": dt.isoformat()
+            "billing_date": billing
         }
         res = get_db().table("finbot_expenses").insert(row).execute()
         return res.data[0] if res.data else {}

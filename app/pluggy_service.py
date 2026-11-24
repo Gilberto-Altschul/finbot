@@ -783,6 +783,11 @@ class PluggyService:
                     except ValueError:
                         pass
                 billing_date_calculada = (billing_date_calculada or item["purchase_date_str"] or tx.get("date") or tx.get("transactionDate", ""))[:10]
+                if tipo == "income" and not item["eh_credito"]:
+                    # Salário de fim de mês pode contar no mês seguinte (FINFLOW_RECEITA_CORTE; só para quem está configurado)
+                    from app.competencia import billing_receita
+                    billing_date_calculada = billing_receita(
+                        user_phone, subcategoria_pt, (tx.get("date") or tx.get("transactionDate", ""))[:10], billing_date_calculada)
 
             # BUG CORRIGIDO: 'installmentNumber'/'totalInstallments' eram lidos da
             # Pluggy (usados só pra calcular billing_date_calculada acima), mas
