@@ -179,7 +179,11 @@ _RUIDO_PROCESSADORA = {
 
 
 def so_intermediario(desc_norm: str) -> bool:
-    """True se a descrição tem uma processadora de pagamento e nada além de palavras genéricas."""
+    """True se a descrição tem uma processadora de pagamento e nada além de palavras genéricas, ou se é um estabelecimento
+    que deve cair SEMPRE na revisão (merchant.sempre_perguntar, ex.: terminais da Perto)."""
+    from app.merchant import sempre_perguntar
+    if sempre_perguntar(desc_norm):
+        return True
     d = desc_norm
     achou = False
     for t in _PROCESSADORAS:

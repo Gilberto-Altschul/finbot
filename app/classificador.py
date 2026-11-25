@@ -10,6 +10,7 @@ from app.merchant_stats import (
     Historico, e_consistente, ler_historico, ler_historico_destinatario, chave_familia, MIN_AMOSTRAS, MIN_AMOSTRAS_FAMILIA,
 )
 
+SEMPRE = "sempre:"         # prefixo da chave de quem nunca se classifica sozinho (ver revisao.agrupar_pendentes)
 CONF_HISTORICO = 0.95   # usuário respondeu o mesmo, de forma consistente
 CONF_REGRA = 0.75       # keyword/LLM sem ambiguidade
 CONF_DUVIDA = 0.5       # termo ambíguo ou histórico dividido
@@ -95,6 +96,12 @@ async def _classificar_base(user_phone: str, descricao: str,
     from app.categorizer import categorizar_gasto_hibrido
 
     merchant_key = normalizar_merchant(descricao)
+    # Processadora de pagamento / estabelecimento "sempre perguntar": cada lançamento é decisão do usuário. Vem ANTES do histórico
+    # (nada aprendido se aplica sozinho). O prefixo "sempre:" na chave faz a revisão tratar um a um e não aprender a resposta.
+    from app.categorizer import so_intermediario
+    from app.utils import _normalize
+    if so_intermediario(_normalize(descricao)):
+        return Decisao(A_CLASSIFICAR[0], A_CLASSIFICAR[1], "revisar", CONF_NENHUMA, SEMPRE + merchant_key, [])
     familia = familia_ambigua(descricao)
     hist_familia = ler_historico(user_phone, chave_familia(familia)) if familia else Historico()
     hist_merchant = Historico() if familia else ler_historico(user_phone, merchant_key)

@@ -62,6 +62,33 @@ def familia_ambigua(descricao: str) -> str | None:
     return None
 
 
+# Estabelecimentos que NUNCA se classificam sozinhos: o nome no extrato é de quem fornece o terminal/processa o pagamento
+# (não diz o que foi comprado) e cada pagamento pode ser de uma categoria diferente. Vão sempre para a revisão, um a um,
+# e a resposta não vira regra. Padrões já normalizados (sem acento, minúsculos, pontuação = espaço).
+_SEMPRE_PERGUNTAR = [
+    r"perto\s+s\s*a",     # "PERTO S A PE.PERTO" (Perto S.A., automação/terminais), não confundir com "perto de casa"
+]
+
+
+def _termos_sempre_perguntar_extra() -> list[str]:
+    """Termos adicionais por variável de ambiente (sem deploy de código): FINFLOW_SEMPRE_REVISAR=perto s a, quiosque x"""
+    import os
+    saida = []
+    for t in (os.environ.get("FINFLOW_SEMPRE_REVISAR", "") or "").split(","):
+        t = re.sub(r"[^a-z0-9]+", " ", sem_acento(t.lower())).strip()
+        if t:
+            saida.append(r"\s+".join(re.escape(x) for x in t.split()))
+    return saida
+
+
+def sempre_perguntar(descricao: str) -> bool:
+    """True se o estabelecimento deve cair SEMPRE na revisão (ver _SEMPRE_PERGUNTAR)."""
+    s = re.sub(r"[^a-z0-9]+", " ", sem_acento((descricao or "").lower())).strip()
+    if not s:
+        return False
+    return any(re.search(rf"(?<![a-z0-9]){p}(?![a-z0-9])", s) for p in _SEMPRE_PERGUNTAR + _termos_sempre_perguntar_extra())
+
+
 def contem_termo(texto_norm: str, termo_norm: str, palavra_inteira: bool = False) -> bool:
     """Substring por padrão; palavra inteira para termos curtos/perigosos ('bar', 'cea', 'amil')."""
     if palavra_inteira:

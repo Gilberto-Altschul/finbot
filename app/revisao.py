@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import app.database as db
-from app.merchant import normalizar_merchant
+from app.merchant import normalizar_merchant, sempre_perguntar
 from app.merchant_stats import ler_historico, registrar_resposta, MIN_AMOSTRAS
 from app.taxonomia import A_CLASSIFICAR
 
@@ -45,13 +45,15 @@ class Grupo:
 
 def agrupar_pendentes(rows: list[dict], pulados: set[str] | None = None) -> list[Grupo]:
     """Uma pergunta por estabelecimento (12 compras na mesma padaria = 1 pergunta).
-    Marketplaces (familia:*) nunca agrupam: cada compra é uma pergunta."""
+    Marketplaces (familia:*) e estabelecimentos "sempre perguntar" (sempre:*) nunca agrupam: cada compra é uma pergunta."""
     pulados = pulados or set()
     grupos: dict[str, Grupo] = {}
     for r in rows:
         mk = r.get("merchant_key") or normalizar_merchant(r.get("description", ""))
+        if not mk.startswith("sempre:") and sempre_perguntar(r.get("description", "")):
+            mk = "sempre:" + mk          # lançamento antigo, de antes da regra: também é decidido um a um
         familia = mk.startswith("familia:")
-        key = f"tx:{r['id']}" if familia else mk
+        key = f"tx:{r['id']}" if (familia or mk.startswith("sempre:")) else mk
         if key in pulados:
             continue
         g = grupos.setdefault(key, Grupo(key=key, learn_key=mk, descricao=r.get("description", ""), familia=familia))
@@ -312,6 +314,8 @@ def aplicar_classificacao(user_phone: str, ids_brutos: list, learn_key: str, fam
     except Exception as exc:
         raise RuntimeError(f"etapa '{etapa}' ({cat}/{sub}, sub_id={sub_id if etapa != 'buscar subcategoria' else '?'}, "
                            f"ids={list(ids_brutos)[:5]}): {exc}") from exc
+    if learn_key.startswith("sempre:"):
+        return   # cada pagamento é decisão do usuário: a resposta vale só para este lançamento e não vira regra
     registrar_resposta(user_phone, learn_key, cat, sub, peso)
 
 
