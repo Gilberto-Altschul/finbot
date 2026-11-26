@@ -147,8 +147,12 @@ def classificar_receita(descricao: str) -> Decisao:
     from app.utils import _normalize
     palavras = set(_normalize(descricao or "").split())
     sub = "Outras Receitas"
-    for nome, termos in _REGRAS_RECEITA:
-        if any((t in palavras) if " " not in t else (t in _normalize(descricao or "")) for t in termos):
-            sub = nome
-            break
+    if palavras & {"aplicacao", "aplicacoes", "rendimento", "rendimentos"}:
+        # "REMUNERACAO APLICACAO AUTOMATICA" é rendimento do dinheiro parado, não salário (a palavra "remuneracao" enganava a regra de salário)
+        sub = "Rendimentos"
+    else:
+        for nome, termos in _REGRAS_RECEITA:
+            if any((t in palavras) if " " not in t else (t in _normalize(descricao or "")) for t in termos):
+                sub = nome
+                break
     return Decisao("Receitas", sub, "auto", CONF_REGRA, normalizar_merchant(descricao or ""), [])
