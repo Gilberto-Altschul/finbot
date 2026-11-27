@@ -86,11 +86,24 @@ def _recorrentes(linhas: list[dict], hoje: date, dias: int, sinal: int, rotulo: 
     chaves: set[str] = set()
     for chave, itens in grupos.items():
         itens.sort()
+        futuros = []
+        if atraso_max is not None:
+            # Entrada já lançada com data futura (ex.: INSS de 02/12): não é "última ocorrência" (empurraria a
+            # próxima para o mês seguinte, fora do horizonte). Vira o evento daquela data e o resto é histórico.
+            futuros = [x for x in itens if x[0] > hoje]
+            itens = [x for x in itens if x[0] <= hoje]
+            if not itens:
+                continue
         mediana = statistics.median(v for _d, v, _n in itens)
         parecidos = [x for x in itens if mediana and abs(x[1] - mediana) <= mediana * tolerancia]
         if len({(d.year, d.month) for d, _v, _n in parecidos}) < 2:
             continue
         chaves.add(chave)
+        proximos = [x for x in futuros if x[0] <= fim and abs(x[1] - mediana) <= mediana * tolerancia]
+        if proximos:
+            d_f, v_f, n_f = proximos[0]
+            eventos.append(Evento(d_f, f"{n_f} ({rotulo})", round(sinal * v_f, 2)))
+            continue
         ultimo_dia, ultimo_valor, nome = parecidos[-1]
         if ignorar and chave in ignorar and ultimo_dia <= ignorar[chave]:
             continue
